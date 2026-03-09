@@ -17,11 +17,14 @@ typedef enum {
     IMX500_CMD_ERR_I2C_WRITE   = -2,
     IMX500_CMD_ERR_I2C_READ    = -3,
     IMX500_CMD_ERR_TIMEOUT    = -4,
+    IMX500_CMD_ERR_RUNNING_FAILED = -5,
+    IMX500_CMD_ERR_NOT_EFFECTIVE = -6,
 } imx500_err_t;
 
 static const uint32_t IMX500_MAX_BUFFER = (1u << 20);
 static const uint32_t MAX_SPI_PACKET_LEN = 4096;
 static const uint32_t SPI_BRIDGE_BLOCK_LEN = 256;
+static const uint32_t SPI_BRIDGE_BLOCK_GAP_US = 2;
 
 typedef void (*logger_cb_t)(const char *msg);
 
@@ -92,7 +95,22 @@ static inline int calc_align(int num, int align) {
 static int sdk_spi_write(const uint8_t *buf, uint32_t len) {
     if (!buf || len == 0) return -1;
     if (!g_spi_driver.write) return -1;
-    return g_spi_driver.write((uint8_t *)buf, len);
+    uint32_t sent = 0;
+    while (sent < len) {
+        uint32_t chunk = len - sent;
+        if (chunk > SPI_BRIDGE_BLOCK_LEN) {
+            chunk = SPI_BRIDGE_BLOCK_LEN;
+        }
+        int ret = g_spi_driver.write((uint8_t *)(buf + sent), chunk);
+        if (ret < 0 || (uint32_t)ret != chunk) {
+            return -1;
+        }
+        sent += chunk;
+        if (sent < len && g_i2c_driver.slp_us) {
+            g_i2c_driver.slp_us(SPI_BRIDGE_BLOCK_GAP_US);
+        }
+    }
+    return (int)sent;
 }
 
 
@@ -139,6 +157,71 @@ extern "C" {
 sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
 static uint32_t s_dnn_nw_id = 0;
 static uint8_t s_num_of_networks = 0;
+
+static const uint16_t REG_OFST0_LEV_PL_NORM_YM_YADD = 0x00;
+static const uint16_t REG_OFST1_LEV_PL_NORM_YM_YADD = (REG_OFST0_LEV_PL_NORM_YM_YADD + 0x1A);
+static const uint16_t REG_OFST2_LEV_PL_NORM_YM_YADD = (REG_OFST1_LEV_PL_NORM_YM_YADD + 0x0C);
+static const uint16_t REG_OFST0_LEV_PL_NORM_YM_YSFT = 0x00;
+static const uint16_t REG_OFST1_LEV_PL_NORM_YM_YSFT = (REG_OFST0_LEV_PL_NORM_YM_YSFT + 0x1A);
+static const uint16_t REG_OFST2_LEV_PL_NORM_YM_YSFT = (REG_OFST1_LEV_PL_NORM_YM_YSFT + 0x0C);
+static const uint16_t REG_OFST0_LEV_PL_NORM_CB_YADD = 0x00;
+static const uint16_t REG_OFST1_LEV_PL_NORM_CB_YADD = (REG_OFST0_LEV_PL_NORM_CB_YADD + 0x16);
+static const uint16_t REG_OFST2_LEV_PL_NORM_CB_YADD = (REG_OFST1_LEV_PL_NORM_CB_YADD + 0x0C);
+static const uint16_t REG_OFST0_LEV_PL_NORM_CR_YADD = 0x00;
+static const uint16_t REG_OFST1_LEV_PL_NORM_CR_YADD = (REG_OFST0_LEV_PL_NORM_CR_YADD + 0x12);
+static const uint16_t REG_OFST2_LEV_PL_NORM_CR_YADD = (REG_OFST1_LEV_PL_NORM_CR_YADD + 0x0C);
+static const uint16_t REG_OFST0_LEV_PL_NORM_CR_YSFT = 0x00;
+static const uint16_t REG_OFST1_LEV_PL_NORM_CR_YSFT = (REG_OFST0_LEV_PL_NORM_CR_YSFT + 0x13);
+static const uint16_t REG_OFST2_LEV_PL_NORM_CR_YSFT = (REG_OFST1_LEV_PL_NORM_CR_YSFT + 0x0C);
+static const uint16_t REG_OFST0_LEV_PL_NORM_CB_YSFT = 0x00;
+static const uint16_t REG_OFST1_LEV_PL_NORM_CB_YSFT = (REG_OFST0_LEV_PL_NORM_CR_YSFT + 0x17);
+static const uint16_t REG_OFST2_LEV_PL_NORM_CB_YSFT = (REG_OFST1_LEV_PL_NORM_CR_YSFT + 0x0C);
+
+static const uint16_t REG_ADDR_DNN_INPUT_FORMAT_BASE = 0xD750;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K00 = 0xD76C;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K01 = 0xD76E;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K02 = 0xD770;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K03 = 0xD772;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K10 = 0xD774;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K11 = 0xD776;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K12 = 0xD778;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K13 = 0xD77A;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K20 = 0xD77C;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K21 = 0xD77E;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K22 = 0xD780;
+static const uint16_t REG_ADDR_DNN_YCMTRX_K23 = 0xD782;
+static const uint16_t REG_OFST_DNN_YCMTRX = 0x24;
+static const uint16_t REG_ADDR_DNN_YCMTRX_Y_CLIP = 0xD784;
+static const uint16_t REG_ADDR_DNN_YCMTRX_CB_CLIP = 0xD788;
+static const uint16_t REG_ADDR_DNN_YCMTRX_CR_CLIP = 0xD78C;
+static const uint16_t REG_ADDR_DNN_INPUT_NORM = 0xD708;
+static const uint16_t REG_ADDR_DNN_INPUT_NORM_SHIFT = 0xD70A;
+static const uint16_t REG_ADDR_DNN_INPUT_NORM_CLIP_MAX = 0xD70C;
+static const uint16_t REG_ADDR_DNN_INPUT_NORM_CLIP_MIN = 0xD70E;
+static const uint16_t REG_OFST_DNN_INPUT_NORM_CH = 0x08;
+static const uint16_t REG_OFST_DNN_INPUT_NORM = 0x18;
+static const uint16_t REG_ADDR_DNN_NORM_YM_CLIP = 0xD7D8;
+static const uint16_t REG_ADDR_DNN_NORM_CB_CLIP = 0xD7DC;
+static const uint16_t REG_ADDR_DNN_NORM_CR_CLIP = 0xD7E0;
+static const uint16_t REG_OFST_DNN_NORM_CLIP = 0x0C;
+static const uint16_t REG_ADDR_LEV_PL_GAIN_VALUE = 0xD600;
+static const uint16_t REG_ADDR_LEV_PL_NORM_YM_YSFT = 0xD629;
+static const uint16_t REG_ADDR_LEV_PL_NORM_YM_YADD = 0xD62A;
+static const uint16_t REG_ADDR_LEV_PL_NORM_CB_YSFT = 0xD630;
+static const uint16_t REG_ADDR_LEV_PL_NORM_CB_YADD = 0xD632;
+static const uint16_t REG_ADDR_LEV_PL_NORM_CR_YSFT = 0xD638;
+static const uint16_t REG_ADDR_LEV_PL_NORM_CR_YADD = 0xD63A;
+static const uint16_t REG_OFST_LEV_PL_GAIN = 0x01;
+static const uint16_t REG_ADDR_ROT_DNN_NORM = 0xD684;
+static const uint16_t REG_ADDR_ROT_DNN_NORM_SHIFT = 0xD686;
+static const uint16_t REG_ADDR_ROT_DNN_NORM_CLIP_MAX = 0xD688;
+static const uint16_t REG_ADDR_ROT_DNN_NORM_CLIP_MIN = 0xD68A;
+static const uint16_t REG_OFST_ROT_DNN_NORM_CH = 0x08;
+static const uint16_t REG_OFST_ROT_DNN_NORM_DNN = 0x20;
+
+static const uint8_t REG_DNN_INPUT_FORMAT_Y = 1;
+static const uint8_t REG_DNN_INPUT_FORMAT_YUV444 = 2;
+static const uint8_t REG_DNN_INPUT_FORMAT_BAYER_RGB = 5;
 
 #ifndef OUTPUT_TENSOR_POOL_BYTES
 #define OUTPUT_TENSOR_POOL_BYTES (4096)
@@ -589,6 +672,178 @@ void dump_network_info_list(void) {
     }
 }
 
+static int i2c_passthrough_write(uint16_t reg_addr, uint32_t data, uint32_t size) {
+    if (size == 1) {
+        return sensor_i2c_write_16_8(reg_addr, (uint8_t)(data & 0xFFu));
+    }
+    if (size == 2) {
+        return sensor_i2c_write_16_16(reg_addr, (uint16_t)(data & 0xFFFFu));
+    }
+    if (size == 4) {
+        return sensor_i2c_write_16_32(reg_addr, data);
+    }
+    return -1;
+}
+
+static int init_input_tensor_preprocess_config(void) {
+    if (s_num_of_networks == 0) {
+        return 0;
+    }
+    if (s_num_of_networks > MAX_NUM_OF_NETWORKS) {
+        return -1;
+    }
+
+    static const uint16_t lev_pl_norm_offset_add[3][3] = {
+        {REG_OFST0_LEV_PL_NORM_YM_YADD, REG_OFST1_LEV_PL_NORM_YM_YADD, REG_OFST2_LEV_PL_NORM_YM_YADD},
+        {REG_OFST0_LEV_PL_NORM_CB_YADD, REG_OFST1_LEV_PL_NORM_CB_YADD, REG_OFST2_LEV_PL_NORM_CB_YADD},
+        {REG_OFST0_LEV_PL_NORM_CR_YADD, REG_OFST1_LEV_PL_NORM_CR_YADD, REG_OFST2_LEV_PL_NORM_CR_YADD}
+    };
+
+    static const uint16_t lev_pl_norm_offset_sht[3][3] = {
+        {REG_OFST0_LEV_PL_NORM_YM_YSFT, REG_OFST1_LEV_PL_NORM_YM_YSFT, REG_OFST2_LEV_PL_NORM_YM_YSFT},
+        {REG_OFST0_LEV_PL_NORM_CB_YSFT, REG_OFST1_LEV_PL_NORM_CB_YSFT, REG_OFST2_LEV_PL_NORM_CB_YSFT},
+        {REG_OFST0_LEV_PL_NORM_CR_YSFT, REG_OFST1_LEV_PL_NORM_CR_YSFT, REG_OFST2_LEV_PL_NORM_CR_YSFT}
+    };
+
+    static const uint16_t ycmtrx_regs[] = {
+        REG_ADDR_DNN_YCMTRX_K00, REG_ADDR_DNN_YCMTRX_K01, REG_ADDR_DNN_YCMTRX_K02, REG_ADDR_DNN_YCMTRX_K03,
+        REG_ADDR_DNN_YCMTRX_K10, REG_ADDR_DNN_YCMTRX_K11, REG_ADDR_DNN_YCMTRX_K12, REG_ADDR_DNN_YCMTRX_K13,
+        REG_ADDR_DNN_YCMTRX_K20, REG_ADDR_DNN_YCMTRX_K21, REG_ADDR_DNN_YCMTRX_K22, REG_ADDR_DNN_YCMTRX_K23
+    };
+
+    for (size_t i = 0; i < s_num_of_networks; ++i) {
+        const sc_dnn_nw_info_t *nw = &network_info[i];
+        printf("Set network %u preprocess...\n", (unsigned)i);
+
+        if (nw->inputTensorFormat == DNN_INPUT_FORMAT_Y) {
+            if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_FORMAT_BASE + (uint16_t)i, REG_DNN_INPUT_FORMAT_Y, 1) < 0) return -1;
+
+            for (size_t r = 0; r < (sizeof(ycmtrx_regs) / sizeof(ycmtrx_regs[0])); ++r) {
+                if (i2c_passthrough_write(ycmtrx_regs[r] + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 2) < 0) return -1;
+            }
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_Y_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_CB_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_CR_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 4) < 0) return -1;
+
+            for (int j = 0; j < 3; ++j) {
+                bool is_y = (j == 0);
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          is_y ? nw->rgbNorm[j].add : 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_SHIFT + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          is_y ? nw->rgbNorm[j].shift : 0, 1) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_CLIP_MAX + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          is_y ? nw->rgbNorm[j].clipMax : 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_CLIP_MIN + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          is_y ? nw->rgbNorm[j].clipMin : 0, 2) < 0) return -1;
+            }
+
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_YM_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), nw->yClip, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_CB_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), 0, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_CR_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), 0, 4) < 0) return -1;
+
+            if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YADD + lev_pl_norm_offset_add[0][i], nw->yAdd, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YSFT + lev_pl_norm_offset_sht[0][i], 0, 1) < 0) return -1;
+
+            for (int c = 1; c < 3; ++c) {
+                if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YADD + lev_pl_norm_offset_add[c][i], 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YSFT + lev_pl_norm_offset_sht[c][i], 0, 1) < 0) return -1;
+            }
+
+            if (i2c_passthrough_write(REG_ADDR_LEV_PL_GAIN_VALUE + (uint16_t)(i * REG_OFST_LEV_PL_GAIN), nw->yGgain, 1) < 0) return -1;
+
+            for (int j = 0; j < BAYER_CH_MAX; ++j) {
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_SHIFT + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 1) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_CLIP_MAX + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_CLIP_MIN + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 2) < 0) return -1;
+            }
+        } else if (nw->inputTensorFormat == DNN_INPUT_FORMAT_BAYER_RGB) {
+            if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_FORMAT_BASE + (uint16_t)i, REG_DNN_INPUT_FORMAT_BAYER_RGB, 1) < 0) return -1;
+
+            for (size_t r = 0; r < (sizeof(ycmtrx_regs) / sizeof(ycmtrx_regs[0])); ++r) {
+                if (i2c_passthrough_write(ycmtrx_regs[r] + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 2) < 0) return -1;
+            }
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_Y_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_CB_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_CR_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), 0, 4) < 0) return -1;
+
+            for (int j = 0; j < 3; ++j) {
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM), 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_SHIFT + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM), 0, 1) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_CLIP_MAX + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM), 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_CLIP_MIN + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM), 0, 2) < 0) return -1;
+            }
+
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_YM_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), 0, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_CB_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), 0, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_CR_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), 0, 4) < 0) return -1;
+
+            for (int c = 0; c < 3; ++c) {
+                if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YADD + lev_pl_norm_offset_add[c][i], 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YSFT + lev_pl_norm_offset_sht[c][i], 0, 1) < 0) return -1;
+            }
+
+            if (i2c_passthrough_write(REG_ADDR_LEV_PL_GAIN_VALUE + (uint16_t)(i * REG_OFST_LEV_PL_GAIN), nw->yGgain, 1) < 0) return -1;
+
+            for (int j = 0; j < BAYER_CH_MAX; ++j) {
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), nw->rgbNorm[j].add, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_SHIFT + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), nw->rgbNorm[j].shift, 1) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_CLIP_MAX + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), nw->rgbNorm[j].clipMax, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_CLIP_MIN + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), nw->rgbNorm[j].clipMin, 2) < 0) return -1;
+            }
+        } else {
+            if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_FORMAT_BASE + (uint16_t)i, REG_DNN_INPUT_FORMAT_YUV444, 1) < 0) return -1;
+
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K00 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK00, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K01 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK01, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K02 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK02, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K03 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK03, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K10 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK10, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K11 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK11, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K12 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK12, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K13 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK13, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K20 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK20, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K21 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK21, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K22 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK22, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_K23 + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->NormK23, 2) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_Y_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->yClip, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_CB_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->cbClip, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_YCMTRX_CR_CLIP + (uint16_t)(i * REG_OFST_DNN_YCMTRX), nw->crClip, 4) < 0) return -1;
+
+            for (int j = 0; j < 3; ++j) {
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          nw->rgbNorm[j].add, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_SHIFT + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          nw->rgbNorm[j].shift, 1) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_CLIP_MAX + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          nw->rgbNorm[j].clipMax, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_DNN_INPUT_NORM_CLIP_MIN + j * REG_OFST_DNN_INPUT_NORM_CH + (uint16_t)(i * REG_OFST_DNN_INPUT_NORM),
+                                          nw->rgbNorm[j].clipMin, 2) < 0) return -1;
+            }
+
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_YM_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), nw->yClip, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_CB_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), nw->cbClip, 4) < 0) return -1;
+            if (i2c_passthrough_write(REG_ADDR_DNN_NORM_CR_CLIP + (uint16_t)(i * REG_OFST_DNN_NORM_CLIP), nw->crClip, 4) < 0) return -1;
+
+            for (int c = 0; c < 3; ++c) {
+                if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YADD + lev_pl_norm_offset_add[c][i], 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_LEV_PL_NORM_YM_YSFT + lev_pl_norm_offset_sht[c][i], 0, 1) < 0) return -1;
+            }
+
+            if (i2c_passthrough_write(REG_ADDR_LEV_PL_GAIN_VALUE + (uint16_t)(i * REG_OFST_LEV_PL_GAIN), nw->yGgain, 1) < 0) return -1;
+
+            for (int j = 0; j < BAYER_CH_MAX; ++j) {
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_SHIFT + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 1) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_CLIP_MAX + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 2) < 0) return -1;
+                if (i2c_passthrough_write(REG_ADDR_ROT_DNN_NORM_CLIP_MIN + j * REG_OFST_ROT_DNN_NORM_CH + (uint16_t)(i * REG_OFST_ROT_DNN_NORM_DNN), 0, 2) < 0) return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* detection_result) {
     if (!data || !detection_result) {
         printf("parse_ap_params: null input\n");
@@ -794,6 +1049,7 @@ imx500_err_t imx500_res_read(uint32_t cmd_id,
         return IMX500_CMD_ERR_INVALID_ARG;
     }
 
+    /* 1. 下发命令 */
     int ret = g_i2c_driver.write(cmd_id, 0x00000000, 4);
     if (ret < 0) {
         return IMX500_CMD_ERR_I2C_WRITE;
@@ -802,9 +1058,26 @@ imx500_err_t imx500_res_read(uint32_t cmd_id,
     uint32_t elapsed = 0;
     const uint32_t poll_interval_ms = 1;
 
+    uint32_t imx500_cmd_running_status = 0;
     while (elapsed < wait_ms) {
         g_i2c_driver.slp_ms(poll_interval_ms);
         elapsed += poll_interval_ms;
+        ret = g_i2c_driver.read(IMX500_COMMAND_RUNNING_STATUS, &imx500_cmd_running_status, 4);
+        if (ret < 0) {
+            return IMX500_CMD_ERR_I2C_READ;
+        }
+        if (imx500_cmd_running_status == 0) {
+            return IMX500_CMD_ERR_NOT_EFFECTIVE;
+        } else if (imx500_cmd_running_status == 1) {
+            break;
+        } else if (imx500_cmd_running_status == 2) {
+            return IMX500_CMD_ERR_RUNNING_FAILED;
+        } else if (imx500_cmd_running_status == 3) {
+            continue;
+        }
+    }
+    if (imx500_cmd_running_status != 1) {
+        return IMX500_CMD_ERR_TIMEOUT;
     }
 
     ret = g_i2c_driver.read(IMX500_COMMAND_RETURN, data, 4);
@@ -828,7 +1101,30 @@ static imx500_err_t imx500_res_write(uint32_t cmd_id,
         return IMX500_CMD_ERR_I2C_WRITE;
     }
 
-    g_i2c_driver.slp_ms(wait_ms);
+    uint32_t elapsed = 0;
+    const uint32_t poll_interval_ms = 1;
+
+    uint32_t imx500_cmd_running_status = 0;
+    while (elapsed < wait_ms) {
+        g_i2c_driver.slp_ms(poll_interval_ms);
+        elapsed += poll_interval_ms;
+        ret = g_i2c_driver.read(IMX500_COMMAND_RUNNING_STATUS, &imx500_cmd_running_status, 4);
+        if (ret < 0) {
+            return IMX500_CMD_ERR_I2C_READ;
+        }
+        if (imx500_cmd_running_status == 0) {
+            return IMX500_CMD_ERR_NOT_EFFECTIVE;
+        } else if (imx500_cmd_running_status == 1) {
+            break;
+        } else if (imx500_cmd_running_status == 2) {
+            return IMX500_CMD_ERR_RUNNING_FAILED;
+        } else if (imx500_cmd_running_status == 3) {
+            continue;
+        }
+    }
+    if (imx500_cmd_running_status != 1) {
+        return IMX500_CMD_ERR_TIMEOUT;
+    }
 
     ret = g_i2c_driver.read(IMX500_COMMAND_RETURN, data, 4);
     if (ret < 0) {
@@ -898,20 +1194,38 @@ void imx500_dump_basic_info()
 
 bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m) {
     uint32_t t_m = m;
-    uint32_t c_m;
-    // TODO: 添加i2c异常检测
-    g_i2c_driver.write(METADATA_SPI_FORWARD_MODE_REG, m, 4);
-    while(1) {
+    uint32_t c_m = 0;
+    const uint32_t poll_interval_ms = 20;
+    const uint32_t timeout_ms = 2000;
+    uint32_t elapsed = 0;
+    int ret = g_i2c_driver.write(METADATA_SPI_FORWARD_MODE_REG, m, 4);
+    if (ret < 0) {
+        printf("switch spi data forward mode write failed: %d\n", ret);
+        return false;
+    }
+    while (elapsed < timeout_ms) {
         printf("wait for imx500 module spi data forward mode switching %d ... \n", m);
-        g_i2c_driver.slp_ms(20);
-        g_i2c_driver.read(METADATA_SPI_FORWARD_MODE_REG, &c_m, 4);
+        g_i2c_driver.slp_ms(poll_interval_ms);
+        elapsed += poll_interval_ms;
+        ret = g_i2c_driver.read(METADATA_SPI_FORWARD_MODE_REG, &c_m, 4);
+        if (ret < 0) {
+            printf("switch spi data forward mode read failed: %d\n", ret);
+            return false;
+        }
         if (c_m == t_m) break;
+    }
+    if (c_m != t_m) {
+        printf("switch spi data forward mode timeout: target=%u current=%u\n",
+               (unsigned)t_m, (unsigned)c_m);
+        return false;
     }
     printf("wait for imx500 module spi data forward mode: %d switch completed\n", c_m);
     return true;
 }
 
 static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
+    const uint32_t download_sts_poll_interval_ms = 10;
+    const uint32_t download_sts_timeout_ms = 3000;
     uint32_t div_num = len / IMX500_MAX_BUFFER;
     printf("fw size: %u\n", (unsigned)len);
     printf("fw division: %u\n", (unsigned)div_num);
@@ -923,19 +1237,35 @@ static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
     uint32_t step = 0;
     uint32_t total = all_division_num;
     for (uint32_t i = 0; i < div_num; ++i) {
-        sdk_spi_write(data + (i * IMX500_MAX_BUFFER), IMX500_MAX_BUFFER);
+        if (sdk_spi_write(data + (i * IMX500_MAX_BUFFER), IMX500_MAX_BUFFER) < 0) {
+            printf("spi write failed on firmware chunk %u/%u\n", (unsigned)(i + 1), (unsigned)div_num);
+            return -1;
+        }
         step += 1;
         uint32_t val = 0;
         log_progress(NULL, "[Download Firmware]", step, total, 30);
+        uint32_t waited_ms = 0;
         while (1) {
-            imx500_res_read(IMX500_COMMAND_TICK_DD_DOWNLOAD_STS, &val, 10);
+            imx500_err_t cmd_ret = imx500_res_read(IMX500_COMMAND_TICK_DD_DOWNLOAD_STS, &val, 50);
+            if (cmd_ret != IMX500_CMD_OK) {
+                printf("read DD_DOWNLOAD_STS failed: %d\n", (int)cmd_ret);
+                return -1;
+            }
             uint32_t DD_DOWNLOAD_STS = val;
             printf("DD_DOWNLOAD_STS = %u\n", (unsigned)DD_DOWNLOAD_STS);
             if (DD_DOWNLOAD_STS != 1) break;
-            g_i2c_driver.slp_ms(10);
+            if (waited_ms >= download_sts_timeout_ms) {
+                printf("wait DD_DOWNLOAD_STS timeout after %u ms\n", (unsigned)waited_ms);
+                return -1;
+            }
+            g_i2c_driver.slp_ms(download_sts_poll_interval_ms);
+            waited_ms += download_sts_poll_interval_ms;
         }
     }
-    sdk_spi_write(div_data_remain, remain_data_len);
+    if (remain_data_len > 0 && sdk_spi_write(div_data_remain, remain_data_len) < 0) {
+        printf("spi write failed on firmware tail, len=%u\n", (unsigned)remain_data_len);
+        return -1;
+    }
     step += 1;
     log_progress(NULL, "[Download Firmware]", step, total, 30);
 
@@ -944,32 +1274,55 @@ static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
         uint8_t pad[SPI_BRIDGE_BLOCK_LEN] = {0};
         uint32_t pad_len = SPI_BRIDGE_BLOCK_LEN - tail;
         printf("fw tail=%u, pad=%u for SPI bridge flush\n", (unsigned)tail, (unsigned)pad_len);
-        sdk_spi_write(pad, pad_len);
+        if (sdk_spi_write(pad, pad_len) < 0) {
+            printf("spi write failed on firmware flush padding, len=%u\n", (unsigned)pad_len);
+            return -1;
+        }
     }
 
     return 0;
 }
 
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
+    const uint32_t wait_short_ms = 100;
+    const uint32_t wait_dd_reply_ms = 3000;
     uint32_t val = 0;
-    imx500_res_read(IMX500_COMMAND_PREPARE_DOWNLOAD_FIRMWARE, &val, 10);
-    imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, 10);
+    if (imx500_res_read(IMX500_COMMAND_PREPARE_DOWNLOAD_FIRMWARE, &val, 500) != IMX500_CMD_OK) {
+        printf("prepare download firmware failed\n");
+        return -1;
+    }
+    if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, wait_short_ms) != IMX500_CMD_OK) {
+        printf("read DD_CMD_REPLY_STS_CNT failed before download\n");
+        return -1;
+    }
     uint32_t DD_CMD_REPLY_STS_CNT = val;
     printf("DD_CMD_REPLY_STS_CNT = %x\n", DD_CMD_REPLY_STS_CNT);
 
     uint32_t division = size / IMX500_MAX_BUFFER;
-    imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_1, &fw_type, 10);
-    imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_2, &division, 10);
-    imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_3, &size, 10);
-    imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_4, &fw_type, 10);
-    imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, 10);
+    if (imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_1, &fw_type, wait_short_ms) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_2, &division, wait_short_ms) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_3, &size, wait_short_ms) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_4, &fw_type, wait_short_ms) != IMX500_CMD_OK) {
+        printf("before download firmware setup failed\n");
+        return -1;
+    }
+    if (imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, wait_dd_reply_ms) != IMX500_CMD_OK) {
+        printf("wait DD reply (ready) failed\n");
+        return -1;
+    }
 
-    imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, 10);
+    if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, wait_short_ms) != IMX500_CMD_OK) {
+        printf("read DD_CMD_REPLY_STS_CNT failed after ready wait\n");
+        return -1;
+    }
     DD_CMD_REPLY_STS_CNT = val;
     printf("DD_CMD_REPLY_STS_CNT = %x\n", DD_CMD_REPLY_STS_CNT);
     g_i2c_driver.slp_ms(10);
 
-    imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS, &val, 10);
+    if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS, &val, wait_short_ms) != IMX500_CMD_OK) {
+        printf("read DD_CMD_REPLY_STS failed at ready stage\n");
+        return -1;
+    }
     uint32_t DD_CMD_REPLY_STS = val;
     printf("DD_CMD_REPLY_STS = %x: %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
     if (DD_CMD_REPLY_STS != 0x00) {
@@ -977,13 +1330,25 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
 
-    rp2350_send_fw_to_imx500_sspi(fw, size);
+    if (rp2350_send_fw_to_imx500_sspi(fw, size) != 0) {
+        printf("send firmware by SSPI failed\n");
+        return -1;
+    }
     g_i2c_driver.slp_ms(10);
 
-    imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, 10);
-    imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, 10);
+    if (imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, wait_dd_reply_ms) != IMX500_CMD_OK) {
+        printf("wait DD reply (done) failed\n");
+        return -1;
+    }
+    if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, wait_short_ms) != IMX500_CMD_OK) {
+        printf("read DD_CMD_REPLY_STS_CNT failed after done wait\n");
+        return -1;
+    }
     DD_CMD_REPLY_STS_CNT = val;
-    imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS, &val, 10);
+    if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS, &val, wait_short_ms) != IMX500_CMD_OK) {
+        printf("read DD_CMD_REPLY_STS failed at done stage\n");
+        return -1;
+    }
     DD_CMD_REPLY_STS = val;
     printf("DD_CMD_REPLY_STS = %x: %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
     if (DD_CMD_REPLY_STS != 0x01) {
@@ -1002,6 +1367,7 @@ void stream_on() {
 
 int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_size) {
 
+  // dump_s_nw_info_list();
   // init_input_tensor_preprocess_config();
 
   uint32_t r_buff_offset = 0;
@@ -1021,6 +1387,7 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
         4;
     output_tensor_data_size += size;
   }
+  // uint32_t data_size = input_tensor_data_size + output_tensor_data_size;
   switch (f) {
   case SPI_METADATA_OUTPUT_TENSOR:
     *data_size = output_tensor_data_size;
@@ -1046,15 +1413,25 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
   return 0;
 }
 
-bool open(module_boot_mode_t bm, const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format) {
-    g_i2c_driver.write(START_BOOT_REG, bm, 4); // spi load nn boot
-    g_i2c_driver.slp_ms(10);
+bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format) {
     uint32_t imx500_boot_status = 0;
-    while(1) {
-        g_i2c_driver.read(BOOT_STATUS_REG, &imx500_boot_status, 4);
+    const uint32_t boot_timeout_ms = 10000;
+    const uint32_t boot_poll_ms = 100;
+    uint32_t boot_elapsed = 0;
+    while (boot_elapsed < boot_timeout_ms) {
+        int ret = g_i2c_driver.read(BOOT_STATUS_REG, &imx500_boot_status, 4);
+        if (ret < 0) {
+            printf("read boot status failed: %d\n", ret);
+            return false;
+        }
         if (imx500_boot_status == 1) break;
         printf("wait for imx500 module boot ... \n");
-        g_i2c_driver.slp_ms(100);
+        g_i2c_driver.slp_ms(boot_poll_ms);
+        boot_elapsed += boot_poll_ms;
+    }
+    if (imx500_boot_status != 1) {
+        printf("wait imx500 boot timeout after %u ms\n", (unsigned)boot_elapsed);
+        return false;
     }
     printf("imx500 module boot completed\n");
     imx500_dump_basic_info();
@@ -1070,22 +1447,20 @@ bool open(module_boot_mode_t bm, const uint8_t *nn_fw, uint32_t nn_fw_size, cons
     printf("set spi output: metadata(output_tensor)\n");
     switch_spi_data_forward_mode(SPI_SLAVE_TO_IMX500_SSPI);
     uint32_t data_size;
-    switch (bm)
-    {
-    case MODULE_SPI_LOAD_NN_BOOT:
-        if (load_imx500_fw(nn_fw, nn_fw_size, IMX500_FW_TYPE_NETWORK_WEIGHTS) != 0) return false;
-        printf("spi write nn fw completed\n");
-        g_i2c_driver.write(NN_FW_LOAD_STATUS_REG, 1, 4);
-        set_nw_info_from_flash_buffer(nn_info, nn_info_size);
-        dump_network_info_list();
-        calculate_spi_output_metadata_size(spi_format, &data_size);
-        g_i2c_driver.write(METADATA_SIZE_REG, data_size, 4);
-        break;
-    case MODULE_SELF_BOOT:
-        break;
-    default:
-        break;
+    if (load_imx500_fw(nn_fw, nn_fw_size, IMX500_FW_TYPE_NETWORK_WEIGHTS) != 0) {
+        printf("Error: nn fw failed\n");
+        return false;
     }
+    printf("spi write nn fw completed\n");
+    g_i2c_driver.write(NN_FW_LOAD_STATUS_REG, 1, 4);
+    set_nw_info_from_flash_buffer(nn_info, nn_info_size);
+    dump_network_info_list();
+    if (init_input_tensor_preprocess_config() != 0) {
+        printf("Error: init_input_tensor_preprocess_config failed\n");
+        return false;
+    }
+    calculate_spi_output_metadata_size(spi_format, &data_size);
+    g_i2c_driver.write(METADATA_SIZE_REG, data_size, 4);
     
     return true;
 }
@@ -1209,6 +1584,107 @@ void get_fw_ver(uint32_t* v) {
 
 void get_pid(uint32_t* v) {
     g_i2c_driver.read(DEVICE_ID_REG, v, 4);
+}
+
+int sensor_i2c_write_16_8(uint16_t reg_addr, uint8_t data) {
+    if (!g_i2c_driver.write) {
+        return -1;
+    }
+    uint32_t packed = SENSOR_I2C_16_8_PACK(reg_addr, data);
+    int ret = g_i2c_driver.write(SENSOR_WR_REG, packed, 4);
+    g_i2c_driver.slp_ms(1);
+    return (ret < 0) ? -1 : 0;
+}
+
+int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data) {
+    if (!data || !g_i2c_driver.write || !g_i2c_driver.read) {
+        return -1;
+    }
+
+    uint32_t req = SENSOR_I2C_16_8_ADDR(reg_addr);
+    int ret = g_i2c_driver.write(SENSOR_RD_REG, req, 4);
+    g_i2c_driver.slp_ms(1);
+    if (ret < 0) {
+        return -1;
+    }
+
+    uint32_t rsp = 0;
+    ret = g_i2c_driver.read(SENSOR_RD_REG, &rsp, 4);
+    if (ret < 0) {
+        return -1;
+    }
+
+    *data = SENSOR_I2C_16_8_DATA(rsp);
+    return 0;
+}
+
+int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data) {
+    if (sensor_i2c_write_16_8(reg_addr, (uint8_t)(data & 0xFFu)) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)((data >> 8) & 0xFFu)) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int sensor_i2c_read_16_16(uint16_t reg_addr, uint16_t *data) {
+    if (!data) {
+        return -1;
+    }
+    uint8_t b0 = 0;
+    uint8_t b1 = 0;
+    if (sensor_i2c_read_16_8(reg_addr, &b0) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &b1) < 0) {
+        return -1;
+    }
+    *data = (uint16_t)((uint16_t)b0 | ((uint16_t)b1 << 8));
+    return 0;
+}
+
+int sensor_i2c_write_16_32(uint16_t reg_addr, uint32_t data) {
+    if (sensor_i2c_write_16_8(reg_addr, (uint8_t)(data & 0xFFu)) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)((data >> 8) & 0xFFu)) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 2u), (uint8_t)((data >> 16) & 0xFFu)) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 3u), (uint8_t)((data >> 24) & 0xFFu)) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int sensor_i2c_read_16_32(uint16_t reg_addr, uint32_t *data) {
+    if (!data) {
+        return -1;
+    }
+    uint8_t b0 = 0;
+    uint8_t b1 = 0;
+    uint8_t b2 = 0;
+    uint8_t b3 = 0;
+    if (sensor_i2c_read_16_8(reg_addr, &b0) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &b1) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 2u), &b2) < 0) {
+        return -1;
+    }
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 3u), &b3) < 0) {
+        return -1;
+    }
+    *data = ((uint32_t)b0) |
+            ((uint32_t)b1 << 8) |
+            ((uint32_t)b2 << 16) |
+            ((uint32_t)b3 << 24);
+    return 0;
 }
 
 }

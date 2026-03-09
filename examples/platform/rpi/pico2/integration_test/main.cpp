@@ -14,10 +14,6 @@
 #include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_NoID.h"
 #include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_network_info.h"
 
-#define LOADER_FW_DATA          loader_data
-#define LOADER_FW_SIZE          loader_size
-#define MAIN_FW_DATA            firmware_data
-#define MAIN_FW_SIZE            firmware_size
 #define NN_FW_DATA              InputTensorOnly_NoID_data
 #define NN_FW_SIZE              InputTensorOnly_NoID_size
 #define NN_NETOWRK_INFO_DATA    InputTensorOnly_network_info_data
@@ -25,8 +21,6 @@
 #define MAX_FRAME_SIZE          (1024 * 10)
 #define BENCHMARK_FRAME_COUNT_PRE_INJECT   30
 #define BENCHMARK_FRAME_COUNT_POST_INJECT  30
-
-#define TEST_BOOT_MODE MODULE_SELF_BOOT
 
 uint8_t frame_buf[MAX_FRAME_SIZE];
 
@@ -117,7 +111,7 @@ void i2c_master_init(uint32_t baudrate) {
     gpio_pull_up(I2C_SDA_PIN);
     gpio_pull_up(I2C_SCL_PIN);
     
-    LOG_INFO("I2C initialized at %d Hz\n", baudrate);
+    printf("I2C initialized at %d Hz\n", baudrate);
 }
 
 /**
@@ -139,7 +133,7 @@ void spi_master_init(uint32_t baudrate) {
     // Set SPI format: 8 bits, CPOL=1, CPHA=1, MSB first
     spi_set_format(spi_default, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
 
-    LOG_INFO("SPI initialized at %d Hz\n", baudrate);
+    printf("SPI initialized at %d Hz\n", baudrate);
 }
 
 uint32_t provider_fill_0x55(
@@ -162,7 +156,7 @@ FrameBenchmarkResult benchmark_read_frame(
     result.requested_frames = count;
 
     for (uint32_t i = 0; i < count; ++i) {
-        LOG_INFO("\n=== Frame %lu/%lu ===\n", (unsigned long)(i + 1), (unsigned long)count);
+        printf("\n=== Frame %lu/%lu ===\n", (unsigned long)(i + 1), (unsigned long)count);
         uint64_t read_start_us = time_us_64();
         int32_t bytes_read = read_metadata(buf, max_buf_size);
         uint64_t read_end_us = time_us_64();
@@ -175,15 +169,15 @@ FrameBenchmarkResult benchmark_read_frame(
             result.success_frames++;
             result.total_bytes += (uint64_t)bytes_read;
             result.total_read_cost_us += (read_end_us - read_start_us);
-            LOG_INFO("Successfully read %ld bytes, read cost=%.2f ms\n",
+            printf("Successfully read %ld bytes, read cost=%.2f ms\n",
                    (long)bytes_read, bench_us_to_ms(read_end_us - read_start_us));
             if (print_frame_sample) {
-                LOG_BUF_HEX_INFO(buf, 12);
-                LOG_INFO("\n");
+                print_buf_hex(buf, 12);
+                printf("\n");
             }
         } else {
             result.failed_frames++;
-            LOG_WARN("Failed to read frame\n");
+            printf("Failed to read frame\n");
         }
     }
 
@@ -206,7 +200,7 @@ int main() {
     while (!stdio_usb_connected()) {
         sleep_ms(100);
     }
-    LOG_INFO("USB serial connected!\n");
+    printf("USB serial connected!\n");
     // =========== For debug ===========
 
     sleep_ms(100);
@@ -223,10 +217,10 @@ int main() {
     LOG_INFO("module pid: 0x%x\n", module_pid);
 
     uint64_t open_start_us = time_us_64();
-    bool open_ret = open(TEST_BOOT_MODE, NN_FW_DATA, NN_FW_SIZE, NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
+    bool open_ret = open(NN_FW_DATA, NN_FW_SIZE, NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
     uint64_t open_end_us = time_us_64();
     if (!open_ret) {
-        LOG_ERROR("open() failed\n");
+        printf("open() failed\n");
         return 1;
     }
 

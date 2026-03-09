@@ -166,7 +166,7 @@ uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
 bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m);
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type);
 void stream_on(void);
-bool open(module_boot_mode_t bm, const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format);
+bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format);
 uint32_t get_metadata_size(void);
 int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
 typedef uint32_t (*data_provider_t)(uint8_t *buf, uint32_t max_len, uint32_t offset);
@@ -177,6 +177,12 @@ int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len);
 void dump_network_info_list(void);
 void get_fw_ver(uint32_t* v);
 void get_pid(uint32_t* v);
+int sensor_i2c_write_16_8(uint16_t reg_addr, uint8_t data);
+int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data);
+int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data);
+int sensor_i2c_read_16_16(uint16_t reg_addr, uint16_t *data);
+int sensor_i2c_write_16_32(uint16_t reg_addr, uint32_t data);
+int sensor_i2c_read_16_32(uint16_t reg_addr, uint32_t *data);
 
 #ifdef __cplusplus
 }

@@ -168,8 +168,12 @@ int pivariety_spi_bridge_write(uint8_t *data, uint32_t len) {
       return -1;
   }
   gpio_put(SPI_CSN_PIN, 0);
-  spi_write_blocking(SPI_HW_ADDR, data, len);
+  int ret = spi_write_blocking(SPI_HW_ADDR, data, len);
   gpio_put(SPI_CSN_PIN, 1);
+  if (ret < 0 || (uint32_t)ret != len) {
+      return -1;
+  }
+  return ret;
 }
 
 int pivariety_spi_bridge_read(uint8_t *data, uint32_t len) {
@@ -177,7 +181,6 @@ int pivariety_spi_bridge_read(uint8_t *data, uint32_t len) {
         return -1;
     }
     gpio_put(SPI_CSN_PIN, 0);
-    // 0x00 作为 dummy tx byte
     spi_read_blocking(SPI_HW_ADDR, 0x00, data, len);
     gpio_put(SPI_CSN_PIN, 1);
 
