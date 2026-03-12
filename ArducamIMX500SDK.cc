@@ -250,6 +250,73 @@ static void *pool_alloc(size_t n, size_t align) {
 
 static uint8_t clamp_u8(uint32_t v) { return (v > 0xFFu) ? 0xFFu : (uint8_t)v; }
 
+typedef struct {
+    uint32_t input_format;
+    int32_t norm_val[BAYER_CH_MAX];
+    int32_t norm_shift[BAYER_CH_MAX];
+    int32_t div_val[BAYER_CH_MAX];
+    int32_t div_shift;
+} sc_input_norm_info_t;
+
+static int32_t conv_reg_signed(uint32_t reg_val, int signed_bit, uint32_t reg_mask) {
+    if (((reg_val >> (uint32_t)signed_bit) & 1u) == 0u) {
+        return (int32_t)reg_val;
+    }
+    return -(int32_t)((~reg_val + 1u) & reg_mask);
+}
+
+static void build_input_norm_info(const sc_dnn_nw_info_t *nw, sc_input_norm_info_t *info) {
+    static const int LEV_PL_GAIN_DEC_SHT = 5;
+    static const int LEV_PL_NORM_YM_YADD_SIGNED_SHT = 8;
+    static const uint32_t LEV_PL_NORM_YM_YADD_MASK = 0x01FFu;
+    static const int YCMTRX_KX0_2_DEC_SHT = 10;
+    static const int YCMTRX_KX0_2_SIGNED_SHT = 11;
+    static const uint32_t YCMTRX_KX0_2_MASK = 0x0FFFu;
+    static const int YCMTRX_KX3_DEC_SHT = 4;
+    static const int YCMTRX_KX3_SIGNED_SHT = 12;
+    static const uint32_t YCMTRX_KX3_MASK = 0x1FFFu;
+
+    memset(info, 0, sizeof(*info));
+    info->input_format = nw->inputTensorFormat;
+    for (int i = 0; i < BAYER_CH_MAX; ++i) {
+        info->div_val[i] = 1;
+    }
+
+    if (nw->inputTensorFormat == DNN_INPUT_FORMAT_Y) {
+        info->norm_val[0] = conv_reg_signed(nw->yAdd, LEV_PL_NORM_YM_YADD_SIGNED_SHT, LEV_PL_NORM_YM_YADD_MASK);
+        info->norm_shift[0] = (int32_t)nw->ySht;
+        info->div_val[0] = (nw->yGgain == 0u) ? 1 : (int32_t)nw->yGgain;
+        info->div_shift = LEV_PL_GAIN_DEC_SHT;
+        return;
+    }
+
+    if (nw->inputTensorFormat == DNN_INPUT_FORMAT_BAYER_RGB) {
+        for (int j = 0; j < BAYER_CH_MAX; ++j) {
+            info->norm_val[j] = conv_reg_signed(nw->rgbNorm[j].add, LEV_PL_NORM_YM_YADD_SIGNED_SHT, LEV_PL_NORM_YM_YADD_MASK);
+            info->norm_shift[j] = (int32_t)nw->rgbNorm[j].shift;
+            info->div_val[j] = (nw->yGgain == 0u) ? 1 : (int32_t)nw->yGgain;
+        }
+        info->div_shift = LEV_PL_GAIN_DEC_SHT;
+        return;
+    }
+
+    info->norm_val[0] = conv_reg_signed(nw->NormK03, YCMTRX_KX3_SIGNED_SHT, YCMTRX_KX3_MASK);
+    info->norm_val[1] = conv_reg_signed(nw->NormK13, YCMTRX_KX3_SIGNED_SHT, YCMTRX_KX3_MASK);
+    info->norm_val[2] = conv_reg_signed(nw->NormK23, YCMTRX_KX3_SIGNED_SHT, YCMTRX_KX3_MASK);
+    info->norm_shift[0] = YCMTRX_KX3_DEC_SHT;
+    info->norm_shift[1] = YCMTRX_KX3_DEC_SHT;
+    info->norm_shift[2] = YCMTRX_KX3_DEC_SHT;
+    if (nw->inputTensorFormat == DNN_INPUT_FORMAT_RGB) {
+        info->div_val[0] = conv_reg_signed(nw->NormK00, YCMTRX_KX0_2_SIGNED_SHT, YCMTRX_KX0_2_MASK);
+        info->div_val[2] = conv_reg_signed(nw->NormK22, YCMTRX_KX0_2_SIGNED_SHT, YCMTRX_KX0_2_MASK);
+    } else {
+        info->div_val[0] = conv_reg_signed(nw->NormK02, YCMTRX_KX0_2_SIGNED_SHT, YCMTRX_KX0_2_MASK);
+        info->div_val[2] = conv_reg_signed(nw->NormK20, YCMTRX_KX0_2_SIGNED_SHT, YCMTRX_KX0_2_MASK);
+    }
+    info->div_val[1] = conv_reg_signed(nw->NormK11, YCMTRX_KX0_2_SIGNED_SHT, YCMTRX_KX0_2_MASK);
+    info->div_shift = YCMTRX_KX0_2_DEC_SHT - YCMTRX_KX3_DEC_SHT;
+}
+
 static sc_output_tensor_size_info_t *ensure_output_arr(uint8_t nwOrdinal) {
     uint8_t num = network_info[nwOrdinal].outputTensorNum;
     if (num == 0) {
@@ -1538,6 +1605,120 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
 
     g_spi_driver.read(rx_buf, data_size);
     return data_size;
+}
+
+int _preprocess_nn_input_data(uint8_t *src, uint32_t src_size) {
+    if (!src) {
+        return -1;
+    }
+    if (src_size == 0 || (src_size % 3u) != 0u) {
+        return -1;
+    }
+    if (s_num_of_networks == 0) {
+        return 0;
+    }
+
+    sc_input_norm_info_t norm_info;
+    build_input_norm_info(&network_info[0], &norm_info);
+
+    for (uint32_t i = 0; i < src_size; i += 3u) {
+        for (int c = 0; c < 3; ++c) {
+            const int32_t den = (norm_info.div_val[c] == 0) ? 1 : norm_info.div_val[c];
+            int64_t num = (((int64_t)src[i + (uint32_t)c] << norm_info.norm_shift[c]) - norm_info.norm_val[c]);
+            num = num << norm_info.div_shift;
+            const int32_t out = (int32_t)(num / den);
+            src[i + (uint32_t)c] = (uint8_t)(out & 0xFF);
+        }
+    }
+    return 0;
+}
+
+int _convert_injected_data(const uint8_t *img,
+                           uint32_t img_width, uint32_t img_height, uint32_t img_channels,
+                           uint8_t *dst, uint32_t dst_size,
+                           uint32_t input_height, uint32_t input_width, uint32_t channel_num,
+                           const uint8_t transpose_order[3], uint32_t align_base) {
+    if (!img || !dst) {
+        return -1;
+    }
+    if (img_width == 0 || img_height == 0 || img_channels == 0) {
+        return -1;
+    }
+    if (input_height == 0 || input_width == 0 || channel_num == 0) {
+        return -1;
+    }
+    if (img_channels < channel_num) {
+        return -1;
+    }
+    if (align_base == 0) {
+        align_base = 32;
+    }
+
+    const uint32_t input_width_aligned = (uint32_t)ALIGN_UP(input_width, align_base);
+    const uint64_t total_u64 = (uint64_t)input_height * (uint64_t)input_width_aligned * (uint64_t)channel_num;
+    if (total_u64 > 0xFFFFFFFFu) {
+        return -1;
+    }
+    const uint32_t total = (uint32_t)total_u64;
+    if (dst_size < total) {
+        return -1;
+    }
+
+    uint8_t order_local[3] = {2, 0, 1};
+    const uint8_t *order = transpose_order ? transpose_order : order_local;
+    bool seen[3] = {false, false, false};
+    for (int i = 0; i < 3; ++i) {
+        if (order[i] > 2) {
+            return -1;
+        }
+        if (seen[order[i]]) {
+            return -1;
+        }
+        seen[order[i]] = true;
+    }
+
+    uint8_t *input_tensor_final = (uint8_t *)malloc(total);
+    if (!input_tensor_final) {
+        return -1;
+    }
+    memset(input_tensor_final, 0, total);
+
+    for (uint32_t y = 0; y < input_height; ++y) {
+        uint32_t src_y = (uint32_t)(((uint64_t)y * (uint64_t)img_height) / (uint64_t)input_height);
+        if (src_y >= img_height) {
+            src_y = img_height - 1;
+        }
+        for (uint32_t x = 0; x < input_width; ++x) {
+            uint32_t src_x = (uint32_t)(((uint64_t)x * (uint64_t)img_width) / (uint64_t)input_width);
+            if (src_x >= img_width) {
+                src_x = img_width - 1;
+            }
+            const uint32_t src_base = (src_y * img_width + src_x) * img_channels;
+            const uint32_t dst_base = (y * input_width_aligned + x) * channel_num;
+            for (uint32_t c = 0; c < channel_num; ++c) {
+                input_tensor_final[dst_base + c] = img[src_base + c];
+            }
+        }
+    }
+
+    const uint32_t dims[3] = {input_height, input_width_aligned, channel_num};
+    const uint32_t out_dims[3] = {dims[order[0]], dims[order[1]], dims[order[2]]};
+    for (uint32_t h = 0; h < input_height; ++h) {
+        for (uint32_t w = 0; w < input_width_aligned; ++w) {
+            for (uint32_t c = 0; c < channel_num; ++c) {
+                const uint32_t src_idx = (h * input_width_aligned + w) * channel_num + c;
+                const uint32_t src_coord[3] = {h, w, c};
+                const uint32_t o0 = src_coord[order[0]];
+                const uint32_t o1 = src_coord[order[1]];
+                const uint32_t o2 = src_coord[order[2]];
+                const uint32_t dst_idx = (o0 * out_dims[1] + o1) * out_dims[2] + o2;
+                dst[dst_idx] = input_tensor_final[src_idx];
+            }
+        }
+    }
+
+    free(input_tensor_final);
+    return (int)total;
 }
 
 void do_data_injection_stream(

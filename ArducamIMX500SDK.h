@@ -172,6 +172,12 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
 typedef uint32_t (*data_provider_t)(uint8_t *buf, uint32_t max_len, uint32_t offset);
 void do_data_injection_stream(data_provider_t provider, uint32_t total_size, bool first_time);
 void stop_data_injection(void);
+int _preprocess_nn_input_data(uint8_t *src, uint32_t src_size);
+int _convert_injected_data(const uint8_t *img,
+                           uint32_t img_width, uint32_t img_height, uint32_t img_channels,
+                           uint8_t *dst, uint32_t dst_size,
+                           uint32_t input_height, uint32_t input_width, uint32_t channel_num,
+                           const uint8_t transpose_order[3], uint32_t align_base);
 extern sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
 int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len);
 void dump_network_info_list(void);
