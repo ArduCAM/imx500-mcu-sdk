@@ -1447,20 +1447,37 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     printf("set spi output: metadata(output_tensor)\n");
     switch_spi_data_forward_mode(SPI_SLAVE_TO_IMX500_SSPI);
     uint32_t data_size;
-    if (load_imx500_fw(nn_fw, nn_fw_size, IMX500_FW_TYPE_NETWORK_WEIGHTS) != 0) {
-        printf("Error: nn fw failed\n");
-        return false;
+    if (nn_fw != nullptr) {
+        if (load_imx500_fw(nn_fw, nn_fw_size, IMX500_FW_TYPE_NETWORK_WEIGHTS) != 0) {
+            printf("Error: nn fw failed\n");
+            return false;
+        }
+        printf("spi write nn fw completed\n");
+        set_nw_info_from_flash_buffer(nn_info, nn_info_size);
+        dump_network_info_list();
+        if (init_input_tensor_preprocess_config() != 0) {
+            printf("Error: init_input_tensor_preprocess_config failed\n");
+            return false;
+        }
+        calculate_spi_output_metadata_size(spi_format, &data_size);
+        g_i2c_driver.write(METADATA_SIZE_REG, data_size, 4);
+    } else {
+        const uint32_t load_nn_timeout_ms = 20000;
+        const uint32_t load_nn_poll_ms = 500;
+        uint32_t load_nn_elapsed = 0;
+        int ret = g_i2c_driver.write(LOAD_MODEL_FROM_FLASH, 1, 4);
+        while (load_nn_elapsed < load_nn_timeout_ms) {
+            int ret = g_i2c_driver.read(BOOT_STATUS_REG, &imx500_boot_status, 4);
+            if (ret < 0) {
+                printf("read boot status failed: %d\n", ret);
+                return false;
+            }
+            if (imx500_boot_status == 2) break;
+            printf("wait for loading nn ... \n");
+            g_i2c_driver.slp_ms(load_nn_poll_ms);
+            load_nn_elapsed += load_nn_poll_ms;
+        }
     }
-    printf("spi write nn fw completed\n");
-    g_i2c_driver.write(NN_FW_LOAD_STATUS_REG, 1, 4);
-    set_nw_info_from_flash_buffer(nn_info, nn_info_size);
-    dump_network_info_list();
-    if (init_input_tensor_preprocess_config() != 0) {
-        printf("Error: init_input_tensor_preprocess_config failed\n");
-        return false;
-    }
-    calculate_spi_output_metadata_size(spi_format, &data_size);
-    g_i2c_driver.write(METADATA_SIZE_REG, data_size, 4);
     
     return true;
 }

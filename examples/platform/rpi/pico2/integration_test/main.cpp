@@ -218,6 +218,7 @@ int main() {
 
     uint64_t open_start_us = time_us_64();
     bool open_ret = open(NN_FW_DATA, NN_FW_SIZE, NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
+    // bool open_ret = open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
     uint64_t open_end_us = time_us_64();
     if (!open_ret) {
         printf("open() failed\n");

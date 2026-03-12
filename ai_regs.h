@@ -11,11 +11,7 @@
 #define CAPTURE_METADATA_REG          (AI_REG_BASE | 0x0006)
 #define METADATA_SPI_FORWARD_MODE_REG (AI_REG_BASE | 0x0007)
 #define BOOT_STATUS_REG               (AI_REG_BASE | 0x0009)
-#define START_BOOT_REG                (AI_REG_BASE | 0x0010)
-#define LOADER_FW_LOAD_STATUS_REG     (AI_REG_BASE | 0x0011)
-#define MAIN_FW_LOAD_STATUS_REG       (AI_REG_BASE | 0x0012)
-#define NN_FW_LOAD_STATUS_REG         (AI_REG_BASE | 0x0013)
-
+#define LOAD_MODEL_FROM_FLASH         (AI_REG_BASE | 0x0010)
 
 #define IMX500_COMMAND_GET_ES_VER                                                       (IMX500_COMMAND_BASE | 1)
 #define IMX500_COMMAND_GET_LOADER_FW_VER                                                (IMX500_COMMAND_BASE | 2)
