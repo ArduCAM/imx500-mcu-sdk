@@ -1049,7 +1049,6 @@ imx500_err_t imx500_res_read(uint32_t cmd_id,
         return IMX500_CMD_ERR_INVALID_ARG;
     }
 
-    /* 1. 下发命令 */
     int ret = g_i2c_driver.write(cmd_id, 0x00000000, 4);
     if (ret < 0) {
         return IMX500_CMD_ERR_I2C_WRITE;
