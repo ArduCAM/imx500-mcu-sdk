@@ -1,0 +1,44 @@
+namespace apParams.fb;
+
+
+table FBDimension {
+    id: uint8;
+    size: uint16;
+    serializationIndex: uint8;
+    padding: uint8;
+}
+
+table FBInputTensor {
+    id: uint8;
+    name: string;
+    numOfDimensions: uint8;
+    dimensions: [FBDimension];
+    shift: uint16;
+    scale: float;
+    format: uint8;
+}
+
+table FBOutputTensor {
+    id: uint8;
+    name: string;
+    numOfDimensions: uint8;
+    dimensions: [FBDimension];
+    bitsPerElement: uint8;
+    shift: uint16;
+    scale: float;
+    format: uint8;
+}
+
+table FBNetwork {
+    id: uint16;
+    name: string;
+    type: string;
+    inputTensors: [FBInputTensor];
+    outputTensors: [FBOutputTensor];
+}
+
+table FBApParams {
+    networks: [FBNetwork];
+}
+
+root_type FBApParams;
