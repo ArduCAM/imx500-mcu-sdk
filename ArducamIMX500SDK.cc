@@ -1425,7 +1425,6 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
 }
 
 void stream_on() {
-    switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_MSPI);
     uint32_t val = 0;
     imx500_res_read(IMX500_COMMAND_STREAM_ON, &val, 10);
     g_i2c_driver.slp_ms(10);
@@ -1501,16 +1500,9 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     }
     printf("imx500 module boot completed\n");
     imx500_dump_basic_info();
-    uint32_t val;
-    imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
-    imx500_res_read(IMX500_COMMAND_SENSOR_MIPI_COMMON_RAW10_2LANES_CONFIG, &val, 500);
-    imx500_res_read(IMX500_COMMAND_SENSOR_MIPI_1024x600_2LANES_CONFIG, &val, 500);
-    imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_IMAGE, &val, 500);
-    printf("set mipi output: image\n");
     uint32_t spi_frq = 5 * 1000 * 1000;
     imx500_res_write(IMX500_COMMAND_SET_SPI_FRQ, &spi_frq, 10);
-    imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_OUTPUT_TENSOR, &val, 10);
-    printf("set spi output: metadata(output_tensor)\n");
+
     switch_spi_data_forward_mode(SPI_SLAVE_TO_IMX500_SSPI);
     uint32_t data_size;
     if (nn_fw != nullptr) {
@@ -1526,6 +1518,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
             return false;
         }
         calculate_spi_output_metadata_size(spi_format, &data_size);
+        printf("data_size: %d\n", data_size);
         g_i2c_driver.write(METADATA_SIZE_REG, data_size, 4);
     } else {
         const uint32_t load_nn_timeout_ms = 20000;
@@ -1544,7 +1537,54 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
             load_nn_elapsed += load_nn_poll_ms;
         }
     }
+
+    uint32_t val;
+    imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
+    imx500_res_read(IMX500_COMMAND_SENSOR_MIPI_COMMON_RAW10_2LANES_CONFIG, &val, 500);
+    imx500_res_read(IMX500_COMMAND_SENSOR_MIPI_1024x600_2LANES_CONFIG, &val, 500);
+    switch (mipi_format)
+    {
+    case MIPI_DATA_IMAGE:
+        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_IMAGE, &val, 500);
+        break;
+    case MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR:
+        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, &val, 500);
+        break;
+    case MIPI_DATA_IMAGE_METADATA_INPUT_TENSOR_OUTPUT_TENSOR:
+        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_IMAGE_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, &val, 500);
+        break;
+    case MIPI_DATA_NONE:
+        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_NONE, &val, 500);
+        break;
+    default:
+        printf("Error: invalid mipi format");
+        break;
+    }
     
+    switch (spi_format)
+    {
+    case SPI_METADATA_OUTPUT_TENSOR:
+        imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_OUTPUT_TENSOR, &val, 10);
+        switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_MSPI);
+        break;
+    case SPI_METADATA_INPUT_TENSOR:
+        printf("Not yet implemented(SPI_METADATA_INPUT_TENSOR), disabled.\n");
+        break;
+    case SPI_METADATA_JPEG_INPUT_TENSOR:
+        printf("Not yet implemented(SPI_METADATA_JPEG_INPUT_TENSOR), disabled.\n");
+        break;
+    case SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR:
+        imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR, &val, 10);
+        switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_SSPI);
+        break;
+    case SPI_METADATA_NONE:
+        imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_NONE, &val, 10);
+        break;
+    default:
+        printf("Error: invalid spi format");
+        break;
+    }
+
     return true;
 }
 
