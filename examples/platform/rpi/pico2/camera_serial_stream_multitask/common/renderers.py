@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -8,6 +8,12 @@ import numpy as np
 
 from .metadata_parser import Network
 
+
+def _find_repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "postprocess").is_dir() and (parent / "tools").is_dir():
+            return parent
+    raise RuntimeError("Unable to locate repository root from renderers.py")
 
 def _load_labels(label_file: str | None) -> list[str]:
     if not label_file:
@@ -156,7 +162,7 @@ class PoseRenderer:
         if self._higherhrnet_parser is not None:
             return self._higherhrnet_parser
 
-        repo_root = Path(__file__).resolve().parents[5]
+        repo_root = _find_repo_root()
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
 
@@ -191,3 +197,5 @@ class PoseRenderer:
         if rendered_img is None:
             return image_bgr.copy()
         return rendered_img
+
+

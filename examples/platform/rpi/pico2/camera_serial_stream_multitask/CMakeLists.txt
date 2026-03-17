@@ -25,18 +25,18 @@ include(${CMAKE_CURRENT_LIST_DIR}/../integration_test/pico_sdk_import.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_mcu_sdk.cmake)
 
-project(imx500_camera_serial_stream_segmentation C CXX ASM)
+project(imx500_camera_serial_stream_multitask C CXX ASM)
 
 pico_sdk_init()
 
-add_executable(imx500_camera_serial_stream_segmentation
+add_executable(imx500_camera_serial_stream_multitask
         ${IMX500_FIRMWARE_CPP_FILES}
         ${IMX500_MCU_SDK_SRC_FILES}
         ${CMAKE_CURRENT_LIST_DIR}/../peripherals_adapter.c
         main.cpp
         )
 
-target_include_directories(imx500_camera_serial_stream_segmentation PRIVATE
+target_include_directories(imx500_camera_serial_stream_multitask PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/../
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../
@@ -44,8 +44,8 @@ target_include_directories(imx500_camera_serial_stream_segmentation PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 
-target_link_libraries(imx500_camera_serial_stream_segmentation pico_stdlib hardware_spi hardware_i2c hardware_dma)
+target_link_libraries(imx500_camera_serial_stream_multitask pico_stdlib hardware_spi hardware_i2c hardware_dma)
 
-pico_add_extra_outputs(imx500_camera_serial_stream_segmentation)
-pico_enable_stdio_usb(imx500_camera_serial_stream_segmentation 1)
-pico_enable_stdio_uart(imx500_camera_serial_stream_segmentation 0)
+pico_add_extra_outputs(imx500_camera_serial_stream_multitask)
+pico_enable_stdio_usb(imx500_camera_serial_stream_multitask 1)
+pico_enable_stdio_uart(imx500_camera_serial_stream_multitask 0)

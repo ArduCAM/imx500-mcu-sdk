@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -33,25 +33,44 @@ class ExampleConfig:
     save_original: bool = False
 
 
-def build_argument_parser(config: ExampleConfig) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=f"Receive IMX500 {config.task_name} packets and save annotated JPEGs")
+def add_common_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    default_output_dir: str | None,
+    default_max_payload: int | None,
+    save_original: bool = False,
+) -> argparse.ArgumentParser:
     parser.add_argument("--port", required=True, help="Serial port, e.g. COM7 or /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=921600, help="Baudrate (USB CDC may ignore this)")
-    parser.add_argument("--output", default=config.default_output_dir, help="Output directory for decoded JPEG files")
+    parser.add_argument("--output", default=default_output_dir, help="Output directory for decoded JPEG files")
     parser.add_argument("--save-raw", action="store_true", help="Also save raw payload as .bin")
     parser.add_argument("--save-metadata-json", action="store_true", help="Save parsed metadata summary as .json")
     parser.add_argument("--save-tensors", action="store_true", help="Save parsed tensor arrays as .npz")
-    parser.add_argument("--save-original", action="store_true", default=config.save_original, help="Save unannotated JPEG too")
+    parser.add_argument("--save-original", action="store_true", default=save_original, help="Save unannotated JPEG too")
     parser.add_argument("--max-frames", type=int, default=0, help="Stop after N decoded JPEG frames (0 = no limit)")
-    parser.add_argument("--max-payload", type=int, default=config.default_max_payload, help="Reject packet if payload exceeds this")
+    parser.add_argument("--max-payload", type=int, default=default_max_payload, help="Reject packet if payload exceeds this")
     parser.add_argument("--show-img", action="store_true", help="Show annotated frames in an OpenCV window while receiving")
     parser.add_argument("--show-input-tensor", action="store_true", help="Show the model input tensor image in an OpenCV window when supported")
     parser.add_argument("--show-fps", action="store_true", help="Print postprocess FPS in examples that support it")
     return parser
 
 
+def build_argument_parser(config: ExampleConfig) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=f"Receive IMX500 {config.task_name} packets and save annotated JPEGs")
+    return add_common_arguments(
+        parser,
+        default_output_dir=config.default_output_dir,
+        default_max_payload=config.default_max_payload,
+        save_original=config.save_original,
+    )
+
+
 def run_serial_receiver(config: ExampleConfig, argv: list[str] | None = None) -> int:
     args = build_argument_parser(config).parse_args(argv)
+    return run_serial_receiver_with_args(config, args)
+
+
+def run_serial_receiver_with_args(config: ExampleConfig, args: argparse.Namespace) -> int:
     os.makedirs(args.output, exist_ok=True)
 
     ser = serial.Serial(args.port, args.baud, timeout=0.2)
@@ -88,7 +107,6 @@ def run_serial_receiver(config: ExampleConfig, argv: list[str] | None = None) ->
 
                 try:
                     parsed_frame = parse_metadata(payload)
-                    # parsed_frame = parse_metadata(payload, 1)
                     annotated = config.annotate_frame(parsed_frame, args)
                 except NotImplementedError as exc:
                     print(f"[WARN] seq={seq} annotation skipped: {exc}")
