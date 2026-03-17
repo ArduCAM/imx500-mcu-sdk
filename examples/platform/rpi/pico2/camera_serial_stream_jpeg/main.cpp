@@ -8,8 +8,10 @@
 #include "g_config.h"
 #include "ArducamIMX500SDK.h"
 #include "peripherals_adapter.h"
+#include "person.h"
+#include "test_metadata_outputtensor_1.h"
 
-#define MAX_FRAME_SIZE          (64 * 1024)
+#define MAX_FRAME_SIZE          (300 * 1024)
 #define PACKET_MAGIC0           0x49u  // I
 #define PACKET_MAGIC1           0x4Du  // M
 #define PACKET_MAGIC2           0x58u  // X
@@ -119,10 +121,17 @@ int main() {
 
     stream_on();
 
+    uint8_t test_frame[100 * 1024];
+    for (int i = 0; i < 100*1024; ++i) {
+        test_frame[i] = 0xFF;
+    }
+
     uint32_t seq = 0;
     while (1) {
         int32_t bytes_read = read_metadata(frame_buf, MAX_FRAME_SIZE);
+        // send_packet(seq, output_bin, output_bin_len > 0 ? output_bin_len : -1);
         send_packet(seq, frame_buf, bytes_read > 0 ? bytes_read : -1);
+        // send_packet(seq, test_frame, bytes_read > 0 ? bytes_read : -1);
         seq++;
     }
 

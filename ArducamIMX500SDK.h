@@ -171,6 +171,7 @@ uint32_t get_metadata_size(void);
 int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
 typedef uint32_t (*data_provider_t)(uint8_t *buf, uint32_t max_len, uint32_t offset);
 void do_data_injection_stream(data_provider_t provider, uint32_t total_size, bool first_time);
+void do_data_injection(const uint8_t *data, uint32_t size, bool first_time);
 void stop_data_injection(void);
 int _preprocess_nn_input_data(uint8_t *src, uint32_t src_size);
 int _convert_injected_data(const uint8_t *img,

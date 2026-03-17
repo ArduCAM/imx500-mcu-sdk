@@ -73,7 +73,7 @@ higherhrnet_start_time = time.time()
 
 def parse_higherhrnet(network, img, score_thr=0.5, is_show_input_tensor=False, is_show_img=False, is_print_fps=True, nn_input_map=(0.0, 0.0, 1.0, 1.0)):
     global higherhrnet_processed_count, higherhrnet_start_time
-    
+
     dnn_output_tensor = network[0].output_tensors[0].data
     if dnn_output_tensor is None:
         logger.warning("Output tensor is None")

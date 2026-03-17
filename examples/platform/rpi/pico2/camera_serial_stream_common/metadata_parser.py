@@ -10,9 +10,10 @@ import numpy as np
 
 from .apParams.fb.FBApParams import FBApParams
 
-INPUT_HEADER_SIZE = 12
+IMX500_TENSOR_HEADER_SIZE = 12
 JPEG_ALIGNMENT = 1024
 JPEG_MIN_SIZE_BYTES = 4 * 1024
+OUTPUT_TENSOR_ALIGNMENT = 4
 
 DATA_TYPE_MAP: dict[int, dict[int, Any]] = {
     0: {8: np.int8, 16: np.int16, 32: np.int32},
@@ -125,15 +126,21 @@ def trim_jpeg_bytes(jpeg_bytes: bytes) -> bytes:
     return jpeg_bytes
 
 
-def parse_spi_jpeg_frame(payload: bytes) -> ParsedFrame:
+def parse_metadata(payload: bytes, format: int = 0) -> ParsedFrame:  # format 0: input(jpeg)+output | 1: output
     data = np.frombuffer(payload, dtype=np.uint8)
-    if data.size < INPUT_HEADER_SIZE:
+    if data.size < IMX500_TENSOR_HEADER_SIZE:
         raise ValueError(f"payload too short: {data.size}")
 
-    input_header = unpack_imx500_header(data)
-    ap_param_offset = INPUT_HEADER_SIZE
-    ap_param_size = int(input_header["size_of_ap_parameter"])
+    
+    first_header = unpack_imx500_header(data)
+    # if first_header["valid_flag"] != 1:
+    #     raise ValueError(f"invalid imx500 tensor header: {first_header}")
+
+    ap_param_offset = IMX500_TENSOR_HEADER_SIZE
+    ap_param_size = int(first_header["size_of_ap_parameter"])
     ap_param_end = ap_param_offset + ap_param_size
+    if ap_param_size == 0:
+        raise ValueError("ApParams size is 0")
     if ap_param_end + 4 > data.size:
         raise ValueError("ap params or jpeg size field out of range")
 
@@ -142,26 +149,32 @@ def parse_spi_jpeg_frame(payload: bytes) -> ParsedFrame:
         raise ValueError("No network metadata found in payload")
     if len(networks[0].input_tensors) != 1:
         raise RuntimeError(f"Expected 1 input tensor, got {len(networks[0].input_tensors)}")
+    if (format == 0):
+        jpeg_size = int(np.frombuffer(data[ap_param_end:ap_param_end + 4].tobytes(), dtype=np.uint32)[0])
+        jpeg_aligned_size = calculate_jpeg_aligned_size(jpeg_size)
+        jpeg_start = ap_param_end + 4
+        jpeg_end = jpeg_start + jpeg_aligned_size - 4
+        if jpeg_end > data.size:
+            raise ValueError(f"jpeg block out of range: need {jpeg_end}, got {data.size}")
 
-    jpeg_size = int(np.frombuffer(data[ap_param_end:ap_param_end + 4].tobytes(), dtype=np.uint32)[0])
-    jpeg_aligned_size = calculate_jpeg_aligned_size(jpeg_size)
-    jpeg_start = ap_param_end + 4
-    jpeg_end = jpeg_start + jpeg_aligned_size - 4
-    if jpeg_end > data.size:
-        raise ValueError(f"jpeg block out of range: need {jpeg_end}, got {data.size}")
+        jpeg_data = trim_jpeg_bytes(data[jpeg_start:jpeg_end].tobytes())
+        image_bgr = cv2.imdecode(np.frombuffer(jpeg_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image_bgr is None:
+            raise ValueError("failed to decode JPEG payload")
 
-    jpeg_data = trim_jpeg_bytes(data[jpeg_start:jpeg_end].tobytes())
-    image_bgr = cv2.imdecode(np.frombuffer(jpeg_data, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image_bgr is None:
-        raise ValueError("failed to decode JPEG payload")
-
-    bind_input_tensor_image(networks[0].input_tensors[0], image_bgr)
-
-    output_header = None
-    output_header_offset = jpeg_end
-    if output_header_offset + INPUT_HEADER_SIZE <= data.size:
-        output_header = unpack_imx500_header(data[output_header_offset:])
-        bind_output_tensors(networks, data[output_header_offset + INPUT_HEADER_SIZE :], output_header)
+        bind_input_tensor_image(networks[0].input_tensors[0], image_bgr)
+        input_header = first_header
+        output_header = None
+        output_payload, output_header = split_output_tensor_payload(data, jpeg_end, networks)
+    else:
+        jpeg_size = 0
+        jpeg_aligned_size = 0
+        jpeg_data = None
+        image_bgr = np.zeros(shape=networks[0].input_tensors[0].get_dimensions())
+        input_header = None
+        output_header = None
+        output_payload, output_header = split_output_tensor_payload(data, 0, networks)
+    bind_output_tensors(networks, output_payload)
 
     return ParsedFrame(
         payload=payload,
@@ -175,6 +188,35 @@ def parse_spi_jpeg_frame(payload: bytes) -> ParsedFrame:
     )
 
 
+def split_output_tensor_payload(
+    data: np.ndarray,
+    output_offset: int,
+    networks: list[NNContext],
+) -> tuple[np.ndarray, dict[str, int] | None]:
+    remaining = data.size - output_offset
+    expected_output_bytes = estimate_aligned_output_bytes(networks)
+
+    if remaining < expected_output_bytes:
+        raise ValueError(
+            f"output tensor payload too short: need at least {expected_output_bytes}, got {remaining}"
+        )
+
+    if remaining >= IMX500_TENSOR_HEADER_SIZE + expected_output_bytes:
+        candidate = unpack_imx500_header(data[output_offset:])
+        payload = data[output_offset + IMX500_TENSOR_HEADER_SIZE + candidate['size_of_ap_parameter']:]
+    return payload, candidate
+
+
+def estimate_aligned_output_bytes(networks: list[NNContext]) -> int:
+    total = 0
+    for network in networks:
+        for output_tensor in network.output_tensors:
+            element_count = math.prod(output_tensor.get_dimensions())
+            tensor_bytes = math.ceil(output_tensor.bits_per_element / 8) * element_count
+            total += align_up(tensor_bytes, OUTPUT_TENSOR_ALIGNMENT)
+    return total
+
+
 def bind_input_tensor_image(input_tensor: InputTensor, image_bgr: np.ndarray) -> None:
     dimensions = input_tensor.get_dimensions()
     if len(dimensions) != 3:
@@ -182,21 +224,17 @@ def bind_input_tensor_image(input_tensor: InputTensor, image_bgr: np.ndarray) ->
         return
 
     input_height, input_width, _input_channel = dimensions
+    img_h, img_w = image_bgr.shape[:2]
+
+    if img_h == input_height and img_w == input_width:
+        input_tensor.data = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        return
+
     resized = cv2.resize(image_bgr, (input_width, input_height), interpolation=cv2.INTER_LINEAR)
     input_tensor.data = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
 
-def bind_output_tensors(
-    networks: list[NNContext],
-    raw_output_tensor_data: bytes | np.ndarray,
-    output_header: dict[str, int],
-) -> None:
-    if output_header["valid_flag"] != 1:
-        for network in networks:
-            for output_tensor in network.output_tensors:
-                output_tensor.data = None
-        return
-
+def bind_output_tensors(networks: list[NNContext], raw_output_tensor_data: bytes | np.ndarray) -> None:
     if isinstance(raw_output_tensor_data, bytes):
         raw = np.frombuffer(raw_output_tensor_data, dtype=np.uint8)
     else:
@@ -206,26 +244,29 @@ def bind_output_tensors(
     for network in networks:
         for output_tensor in network.output_tensors:
             dimensions = output_tensor.get_dimensions()
-            data_size = math.prod(dimensions) * math.ceil(output_tensor.bits_per_element / 8)
-            if offset + data_size > raw.size:
+            tensor_elements = math.prod(dimensions)
+            tensor_bytes = math.ceil(output_tensor.bits_per_element / 8) * tensor_elements
+            tensor_bytes_aligned = align_up(tensor_bytes, OUTPUT_TENSOR_ALIGNMENT)
+            if offset + tensor_bytes_aligned > raw.size:
                 raise ValueError(
                     f"Output tensor {output_tensor.name or output_tensor.id} truncated: "
-                    f"need {offset + data_size}, got {raw.size}"
+                    f"need {offset + tensor_bytes_aligned}, got {raw.size}"
                 )
 
-            tensor_bytes = raw[offset : offset + data_size].tobytes()
+            tensor_bytes_view = raw[offset : offset + tensor_bytes].tobytes()
             dtype = DATA_TYPE_MAP[output_tensor.format][output_tensor.bits_per_element]
-            output_data = np.frombuffer(tensor_bytes, dtype=dtype).astype(np.float32)
+            output_data = np.frombuffer(tensor_bytes_view, dtype=dtype).astype(np.float32)
             output_data = (output_data - output_tensor.shift) * output_tensor.scale
             output_tensor.data = reshape_output_tensor(output_data, dimensions)
-            offset += align_up(data_size, 4)
+            offset += tensor_bytes_aligned
 
 
 def reshape_output_tensor(output_data: np.ndarray, dimensions: list[int]) -> np.ndarray:
     reshaped_dimensions = list(dimensions)
     reshaped_dimensions.reverse()
     output_data = output_data.reshape(reshaped_dimensions)
-    return np.transpose(output_data)
+    output_data = np.transpose(output_data)
+    return output_data
 
 
 def parse_ap_params(data: bytes) -> list[NNContext]:

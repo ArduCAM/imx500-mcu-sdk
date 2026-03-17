@@ -33,6 +33,7 @@ add_executable(imx500_camera_serial_stream_jpeg
         ${IMX500_FIRMWARE_CPP_FILES}
         ${IMX500_MCU_SDK_SRC_FILES}
         ${CMAKE_CURRENT_LIST_DIR}/../peripherals_adapter.c
+        ${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/tests/person.cpp
         main.cpp
         )
 
@@ -40,7 +41,9 @@ target_include_directories(imx500_camera_serial_stream_jpeg PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/../
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/
+    ${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/tests
+    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/tests
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 

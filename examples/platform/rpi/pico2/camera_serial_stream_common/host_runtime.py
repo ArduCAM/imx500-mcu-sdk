@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import serial
 
-from .metadata_parser import ParsedFrame, checksum32, parse_spi_jpeg_frame
+from .metadata_parser import ParsedFrame, checksum32, parse_metadata
 from .model_info import ModelInfo
 
 MAGIC = b"IMX5"
@@ -87,11 +87,12 @@ def run_serial_receiver(config: ExampleConfig, argv: list[str] | None = None) ->
                     frame_prefix.with_suffix(".bin").write_bytes(payload)
 
                 try:
-                    parsed_frame = parse_spi_jpeg_frame(payload)
+                    parsed_frame = parse_metadata(payload)
+                    # parsed_frame = parse_metadata(payload, 1)
                     annotated = config.annotate_frame(parsed_frame, args)
                 except NotImplementedError as exc:
                     print(f"[WARN] seq={seq} annotation skipped: {exc}")
-                    parsed_frame = parse_spi_jpeg_frame(payload)
+                    parsed_frame = parse_metadata(payload)
                     annotated = parsed_frame.image_bgr
                 except Exception as exc:
                     print(f"[WARN] seq={seq} parse failed: {exc}")

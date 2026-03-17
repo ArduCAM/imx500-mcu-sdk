@@ -1810,6 +1810,38 @@ void do_data_injection_stream(
     printf("data injection completed\n");
 }
 
+void do_data_injection(const uint8_t *data, uint32_t size, bool first_time) {
+    if (!data || size == 0) {
+        printf("[Data Injection] invalid input\n");
+        return;
+    }
+
+    uint32_t val = 0;
+    if (first_time) {
+        imx500_res_read(IMX500_COMMAND_SWITCH_TO_DATA_INJECTION_MODE, &val, 10);
+    }
+
+    imx500_res_read(IMX500_COMMAND_BEFORE_DATA_INJECTION, &val, 10);
+
+    uint32_t offset = 0;
+    uint32_t step = 0;
+    uint32_t total = (size + MAX_SPI_PACKET_LEN - 1) / MAX_SPI_PACKET_LEN;
+
+    while (offset < size) {
+        uint32_t pkt =
+            (size - offset > MAX_SPI_PACKET_LEN)
+            ? MAX_SPI_PACKET_LEN
+            : (size - offset);
+
+        sdk_spi_write(data + offset, pkt);
+        offset += pkt;
+
+        step++;
+        log_progress(NULL, "[Data Injection]", step, total, 30);
+    }
+    printf("data injection completed\n");
+}
+
 void stop_data_injection(void) {
     uint32_t val;
     imx500_res_read(IMX500_COMMAND_AFTER_DATA_INJECTION, &val, 10);

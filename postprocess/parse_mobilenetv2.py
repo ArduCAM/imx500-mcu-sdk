@@ -77,7 +77,7 @@ class ParserMobilenetv2:
         for i, cls_id in enumerate(top_indices):
             score = output_scores[cls_id]
             label = self.labels[cls_id] if cls_id < len(self.labels) else f"Class {cls_id}"
-            line = f"{label}: {score:.1f}%"
+            line = f"{label}: {score:.1f}"
             text_lines.append(line)
             # logger.debug(f"[TOP{i+1}] {line}")
 
