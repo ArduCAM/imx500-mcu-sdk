@@ -24,7 +24,8 @@ typedef enum {
 static const uint32_t IMX500_MAX_BUFFER = (1u << 20);
 static const uint32_t MAX_SPI_PACKET_LEN = 4096;
 static const uint32_t SPI_BRIDGE_BLOCK_LEN = 256;
-static const uint32_t SPI_BRIDGE_BLOCK_GAP_US = 2;
+static const uint32_t SPI_BRIDGE_BLOCK_GAP_US = 100;
+static const uint32_t SPI_FW_BRIDGE_BLOCK_GAP_US = 1000;
 static const uint32_t SPI_FLASH_POLL_INTERVAL_MS = 50;
 static const uint32_t SPI_FLASH_WAIT_IDLE_TIMEOUT_MS = 5000;
 static const uint32_t SPI_FLASH_TRANSFER_BASE_TIMEOUT_MS = 10000;
@@ -217,6 +218,27 @@ static int sdk_spi_write_once(const uint8_t *buf, uint32_t len) {
         return -1;
     }
     return ret;
+}
+
+static int sdk_spi_write_bridge_paced(const uint8_t *buf, uint32_t len, uint32_t gap_us) {
+    if (!buf || len == 0) return -1;
+    if (!g_spi_driver.write) return -1;
+    uint32_t sent = 0;
+    while (sent < len) {
+        uint32_t chunk = len - sent;
+        if (chunk > SPI_BRIDGE_BLOCK_LEN) {
+            chunk = SPI_BRIDGE_BLOCK_LEN;
+        }
+        int ret = g_spi_driver.write((uint8_t *)(buf + sent), chunk);
+        if (ret < 0 || (uint32_t)ret != chunk) {
+            return -1;
+        }
+        sent += chunk;
+        if (sent < len && gap_us > 0 && g_i2c_driver.slp_us) {
+            g_i2c_driver.slp_us(gap_us);
+        }
+    }
+    return (int)sent;
 }
 
 
@@ -1657,7 +1679,9 @@ static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
     uint32_t step = 0;
     uint32_t total = all_division_num;
     for (uint32_t i = 0; i < div_num; ++i) {
-        if (sdk_spi_write(data + (i * IMX500_MAX_BUFFER), IMX500_MAX_BUFFER) < 0) {
+        if (sdk_spi_write_bridge_paced(data + (i * IMX500_MAX_BUFFER),
+                                       IMX500_MAX_BUFFER,
+                                       SPI_FW_BRIDGE_BLOCK_GAP_US) < 0) {
             printf("spi write failed on firmware chunk %u/%u\n", (unsigned)(i + 1), (unsigned)div_num);
             return -1;
         }
@@ -1682,7 +1706,10 @@ static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
             waited_ms += download_sts_poll_interval_ms;
         }
     }
-    if (remain_data_len > 0 && sdk_spi_write(div_data_remain, remain_data_len) < 0) {
+    if (remain_data_len > 0 &&
+        sdk_spi_write_bridge_paced(div_data_remain,
+                                   remain_data_len,
+                                   SPI_FW_BRIDGE_BLOCK_GAP_US) < 0) {
         printf("spi write failed on firmware tail, len=%u\n", (unsigned)remain_data_len);
         return -1;
     }
@@ -1694,7 +1721,7 @@ static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
         uint8_t pad[SPI_BRIDGE_BLOCK_LEN] = {0};
         uint32_t pad_len = SPI_BRIDGE_BLOCK_LEN - tail;
         printf("fw tail=%u, pad=%u for SPI bridge flush\n", (unsigned)tail, (unsigned)pad_len);
-        if (sdk_spi_write(pad, pad_len) < 0) {
+        if (sdk_spi_write_bridge_paced(pad, pad_len, SPI_FW_BRIDGE_BLOCK_GAP_US) < 0) {
             printf("spi write failed on firmware flush padding, len=%u\n", (unsigned)pad_len);
             return -1;
         }
