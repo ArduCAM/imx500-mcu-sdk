@@ -25,6 +25,22 @@ static const uint32_t IMX500_MAX_BUFFER = (1u << 20);
 static const uint32_t MAX_SPI_PACKET_LEN = 4096;
 static const uint32_t SPI_BRIDGE_BLOCK_LEN = 256;
 static const uint32_t SPI_BRIDGE_BLOCK_GAP_US = 2;
+static const uint32_t SPI_FLASH_POLL_INTERVAL_MS = 50;
+static const uint32_t SPI_FLASH_WAIT_IDLE_TIMEOUT_MS = 5000;
+static const uint32_t SPI_FLASH_TRANSFER_BASE_TIMEOUT_MS = 10000;
+static const uint32_t SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS = 4;
+static const uint32_t SPI_FLASH_FINALIZE_TIMEOUT_MS = 30000;
+static const uint32_t SPI_BLOB_HEADER_MAGIC = 0x424C4253u;
+static const uint32_t SPI_FLASH_CHUNK_LEN = 4096;
+static const uint32_t SPI_FLASH_HEADER_GAP_MS = 10;
+static const uint32_t SPI_FLASH_CHUNK_GAP_MS = 20;
+
+typedef struct {
+    uint32_t magic;
+    uint32_t payload_size;
+    uint32_t payload_crc32;
+    uint32_t reserved;
+} SpiBlobWireHeader;
 
 typedef void (*logger_cb_t)(const char *msg);
 
@@ -92,6 +108,86 @@ static inline int calc_align(int num, int align) {
   return ((num + align - 1) / align) * align;
 }
 
+static uint32_t crc32_update_local(uint32_t crc, const uint8_t *data, uint32_t size) {
+    for (uint32_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; ++b) {
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+    }
+    return crc;
+}
+
+static uint32_t calc_crc32_local(const uint8_t *data, uint32_t size) {
+    return ~crc32_update_local(0xFFFFFFFFu, data, size);
+}
+
+static std::vector<uint8_t> byteswap_u32_words(const uint8_t *src, uint32_t size) {
+    std::vector<uint8_t> out;
+    if (!src || size == 0u) {
+        return out;
+    }
+    out.assign(src, src + size);
+    for (uint32_t i = 0; i + 4u <= size; i += 4u) {
+        out[i + 0] = src[i + 3];
+        out[i + 1] = src[i + 2];
+        out[i + 2] = src[i + 1];
+        out[i + 3] = src[i + 0];
+    }
+    return out;
+}
+
+static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uint32_t size) {
+    std::vector<uint8_t> out;
+    if (!src || size == 0) {
+        return out;
+    }
+    out.assign(src, src + size);
+    for (uint32_t i = 0; i + 4u <= size; i += 4u) {
+        out[i + 0] = src[i + 3];
+        out[i + 1] = src[i + 2];
+        out[i + 2] = src[i + 1];
+        out[i + 3] = src[i + 0];
+    }
+    return out;
+}
+
+static bool sdk_i2c_write_reg(uint16_t addr, uint32_t val) {
+    if (!g_i2c_driver.write) {
+        return false;
+    }
+    return g_i2c_driver.write(addr, val, 4) >= 0;
+}
+
+static bool sdk_i2c_read_reg(uint16_t addr, uint32_t *val) {
+    if (!val || !g_i2c_driver.read) {
+        return false;
+    }
+    return g_i2c_driver.read(addr, val, 4) >= 0;
+}
+
+static bool wait_for_boot_status(uint32_t min_status, uint32_t timeout_ms,
+                                 const char *label) {
+    uint32_t boot_status = 0;
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        if (!sdk_i2c_read_reg(BOOT_STATUS_REG, &boot_status)) {
+            printf("%s read boot status failed\n", label);
+            return false;
+        }
+        if (boot_status >= min_status) {
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    printf("%s wait boot status >= %u timeout, current=%u\n",
+           label, (unsigned)min_status, (unsigned)boot_status);
+    return false;
+}
+
 static int sdk_spi_write(const uint8_t *buf, uint32_t len) {
     if (!buf || len == 0) return -1;
     if (!g_spi_driver.write) return -1;
@@ -111,6 +207,16 @@ static int sdk_spi_write(const uint8_t *buf, uint32_t len) {
         }
     }
     return (int)sent;
+}
+
+static int sdk_spi_write_once(const uint8_t *buf, uint32_t len) {
+    if (!buf || len == 0) return -1;
+    if (!g_spi_driver.write) return -1;
+    int ret = g_spi_driver.write((uint8_t *)buf, len);
+    if (ret < 0 || (uint32_t)ret != len) {
+        return -1;
+    }
+    return ret;
 }
 
 
@@ -1289,6 +1395,254 @@ bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m) {
     return true;
 }
 
+bool get_spi_flash_status(spi_flash_status_t *status) {
+    if (!status) {
+        return false;
+    }
+    memset(status, 0, sizeof(*status));
+    return sdk_i2c_read_reg(SPI_FLASH_OP_STATUS_REG, &status->status) &&
+           sdk_i2c_read_reg(SPI_FLASH_OP_RESULT_REG, &status->result) &&
+           sdk_i2c_read_reg(SPI_FLASH_BYTES_DONE_REG, &status->bytes_done) &&
+           sdk_i2c_read_reg(SPI_FLASH_BYTES_TOTAL_REG, &status->bytes_total);
+}
+
+static bool wait_for_spi_data_forward_mode(spi_data_forwarding_mode_t mode,
+                                           uint32_t timeout_ms) {
+    uint32_t current_mode = 0;
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        if (!sdk_i2c_read_reg(METADATA_SPI_FORWARD_MODE_REG, &current_mode)) {
+            return false;
+        }
+        if (current_mode == (uint32_t)mode) {
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    return false;
+}
+
+static bool wait_for_spi_flash_status(uint32_t expected_status,
+                                      uint32_t timeout_ms,
+                                      spi_flash_status_t *status_out) {
+    spi_flash_status_t status = {};
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        if (!get_spi_flash_status(&status)) {
+            return false;
+        }
+        if (status.status == expected_status) {
+            if (status_out) {
+                *status_out = status;
+            }
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    return false;
+}
+
+static bool wait_for_spi_flash_progress(uint32_t min_bytes_done,
+                                        uint32_t timeout_ms,
+                                        spi_flash_status_t *status_out) {
+    spi_flash_status_t status = {};
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        if (!get_spi_flash_status(&status)) {
+            return false;
+        }
+        if (status.status == SPI_FLASH_OP_FAILED || status.status == SPI_FLASH_OP_SUCCESS) {
+            if (status_out) {
+                *status_out = status;
+            }
+            return status.bytes_done >= min_bytes_done;
+        }
+        if (status.bytes_done >= min_bytes_done) {
+            if (status_out) {
+                *status_out = status;
+            }
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    return false;
+}
+
+static bool run_spi_flash_transfer(spi_data_forwarding_mode_t mode,
+                                   const uint8_t *payload,
+                                   uint32_t payload_size,
+                                   const char *label) {
+    if (!payload || payload_size == 0) {
+        printf("%s invalid payload\n", label);
+        return false;
+    }
+    if (!g_spi_driver.write || !g_i2c_driver.read || !g_i2c_driver.write) {
+        printf("%s missing spi/i2c driver\n", label);
+        return false;
+    }
+    if (!wait_for_boot_status(1, 10000, label)) {
+        return false;
+    }
+
+    spi_flash_status_t flash_status = {};
+    if (!get_spi_flash_status(&flash_status)) {
+        printf("%s read initial flash status failed\n", label);
+        return false;
+    }
+    if (flash_status.status != SPI_FLASH_OP_IDLE &&
+        flash_status.status != SPI_FLASH_OP_SUCCESS &&
+        flash_status.status != SPI_FLASH_OP_FAILED) {
+        printf("%s module flash op busy: status=%u result=%u\n",
+               label, (unsigned)flash_status.status, (unsigned)flash_status.result);
+        return false;
+    }
+
+    if (!switch_spi_data_forward_mode(mode)) {
+        printf("%s switch spi forwarding mode failed\n", label);
+        return false;
+    }
+    if (!wait_for_spi_flash_status(SPI_FLASH_OP_WAIT_HEADER,
+                                   SPI_FLASH_WAIT_IDLE_TIMEOUT_MS,
+                                   &flash_status)) {
+        printf("%s wait flash receiver ready timeout, status=%u result=%u\n",
+               label, (unsigned)flash_status.status, (unsigned)flash_status.result);
+        return false;
+    }
+
+    SpiBlobWireHeader header = {};
+    header.magic = SPI_BLOB_HEADER_MAGIC;
+    header.payload_size = payload_size;
+    header.payload_crc32 = calc_crc32_local(payload, payload_size);
+    header.reserved = 0;
+
+    if (sdk_spi_write_once(reinterpret_cast<const uint8_t *>(&header), sizeof(header)) < 0) {
+        printf("%s send header failed\n", label);
+        return false;
+    }
+    if (g_i2c_driver.slp_ms) {
+        g_i2c_driver.slp_ms(SPI_FLASH_HEADER_GAP_MS);
+    }
+
+    uint32_t sent = 0;
+    while (sent < payload_size) {
+        uint32_t chunk = payload_size - sent;
+        if (chunk > SPI_FLASH_CHUNK_LEN) {
+            chunk = SPI_FLASH_CHUNK_LEN;
+        }
+        if (sdk_spi_write_once(payload + sent, chunk) < 0) {
+            printf("%s send payload failed at offset=%u len=%u\n",
+                   label, (unsigned)sent, (unsigned)chunk);
+            return false;
+        }
+        sent += chunk;
+        printf("%s sent chunk: %u/%u\n",
+               label, (unsigned)sent, (unsigned)payload_size);
+
+        uint32_t chunk_timeout_ms =
+            SPI_FLASH_TRANSFER_BASE_TIMEOUT_MS +
+            ((chunk + 1023u) / 1024u) * SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS;
+        if (!wait_for_spi_flash_progress(sent, chunk_timeout_ms, &flash_status)) {
+            printf("%s wait progress timeout at %u/%u, status=%u result=%u done=%u total=%u\n",
+                   label,
+                   (unsigned)sent,
+                   (unsigned)payload_size,
+                   (unsigned)flash_status.status,
+                   (unsigned)flash_status.result,
+                   (unsigned)flash_status.bytes_done,
+                   (unsigned)flash_status.bytes_total);
+            return false;
+        }
+        printf("%s ack chunk: %u/%u status=%u result=%u\n",
+               label,
+               (unsigned)flash_status.bytes_done,
+               (unsigned)flash_status.bytes_total,
+               (unsigned)flash_status.status,
+               (unsigned)flash_status.result);
+        if (flash_status.status == SPI_FLASH_OP_FAILED) {
+            printf("%s failed: result=%u bytes=%u/%u\n",
+                   label,
+                   (unsigned)flash_status.result,
+                   (unsigned)flash_status.bytes_done,
+                   (unsigned)flash_status.bytes_total);
+            return false;
+        }
+        if (sent < payload_size && g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_CHUNK_GAP_MS);
+        }
+    }
+
+    uint32_t timeout_ms = SPI_FLASH_FINALIZE_TIMEOUT_MS;
+    uint32_t elapsed_ms = 0;
+    uint32_t last_bytes_done = 0xFFFFFFFFu;
+    while (elapsed_ms < timeout_ms) {
+        if (!get_spi_flash_status(&flash_status)) {
+            printf("%s read flash status failed\n", label);
+            return false;
+        }
+        if (flash_status.bytes_done != last_bytes_done) {
+            printf("%s device progress: %u/%u status=%u result=%u\n",
+                   label,
+                   (unsigned)flash_status.bytes_done,
+                   (unsigned)flash_status.bytes_total,
+                   (unsigned)flash_status.status,
+                   (unsigned)flash_status.result);
+            last_bytes_done = flash_status.bytes_done;
+        }
+        if (flash_status.status == SPI_FLASH_OP_SUCCESS) {
+            if (flash_status.result != SPI_FLASH_RESULT_OK) {
+                printf("%s success state with unexpected result=%u\n",
+                       label, (unsigned)flash_status.result);
+                return false;
+            }
+            if (!wait_for_spi_data_forward_mode(SPI_DATA_FORWARDING_NONE,
+                                                SPI_FLASH_WAIT_IDLE_TIMEOUT_MS)) {
+                printf("%s wait mode back to idle timeout\n", label);
+                return false;
+            }
+            return true;
+        }
+        if (flash_status.status == SPI_FLASH_OP_FAILED) {
+            printf("%s failed: result=%u bytes=%u/%u\n",
+                   label,
+                   (unsigned)flash_status.result,
+                   (unsigned)flash_status.bytes_done,
+                   (unsigned)flash_status.bytes_total);
+            return false;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+
+    printf("%s timeout waiting flash result after %u ms\n",
+           label, (unsigned)timeout_ms);
+    return false;
+}
+
+bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size) {
+    return run_spi_flash_transfer(SPI_SLAVE_WRITE_MODEL_TO_FLASH,
+                                  model,
+                                  model_size,
+                                  "[SPI FLASH MODEL]");
+}
+
+bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size) {
+    return run_spi_flash_transfer(SPI_SLAVE_WRITE_NN_INFO_TO_FLASH,
+                                  nn_info,
+                                  nn_info_size,
+                                  "[SPI FLASH NN_INFO]");
+}
+
 static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
     const uint32_t download_sts_poll_interval_ms = 10;
     const uint32_t download_sts_timeout_ms = 3000;
@@ -1353,6 +1707,10 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
     const uint32_t wait_short_ms = 100;
     const uint32_t wait_dd_reply_ms = 3000;
     uint32_t val = 0;
+    if (!fw || size == 0u) {
+        printf("load_imx500_fw invalid input\n");
+        return -1;
+    }
     if (imx500_res_read(IMX500_COMMAND_PREPARE_DOWNLOAD_FIRMWARE, &val, 500) != IMX500_CMD_OK) {
         printf("prepare download firmware failed\n");
         return -1;
@@ -1396,7 +1754,13 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
 
-    if (rp2350_send_fw_to_imx500_sspi(fw, size) != 0) {
+    std::vector<uint8_t> swapped_fw = byteswap_u32_words(fw, size);
+    if (swapped_fw.size() != size) {
+        printf("prepare byteswapped firmware failed size=%u\n", (unsigned)size);
+        return -1;
+    }
+
+    if (rp2350_send_fw_to_imx500_sspi(swapped_fw.data(), size) != 0) {
         printf("send firmware by SSPI failed\n");
         return -1;
     }

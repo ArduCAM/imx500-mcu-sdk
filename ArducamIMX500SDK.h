@@ -126,6 +126,9 @@ typedef enum {
 	SPI_SLAVE_FROM_IMX500_SSPI,
 	SPI_MASTER_FROM_IMX500_SSPI,
 	SPI_SLAVE_TO_IMX500_SSPI,
+	SPI_SLAVE_WRITE_MODEL_TO_FLASH,
+	SPI_SLAVE_WRITE_NN_INFO_TO_FLASH,
+	SPI_LOAD_NN_INFO_TO_MEMORY,
 	SPI_FORWORDING_MODE_SWITCHING
 } spi_data_forwarding_mode_t;
 
@@ -154,6 +157,34 @@ typedef enum {
 	MODULE_SPI_LOAD_NN_BOOT,
 } module_boot_mode_t;
 
+typedef enum {
+	SPI_FLASH_OP_IDLE = 0,
+	SPI_FLASH_OP_WAIT_HEADER = 1,
+	SPI_FLASH_OP_RECEIVING = 2,
+	SPI_FLASH_OP_PARSING = 3,
+	SPI_FLASH_OP_SUCCESS = 4,
+	SPI_FLASH_OP_FAILED = 5,
+} spi_flash_op_status_t;
+
+typedef enum {
+	SPI_FLASH_RESULT_NONE = 0,
+	SPI_FLASH_RESULT_OK = 1,
+	SPI_FLASH_RESULT_TIMEOUT = 2,
+	SPI_FLASH_RESULT_BAD_HEADER = 3,
+	SPI_FLASH_RESULT_BAD_SIZE = 4,
+	SPI_FLASH_RESULT_WRITE_FAIL = 5,
+	SPI_FLASH_RESULT_CRC_MISMATCH = 6,
+	SPI_FLASH_RESULT_PARSE_FAIL = 7,
+	SPI_FLASH_RESULT_FLASH_BLOB_MISSING = 8,
+} spi_flash_op_result_t;
+
+typedef struct {
+	uint32_t status;
+	uint32_t result;
+	uint32_t bytes_done;
+	uint32_t bytes_total;
+} spi_flash_status_t;
+
 #ifdef __cplusplus
 #include "ApParams.h"
 extern "C" {
@@ -164,6 +195,9 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
 uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
 uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
 bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m);
+bool get_spi_flash_status(spi_flash_status_t *status);
+bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size);
+bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size);
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type);
 void stream_on(void);
 bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format);

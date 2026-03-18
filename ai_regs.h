@@ -12,6 +12,10 @@
 #define METADATA_SPI_FORWARD_MODE_REG (AI_REG_BASE | 0x0007)
 #define BOOT_STATUS_REG               (AI_REG_BASE | 0x0009)
 #define LOAD_MODEL_FROM_FLASH         (AI_REG_BASE | 0x0010)
+#define SPI_FLASH_OP_STATUS_REG       (AI_REG_BASE | 0x0011)
+#define SPI_FLASH_OP_RESULT_REG       (AI_REG_BASE | 0x0012)
+#define SPI_FLASH_BYTES_DONE_REG      (AI_REG_BASE | 0x0013)
+#define SPI_FLASH_BYTES_TOTAL_REG     (AI_REG_BASE | 0x0014)
 
 #define IMX500_COMMAND_GET_ES_VER                                                       (IMX500_COMMAND_BASE | 1)
 #define IMX500_COMMAND_GET_LOADER_FW_VER                                                (IMX500_COMMAND_BASE | 2)

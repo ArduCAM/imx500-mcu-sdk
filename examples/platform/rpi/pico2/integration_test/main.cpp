@@ -22,6 +22,13 @@
 #define BENCHMARK_FRAME_COUNT_PRE_INJECT   30
 #define BENCHMARK_FRAME_COUNT_POST_INJECT  30
 
+#define INTEGRATION_TEST_BOOT_MODE_DIRECT 0
+#define INTEGRATION_TEST_BOOT_MODE_FLASH  1
+
+#ifndef INTEGRATION_TEST_BOOT_MODE
+#define INTEGRATION_TEST_BOOT_MODE INTEGRATION_TEST_BOOT_MODE_FLASH
+#endif
+
 uint8_t frame_buf[MAX_FRAME_SIZE];
 
 typedef struct {
@@ -193,6 +200,68 @@ FrameBenchmarkResult benchmark_read_frame(
     return result;
 }
 
+static void dump_spi_flash_status(const char *label) {
+    spi_flash_status_t status = {0};
+    if (!get_spi_flash_status(&status)) {
+        printf("%s failed to read spi flash status\n", label);
+        return;
+    }
+    printf("%s status=%lu result=%lu bytes=%lu/%lu\n",
+           label,
+           (unsigned long)status.status,
+           (unsigned long)status.result,
+           (unsigned long)status.bytes_done,
+           (unsigned long)status.bytes_total);
+}
+
+static bool program_flash_assets(void) {
+    printf("Programming model to module flash...\n");
+    if (!spi_slave_write_model_to_flash(NN_FW_DATA, NN_FW_SIZE)) {
+        dump_spi_flash_status("[MODEL FLASH]");
+        return false;
+    }
+
+    printf("Programming network_info to module flash...\n");
+    if (!spi_slave_write_nn_info_to_flash(NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE)) {
+        dump_spi_flash_status("[NN INFO FLASH]");
+        return false;
+    }
+
+    dump_spi_flash_status("[FLASH PROGRAM DONE]");
+    return true;
+}
+
+static const char* get_boot_mode_name(void) {
+#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
+    return "DIRECT_BOOT";
+#elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
+    return "FLASH_BOOT";
+#else
+    return "UNKNOWN_BOOT_MODE";
+#endif
+}
+
+static bool open_with_selected_boot_mode(void) {
+#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
+    printf("Boot mode: %s\n", get_boot_mode_name());
+    return open(NN_FW_DATA,
+                NN_FW_SIZE,
+                NN_NETOWRK_INFO_DATA,
+                NN_NETOWRK_INFO_SIZE,
+                MIPI_DATA_IMAGE,
+                SPI_METADATA_OUTPUT_TENSOR);
+#elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
+    printf("Boot mode: %s\n", get_boot_mode_name());
+    if (!program_flash_assets()) {
+        printf("flash programming failed\n");
+        return false;
+    }
+    return open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
+#else
+#error "Unsupported INTEGRATION_TEST_BOOT_MODE"
+#endif
+}
+
 int main() {
     stdio_init_all();
 
@@ -217,8 +286,7 @@ int main() {
     LOG_INFO("module pid: 0x%x\n", module_pid);
 
     uint64_t open_start_us = time_us_64();
-    bool open_ret = open(NN_FW_DATA, NN_FW_SIZE, NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
-    // bool open_ret = open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
+    bool open_ret = open_with_selected_boot_mode();
     uint64_t open_end_us = time_us_64();
     if (!open_ret) {
         printf("open() failed\n");

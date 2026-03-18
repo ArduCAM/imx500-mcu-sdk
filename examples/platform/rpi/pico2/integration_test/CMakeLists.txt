@@ -36,6 +36,9 @@ project(imx500_cmd C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+set(INTEGRATION_TEST_BOOT_MODE "FLASH" CACHE STRING "integration_test boot mode: FLASH or DIRECT")
+set_property(CACHE INTEGRATION_TEST_BOOT_MODE PROPERTY STRINGS FLASH DIRECT)
+
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(imx500_cmd
@@ -52,6 +55,18 @@ target_include_directories(imx500_cmd PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
+
+if(INTEGRATION_TEST_BOOT_MODE STREQUAL "DIRECT")
+    target_compile_definitions(imx500_cmd PRIVATE
+        INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_DIRECT
+    )
+elseif(INTEGRATION_TEST_BOOT_MODE STREQUAL "FLASH")
+    target_compile_definitions(imx500_cmd PRIVATE
+        INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_FLASH
+    )
+else()
+    message(FATAL_ERROR "Unsupported INTEGRATION_TEST_BOOT_MODE=${INTEGRATION_TEST_BOOT_MODE}, expected FLASH or DIRECT")
+endif()
 
 # Pull in basic dependencies
 target_link_libraries(imx500_cmd pico_stdlib hardware_spi hardware_i2c hardware_dma)
