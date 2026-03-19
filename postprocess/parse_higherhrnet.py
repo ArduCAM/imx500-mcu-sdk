@@ -108,7 +108,7 @@ def parse_higherhrnet(network, img, score_thr=0.5, is_show_input_tensor=False, i
         img = draw_keypoints_and_boxes(img, last_keypoints, last_scores, last_boxes)
 
     if is_show_img:
-        cv2.imshow("YUV_DNN", img)
+        cv2.imshow("DNN", img)
         cv2.waitKey(1)
 
     return img, None

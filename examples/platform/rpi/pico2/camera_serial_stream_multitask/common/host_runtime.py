@@ -50,7 +50,6 @@ def add_common_arguments(
     parser.add_argument("--max-frames", type=int, default=0, help="Stop after N decoded JPEG frames (0 = no limit)")
     parser.add_argument("--max-payload", type=int, default=default_max_payload, help="Reject packet if payload exceeds this")
     parser.add_argument("--show-img", action="store_true", help="Show annotated frames in an OpenCV window while receiving")
-    parser.add_argument("--show-input-tensor", action="store_true", help="Show the model input tensor image in an OpenCV window when supported")
     parser.add_argument("--show-fps", action="store_true", help="Print postprocess FPS in examples that support it")
     return parser
 
@@ -141,7 +140,7 @@ def run_serial_receiver_with_args(config: ExampleConfig, args: argparse.Namespac
         return 0
     finally:
         ser.close()
-        if args.show_img or args.show_input_tensor:
+        if args.show_img:
             cv2.destroyAllWindows()
 
 

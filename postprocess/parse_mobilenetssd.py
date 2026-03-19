@@ -87,17 +87,7 @@ class ParserMobilenetSsd:
         return mask_img
 
     def __call__(self, network, img, score_thr=0.3, is_show_input_tensor=False, is_show_img=False, is_print_fps=False, nn_input_map=(0.0, 0.0, 1.0, 1.0)):
-        dnn_input_img = network[0].input_tensors[0].data.copy()
-        if dnn_input_img is None:
-            raise Exception("Input tensor is None")
 
-        if dnn_input_img.shape[0] == 3:
-            w, h, c = dnn_input_img.shape[1], dnn_input_img.shape[2], dnn_input_img.shape[0]
-            dnn_input_img = dnn_input_img.transpose(2, 0, 1).reshape(c, h, w).transpose(1, 2, 0)
-        else:
-            w, h, c = dnn_input_img.shape[1], dnn_input_img.shape[0], dnn_input_img.shape[2]
-
-        dnn_input_img = cv2.cvtColor(dnn_input_img, cv2.COLOR_RGB2BGR)
         dnn_output_tensor = network[0].output_tensors[0].data
         if dnn_output_tensor is None:
             logger.warning("Output tensor is None")
@@ -108,6 +98,8 @@ class ParserMobilenetSsd:
         cls_ids = np.array(network[0].output_tensors[2].data)
         valid_data_items_num = np.array(network[0].output_tensors[3].data)
         valid_data_items_num = valid_data_items_num.astype(np.int32)[0]
+
+        h, w, c = img.shape
 
         boxes[:, 1] *= w
         boxes[:, 0] *= h
@@ -123,37 +115,11 @@ class ParserMobilenetSsd:
         confs = confs[confs_mask]
         cls_ids = cls_ids[confs_mask]
 
-        img_h, img_w = img.shape[:2]
-        xmin, ymin, xmax, ymax = nn_input_map
-        xmin_abs = int(xmin * img_w)
-        ymin_abs = int(ymin * img_h)
-        xmax_abs = int(xmax * img_w)
-        ymax_abs = int(ymax * img_h)
-
-        crop_w = xmax_abs - xmin_abs
-        crop_h = ymax_abs - ymin_abs
-
-        dnn_input_h, dnn_input_w = dnn_input_img.shape[:2]
-        x_scale = crop_w / dnn_input_w
-        y_scale = crop_h / dnn_input_h
-
-        boxes_yuv = boxes.astype(np.float32)
-        boxes_yuv[:, 0] = boxes_yuv[:, 0] * x_scale + xmin_abs
-        boxes_yuv[:, 2] = boxes_yuv[:, 2] * x_scale + xmin_abs
-        boxes_yuv[:, 1] = boxes_yuv[:, 1] * y_scale + ymin_abs
-        boxes_yuv[:, 3] = boxes_yuv[:, 3] * y_scale + ymin_abs
-        boxes_yuv = boxes_yuv.astype(np.int32)
-
         if len(confs) > 0:
-            dnn_input_img = self.draw_detections(image=dnn_input_img, boxes=boxes, confs=confs, class_ids=cls_ids)
-            img = self.draw_detections(image=img, boxes=boxes_yuv, confs=confs, class_ids=cls_ids)
-
-        if is_show_input_tensor:
-            cv2.imshow("DNN", dnn_input_img)
-            cv2.waitKey(1)
+            img = self.draw_detections(image=img, boxes=boxes, confs=confs, class_ids=cls_ids)
 
         if is_show_img:
-            cv2.imshow("YUV_DNN", img)
+            cv2.imshow("IMG", img)
             cv2.waitKey(1)
 
-        return img, dnn_input_img
+        return img, None

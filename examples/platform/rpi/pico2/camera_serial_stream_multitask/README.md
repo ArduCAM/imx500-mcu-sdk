@@ -58,7 +58,7 @@ python host_receiver.py --port COM7 --task object_detection
 Run pose estimation with realtime preview:
 
 ```bash
-python host_receiver.py --port COM7 --task pose_estimation --show-img --show-input-tensor --show-fps
+python host_receiver.py --port COM7 --task pose_estimation --show-img --show-fps
 ```
 
 Run segmentation:
@@ -75,6 +75,8 @@ Useful options:
 - `--save-metadata-json`: save parsed metadata summaries as `.json`
 - `--save-tensors`: save parsed tensor arrays as `.npz`
 - `--save-original`: save the decoded JPEG before annotation
+- `--show-img`: show the annotated OpenCV preview window for any supported task
+- `--show-fps`: print host-side render/postprocess FPS for any supported task
 
 ## 4. Notes
 

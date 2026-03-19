@@ -31,12 +31,23 @@ def adapt_metadata_to_networks(parsed_frame):
     return adapt_spi_jpeg_metadata_to_networks(parsed_frame)
 
 
-def annotate_classification(parsed_frame, _args):
-    return CLASSIFICATION_RENDERER.render(parsed_frame.image_bgr, adapt_metadata_to_networks(parsed_frame))
+def annotate_classification(parsed_frame, args):
+    return CLASSIFICATION_RENDERER.render(
+        parsed_frame.image_bgr,
+        adapt_metadata_to_networks(parsed_frame),
+        show_img=args.show_img,
+        show_fps=args.show_fps,
+    )
 
 
-def annotate_object_detection(parsed_frame, _args):
-    return DETECTION_RENDERER.render(parsed_frame.image_bgr, adapt_metadata_to_networks(parsed_frame), score_thr=0.3)
+def annotate_object_detection(parsed_frame, args):
+    return DETECTION_RENDERER.render(
+        parsed_frame.image_bgr,
+        adapt_metadata_to_networks(parsed_frame),
+        score_thr=0.3,
+        show_img=args.show_img,
+        show_fps=args.show_fps,
+    )
 
 
 def annotate_pose_estimation(parsed_frame, args):
@@ -44,14 +55,19 @@ def annotate_pose_estimation(parsed_frame, args):
         parsed_frame.image_bgr,
         adapt_metadata_to_networks(parsed_frame),
         score_thr=0.2,
-        is_show_img=args.show_img,
-        is_show_input_tensor=args.show_input_tensor,
-        is_print_fps=args.show_fps,
+        show_img=args.show_img,
+        show_fps=args.show_fps,
     )
 
 
-def annotate_segmentation(parsed_frame, _args):
-    return SEGMENTATION_RENDERER.render(parsed_frame.image_bgr, adapt_metadata_to_networks(parsed_frame), alpha=0.45)
+def annotate_segmentation(parsed_frame, args):
+    return SEGMENTATION_RENDERER.render(
+        parsed_frame.image_bgr,
+        adapt_metadata_to_networks(parsed_frame),
+        alpha=0.45,
+        show_img=args.show_img,
+        show_fps=args.show_fps,
+    )
 
 
 TASK_CONFIGS = {
