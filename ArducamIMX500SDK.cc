@@ -35,6 +35,9 @@ static const uint32_t SPI_BLOB_HEADER_MAGIC = 0x424C4253u;
 static const uint32_t SPI_FLASH_CHUNK_LEN = 4096;
 static const uint32_t SPI_FLASH_HEADER_GAP_MS = 10;
 static const uint32_t SPI_FLASH_CHUNK_GAP_MS = 20;
+static const uint32_t DWP_AP_VC_HSIZE = 0x0FD8u;
+static const uint32_t DWP_AP_VC_VSIZE = 0x0BE0u;
+static const uint32_t IMX500_AFFINE_WAIT_MS = 100;
 
 typedef struct {
     uint32_t magic;
@@ -1328,6 +1331,36 @@ static imx500_err_t imx500_res_write(uint32_t cmd_id,
     return IMX500_CMD_OK;
 }
 
+static int imx500_set_affine(uint32_t x0,
+                             uint32_t y0,
+                             uint32_t x1x0,
+                             uint32_t y1y0,
+                             uint32_t x2x0,
+                             uint32_t y2y0) {
+    if (imx500_res_write(IMX500_COMMAND_AFFINE_1, &x0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_AFFINE_2, &y0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_AFFINE_3, &x1x0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_AFFINE_4, &y1y0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_AFFINE_5, &x2x0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
+        imx500_res_write(IMX500_COMMAND_AFFINE_6, &y2y0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK) {
+        printf("set affine parameters failed\n");
+        return -1;
+    }
+    return 0;
+}
+
+static int imx500_set_crop_rect_xyxy(uint32_t xmin_abs,
+                                     uint32_t ymin_abs,
+                                     uint32_t xmax_abs,
+                                     uint32_t ymax_abs) {
+    return imx500_set_affine(xmin_abs,
+                             ymin_abs,
+                             xmax_abs - xmin_abs,
+                             0,
+                             0,
+                             ymax_abs - ymin_abs);
+}
+
 void imx500_dump_basic_info()
 {
     uint32_t val = 0;
@@ -1842,6 +1875,40 @@ void stream_on() {
     uint32_t val = 0;
     imx500_res_read(IMX500_COMMAND_STREAM_ON, &val, 10);
     g_i2c_driver.slp_ms(10);
+}
+
+int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax) {
+    if (xmin > DWP_AP_VC_HSIZE) {
+        printf("xmin should be in range [0, %u], but got %u\n", DWP_AP_VC_HSIZE, xmin);
+        return -1;
+    }
+
+    if (xmax > DWP_AP_VC_HSIZE) {
+        printf("xmax should be in range [0, %u], but got %u\n", DWP_AP_VC_HSIZE, xmax);
+        return -1;
+    }
+
+    if (ymin > DWP_AP_VC_VSIZE) {
+        printf("ymin should be in range [0, %u], but got %u\n", DWP_AP_VC_VSIZE, ymin);
+        return -1;
+    }
+
+    if (ymax > DWP_AP_VC_VSIZE) {
+        printf("ymax should be in range [0, %u], but got %u\n", DWP_AP_VC_VSIZE, ymax);
+        return -1;
+    }
+
+    if (xmin > xmax) {
+        printf("xmin should be less than or equal to xmax, but got %u > %u\n", xmin, xmax);
+        return -1;
+    }
+
+    if (ymin > ymax) {
+        printf("ymin should be less than or equal to ymax, but got %u > %u\n", ymin, ymax);
+        return -1;
+    }
+
+    return imx500_set_crop_rect_xyxy(xmin, ymin, xmax, ymax);
 }
 
 int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_size) {
