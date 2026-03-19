@@ -198,6 +198,7 @@ bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m);
 bool get_spi_flash_status(spi_flash_status_t *status);
 bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size);
 bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size);
+bool spi_load_nn_info_to_memory(const uint8_t *nn_info, uint32_t nn_info_size);
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type);
 void stream_on(void);
 bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format);

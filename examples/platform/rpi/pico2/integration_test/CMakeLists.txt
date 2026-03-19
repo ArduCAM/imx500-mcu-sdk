@@ -36,7 +36,7 @@ project(imx500_cmd C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-set(INTEGRATION_TEST_BOOT_MODE "FLASH" CACHE STRING "integration_test boot mode: FLASH or DIRECT")
+set(INTEGRATION_TEST_BOOT_MODE "DIRECT" CACHE STRING "integration_test boot mode: FLASH or DIRECT")
 set_property(CACHE INTEGRATION_TEST_BOOT_MODE PROPERTY STRINGS FLASH DIRECT)
 
 # Add executable. Default name is the project name, version 0.1

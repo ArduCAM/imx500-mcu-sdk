@@ -1499,10 +1499,11 @@ static bool wait_for_spi_flash_progress(uint32_t min_bytes_done,
     return false;
 }
 
-static bool run_spi_flash_transfer(spi_data_forwarding_mode_t mode,
-                                   const uint8_t *payload,
-                                   uint32_t payload_size,
-                                   const char *label) {
+static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
+                                  const uint8_t *payload,
+                                  uint32_t payload_size,
+                                  bool byteswap_u32_payload,
+                                  const char *label) {
     if (!payload || payload_size == 0) {
         printf("%s invalid payload\n", label);
         return false;
@@ -1513,6 +1514,18 @@ static bool run_spi_flash_transfer(spi_data_forwarding_mode_t mode,
     }
     if (!wait_for_boot_status(1, 10000, label)) {
         return false;
+    }
+
+    const uint8_t *transfer_payload = payload;
+    std::vector<uint8_t> prepared_payload;
+    if (byteswap_u32_payload) {
+        prepared_payload = byteswap_u32_words(payload, payload_size);
+        if (prepared_payload.size() != payload_size) {
+            printf("%s byteswap payload failed size=%u\n",
+                   label, (unsigned)payload_size);
+            return false;
+        }
+        transfer_payload = prepared_payload.data();
     }
 
     spi_flash_status_t flash_status = {};
@@ -1543,7 +1556,7 @@ static bool run_spi_flash_transfer(spi_data_forwarding_mode_t mode,
     SpiBlobWireHeader header = {};
     header.magic = SPI_BLOB_HEADER_MAGIC;
     header.payload_size = payload_size;
-    header.payload_crc32 = calc_crc32_local(payload, payload_size);
+    header.payload_crc32 = calc_crc32_local(transfer_payload, payload_size);
     header.reserved = 0;
 
     if (sdk_spi_write_once(reinterpret_cast<const uint8_t *>(&header), sizeof(header)) < 0) {
@@ -1560,7 +1573,7 @@ static bool run_spi_flash_transfer(spi_data_forwarding_mode_t mode,
         if (chunk > SPI_FLASH_CHUNK_LEN) {
             chunk = SPI_FLASH_CHUNK_LEN;
         }
-        if (sdk_spi_write_once(payload + sent, chunk) < 0) {
+        if (sdk_spi_write_once(transfer_payload + sent, chunk) < 0) {
             printf("%s send payload failed at offset=%u len=%u\n",
                    label, (unsigned)sent, (unsigned)chunk);
             return false;
@@ -1652,17 +1665,27 @@ static bool run_spi_flash_transfer(spi_data_forwarding_mode_t mode,
 }
 
 bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size) {
-    return run_spi_flash_transfer(SPI_SLAVE_WRITE_MODEL_TO_FLASH,
-                                  model,
-                                  model_size,
-                                  "[SPI FLASH MODEL]");
+    return run_spi_blob_transfer(SPI_SLAVE_WRITE_MODEL_TO_FLASH,
+                                 model,
+                                 model_size,
+                                 false,
+                                 "[SPI FLASH MODEL]");
 }
 
 bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size) {
-    return run_spi_flash_transfer(SPI_SLAVE_WRITE_NN_INFO_TO_FLASH,
-                                  nn_info,
-                                  nn_info_size,
-                                  "[SPI FLASH NN_INFO]");
+    return run_spi_blob_transfer(SPI_SLAVE_WRITE_NN_INFO_TO_FLASH,
+                                 nn_info,
+                                 nn_info_size,
+                                 false,
+                                 "[SPI FLASH NN_INFO]");
+}
+
+bool spi_load_nn_info_to_memory(const uint8_t *nn_info, uint32_t nn_info_size) {
+    return run_spi_blob_transfer(SPI_LOAD_NN_INFO_TO_MEMORY,
+                                 nn_info,
+                                 nn_info_size,
+                                 false,
+                                 "[SPI LOAD NN_INFO]");
 }
 
 static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
@@ -1895,22 +1918,27 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     imx500_res_write(IMX500_COMMAND_SET_SPI_FRQ, &spi_frq, 10);
 
     switch_spi_data_forward_mode(SPI_SLAVE_TO_IMX500_SSPI);
-    uint32_t data_size;
     if (nn_fw != nullptr) {
         if (load_imx500_fw(nn_fw, nn_fw_size, IMX500_FW_TYPE_NETWORK_WEIGHTS) != 0) {
             printf("Error: nn fw failed\n");
             return false;
         }
         printf("spi write nn fw completed\n");
-        set_nw_info_from_flash_buffer(nn_info, nn_info_size);
-        dump_network_info_list();
-        if (init_input_tensor_preprocess_config() != 0) {
-            printf("Error: init_input_tensor_preprocess_config failed\n");
+
+        if (!spi_load_nn_info_to_memory(nn_info, nn_info_size)) {
+            printf("Error: spi load nn info to memory failed\n");
             return false;
         }
-        calculate_spi_output_metadata_size(spi_format, &data_size);
-        printf("data_size: %d\n", data_size);
-        g_i2c_driver.write(METADATA_SIZE_REG, data_size, 4);
+        printf("spi load nn info completed\n");
+
+        // Keep a local copy parsed on the host so later data injection still
+        // has the preprocessing metadata it needs. Module-side configuration
+        // now comes from SPI_LOAD_NN_INFO_TO_MEMORY instead of host register writes.
+        if (set_nw_info_from_flash_buffer(nn_info, nn_info_size) != 0) {
+            printf("Error: cache nn info on host failed\n");
+            return false;
+        }
+        dump_network_info_list();
     } else {
         const uint32_t load_nn_timeout_ms = 20000;
         const uint32_t load_nn_poll_ms = 500;
