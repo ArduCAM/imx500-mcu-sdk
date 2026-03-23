@@ -1390,7 +1390,6 @@ void imx500_dump_basic_info()
         {IMX500_COMMAND_GET_SENSOR_PROD_ID,        "SENSOR_PROD_ID"},
         {IMX500_COMMAND_GET_EXEC_DNN_INDEX,        "EXEC_DNN_INDEX"},
         {IMX500_COMMAND_GET_EXEC_DNN_NUM,          "EXEC_DNN_NUM"},
-        {IMX500_COMMAND_GET_FRAMERATE,             "FRAMERATE"},
     };
 
     for (size_t i = 0; i < sizeof(cmd_list) / sizeof(cmd_list[0]); i++) {
@@ -1959,7 +1958,7 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
   return 0;
 }
 
-bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format) {
+bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
     uint32_t imx500_boot_status = 0;
     const uint32_t boot_timeout_ms = 10000;
     const uint32_t boot_poll_ms = 100;
@@ -1998,9 +1997,6 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         }
         printf("spi load nn info completed\n");
 
-        // Keep a local copy parsed on the host so later data injection still
-        // has the preprocessing metadata it needs. Module-side configuration
-        // now comes from SPI_LOAD_NN_INFO_TO_MEMORY instead of host register writes.
         if (set_nw_info_from_flash_buffer(nn_info, nn_info_size) != 0) {
             printf("Error: cache nn info on host failed\n");
             return false;
@@ -2070,6 +2066,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("Error: invalid spi format");
         break;
     }
+    imx500_res_write(IMX500_COMMAND_SET_FRAMERATE, &fps, 10);
 
     return true;
 }

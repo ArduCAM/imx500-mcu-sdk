@@ -112,7 +112,8 @@ int main() {
         nullptr,
         0,
         MIPI_DATA_IMAGE,
-        SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
+        SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+        10
     );
     if (!open_ret) {
         send_packet(0, nullptr, -1);

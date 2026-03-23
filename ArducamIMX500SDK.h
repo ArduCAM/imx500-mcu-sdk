@@ -202,7 +202,7 @@ bool spi_load_nn_info_to_memory(const uint8_t *nn_info, uint32_t nn_info_size);
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type);
 void stream_on(void);
 int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax);
-bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format);
+bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps);
 uint32_t get_metadata_size(void);
 int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
 typedef uint32_t (*data_provider_t)(uint8_t *buf, uint32_t max_len, uint32_t offset);

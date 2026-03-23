@@ -249,14 +249,15 @@ static bool open_with_selected_boot_mode(void) {
                 NN_NETOWRK_INFO_DATA,
                 NN_NETOWRK_INFO_SIZE,
                 MIPI_DATA_IMAGE,
-                SPI_METADATA_OUTPUT_TENSOR);
+                SPI_METADATA_OUTPUT_TENSOR,
+                10);
 #elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
     printf("Boot mode: %s\n", get_boot_mode_name());
     if (!program_flash_assets()) {
         printf("flash programming failed\n");
         return false;
     }
-    return open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR);
+    return open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR, 10);
 #else
 #error "Unsupported INTEGRATION_TEST_BOOT_MODE"
 #endif
