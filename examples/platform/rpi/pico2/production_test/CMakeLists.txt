@@ -29,6 +29,9 @@ project(imx500_production_test C CXX ASM)
 
 pico_sdk_init()
 
+set(PRODUCTION_TEST_CONTINUOUS_LED_MODE "OFF" CACHE STRING "Enable continuous production test mode with builtin LED indication: ON or OFF")
+set_property(CACHE PRODUCTION_TEST_CONTINUOUS_LED_MODE PROPERTY STRINGS OFF ON)
+
 add_executable(imx500_production_test
         ${IMX500_FIRMWARE_CPP_FILES}
         ${IMX500_MCU_SDK_SRC_FILES}
@@ -44,6 +47,18 @@ target_include_directories(imx500_production_test PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
+
+if(PRODUCTION_TEST_CONTINUOUS_LED_MODE STREQUAL "ON")
+    target_compile_definitions(imx500_production_test PRIVATE
+        PRODUCTION_TEST_CONTINUOUS_LED_MODE=1
+    )
+elseif(PRODUCTION_TEST_CONTINUOUS_LED_MODE STREQUAL "OFF")
+    target_compile_definitions(imx500_production_test PRIVATE
+        PRODUCTION_TEST_CONTINUOUS_LED_MODE=0
+    )
+else()
+    message(FATAL_ERROR "Unsupported PRODUCTION_TEST_CONTINUOUS_LED_MODE=${PRODUCTION_TEST_CONTINUOUS_LED_MODE}, expected OFF or ON")
+endif()
 
 target_link_libraries(imx500_production_test pico_stdlib hardware_spi hardware_i2c hardware_dma)
 

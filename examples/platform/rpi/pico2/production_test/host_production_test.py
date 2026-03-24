@@ -10,6 +10,7 @@ from serial.tools import list_ports
 
 READY_MARKER = "TEST_STATUS: READY"
 BUSY_MARKER = "TEST_STATUS: BUSY"
+WAIT_INSERT_MARKER = "TEST_STATUS: WAIT_MODULE_INSERT"
 PASS_MARKER = "TEST_RESULT: PASS"
 FAIL_MARKER = "TEST_RESULT: FAIL"
 PONG_MARKER = "PONG"
@@ -175,12 +176,38 @@ def run_test(port: serial.Serial, timeout_sec: float) -> bool:
     raise SystemExit("Timed out waiting for TEST_RESULT marker from board.")
 
 
+def monitor_continuous_mode(port: serial.Serial) -> int:
+    cycle_index = 0
+    print("[HOST] Continuous monitor started. Waiting for module insertion and test results. Press Ctrl+C to stop.")
+    try:
+        while True:
+            line = _read_line(port, time.time() + 1.0)
+            if line is None:
+                continue
+            print(f"[BOARD] {line}")
+            if WAIT_INSERT_MARKER in line:
+                print("[HOST] Waiting for next camera module...")
+                continue
+            if PASS_MARKER in line:
+                cycle_index += 1
+                print(f"[HOST] Cycle {cycle_index}: PASS. Replace the camera module to continue.")
+                continue
+            if FAIL_MARKER in line:
+                cycle_index += 1
+                print(f"[HOST] Cycle {cycle_index}: FAIL. Remove and replace the camera module to continue.")
+                continue
+    except KeyboardInterrupt:
+        print("\n[HOST] Continuous monitor stopped by user.")
+        return 0
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Pico2 IMX500 production test over USB serial.")
     parser.add_argument("--port", help="Serial port, e.g. COM7 or /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200, help="Baudrate (USB CDC may ignore this)")
     parser.add_argument("--ready-timeout", type=float, default=15.0, help="Seconds to wait for board ready banner")
     parser.add_argument("--test-timeout", type=float, default=60.0, help="Seconds to wait for PASS/FAIL result")
+    parser.add_argument("--continuous-monitor", action="store_true", help="Monitor continuous auto-test mode without sending RUN")
     parser.add_argument("--list-ports", action="store_true", help="List available serial ports and exit")
     return parser
 
@@ -195,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
     port = open_port(port_name, args.baud)
     try:
         wait_for_ready(port, args.ready_timeout)
+        if args.continuous_monitor:
+            return monitor_continuous_mode(port)
         passed = run_test(port, args.test_timeout)
     finally:
         port.close()

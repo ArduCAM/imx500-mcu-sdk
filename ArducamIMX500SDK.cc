@@ -2337,6 +2337,24 @@ void get_pid(uint32_t* v) {
     g_i2c_driver.read(DEVICE_ID_REG, v, 4);
 }
 
+bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status) {
+    uint32_t local_device_id = 0;
+    uint32_t local_boot_status = 0;
+    if (!sdk_i2c_read_reg(DEVICE_ID_REG, &local_device_id)) {
+        return false;
+    }
+    if (!sdk_i2c_read_reg(BOOT_STATUS_REG, &local_boot_status)) {
+        return false;
+    }
+    if (device_id) {
+        *device_id = local_device_id;
+    }
+    if (boot_status) {
+        *boot_status = local_boot_status;
+    }
+    return true;
+}
+
 int sensor_i2c_write_16_8(uint16_t reg_addr, uint8_t data) {
     if (!g_i2c_driver.write) {
         return -1;

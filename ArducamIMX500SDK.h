@@ -220,6 +220,7 @@ int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len);
 void dump_network_info_list(void);
 void get_fw_ver(uint32_t* v);
 void get_pid(uint32_t* v);
+bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
 int sensor_i2c_write_16_8(uint16_t reg_addr, uint8_t data);
 int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data);
 int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data);
