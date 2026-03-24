@@ -101,10 +101,14 @@ int main() {
         sleep_ms(100);
     }
     sleep_ms(1000);
+    printf("USB CDC connected, starting camera_serial_stream_multitask\n");
+    fflush(stdout);
 
     i2c_master_init(100 * 1000);
     spi_master_init(1000 * 1000 * 5);
     bind_peripherals_api();
+    printf("Peripherals initialized, opening IMX500 stream\n");
+    fflush(stdout);
 
     const bool open_ret = open(
         nullptr,
@@ -116,6 +120,8 @@ int main() {
         10
     );
     if (!open_ret) {
+        printf("IMX500 open failed\n");
+        fflush(stdout);
         send_packet(0, nullptr, -1);
         while (1) {
             sleep_ms(1000);
@@ -123,6 +129,8 @@ int main() {
     }
 
     stream_on();
+    printf("IMX500 stream started, forwarding metadata packets\n");
+    fflush(stdout);
 
     uint32_t seq = 0;
     while (1) {

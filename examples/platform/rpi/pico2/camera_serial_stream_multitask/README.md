@@ -86,6 +86,7 @@ Useful options:
 - `--task` must match the network currently loaded on the IMX500 camera module.
 - If `--port` is omitted, the host script tries to auto-detect the Pico2 USB CDC port.
 - If multiple likely serial ports are present, use `--list-ports` to inspect them and then pass `--port`.
+- The host receiver now prints device-side text logs, including firmware startup messages and runtime status lines, while still parsing binary frame packets.
 - Annotated JPEGs are not written unless `--save-img` is provided.
 - The serial packet format is unchanged from the existing `camera_serial_stream_jpeg` and task-specific demos.
 - The multitask host script keeps its reusable Python helpers under `camera_serial_stream_multitask/common` for packet extraction, metadata parsing, and rendering.

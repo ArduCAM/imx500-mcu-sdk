@@ -23,6 +23,8 @@ HEADER_FMT = "<4sBBHIiI"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 PACKET_TYPE_FRAME = 1
 PICO_USB_VID = 0x2E8A
+STARTUP_LOG_TIMEOUT_SEC = 40.0
+STARTUP_IDLE_GRACE_SEC = 0.5
 PORT_HINTS: tuple[tuple[str, int], ...] = (
     ("IMX500", 5),
     ("PICO", 4),
@@ -167,6 +169,135 @@ def pick_serial_port(explicit_port: str | None) -> str:
     )
 
 
+def _is_printable_byte(value: int) -> bool:
+    return value in (9, 10, 13) or 32 <= value <= 126
+
+
+def _emit_startup_log_bytes(raw_bytes: bytes, *, prefix: str = "[BOOT]") -> None:
+    if not raw_bytes:
+        return
+
+    printable_count = sum(1 for value in raw_bytes if _is_printable_byte(value))
+    if printable_count == 0 or printable_count < max(8, len(raw_bytes) // 2):
+        return
+
+    normalized = "".join(chr(value) if _is_printable_byte(value) else "\n" for value in raw_bytes)
+    for line in normalized.replace("\r", "\n").split("\n"):
+        line = line.strip()
+        if line:
+            print(f"{prefix} {line}")
+
+
+class DeviceLogDecoder:
+    def __init__(self, *, prefix: str = "[DEV]") -> None:
+        self.prefix = prefix
+        self._line = bytearray()
+        self._last_feed_time = 0.0
+
+    def feed(self, raw_bytes: bytes) -> None:
+        if not raw_bytes:
+            return
+        self._last_feed_time = time.time()
+        for value in raw_bytes:
+            if value in (10, 13):
+                self.flush_line()
+                continue
+            if value == 9 or 32 <= value <= 126:
+                self._line.append(value)
+                continue
+            self.flush_line()
+
+    def flush_line(self) -> None:
+        if not self._line:
+            return
+        text = self._line.decode("ascii", errors="ignore").strip()
+        self._line.clear()
+        if text:
+            print(f"{self.prefix} {text}")
+
+    def flush_if_idle(self, idle_sec: float = STARTUP_IDLE_GRACE_SEC) -> None:
+        if self._line and self._last_feed_time and time.time() - self._last_feed_time >= idle_sec:
+            self.flush_line()
+
+    def flush(self) -> None:
+        self.flush_line()
+
+
+def open_serial_port_with_retry(port_name: str, baud: int, *, timeout: float = 0.2) -> serial.Serial:
+    last_error: Exception | None = None
+    deadline = time.time() + STARTUP_LOG_TIMEOUT_SEC
+    while time.time() < deadline:
+        try:
+            port = serial.Serial(port_name, baud, timeout=timeout, write_timeout=timeout)
+            try:
+                port.dtr = True
+            except (AttributeError, OSError, serial.SerialException):
+                pass
+            try:
+                port.rts = False
+            except (AttributeError, OSError, serial.SerialException):
+                pass
+            return port
+        except (OSError, serial.SerialException) as exc:
+            last_error = exc
+            time.sleep(0.2)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"Timed out opening serial port {port_name}")
+
+
+def read_startup_banner(port: serial.Serial) -> bytearray:
+    buffered = bytearray()
+    startup_bytes = bytearray()
+    first_data_time: float | None = None
+    deadline = time.time() + STARTUP_LOG_TIMEOUT_SEC
+
+    while time.time() < deadline:
+        chunk = port.read(4096)
+        if not chunk:
+            if first_data_time is not None and time.time() - first_data_time >= STARTUP_IDLE_GRACE_SEC:
+                break
+            continue
+
+        if first_data_time is None:
+            first_data_time = time.time()
+        buffered.extend(chunk)
+        magic_index = buffered.find(MAGIC)
+        if magic_index >= 0:
+            startup_bytes.extend(buffered[:magic_index])
+            _emit_startup_log_bytes(bytes(startup_bytes))
+            return bytearray(buffered[magic_index:])
+
+        if len(buffered) > len(MAGIC) - 1:
+            keep = len(MAGIC) - 1
+            startup_bytes.extend(buffered[:-keep])
+            del buffered[:-keep]
+
+    startup_bytes.extend(buffered)
+    _emit_startup_log_bytes(bytes(startup_bytes))
+    return bytearray()
+
+
+def _consume_device_log_prefix(buf: bytearray, log_decoder: DeviceLogDecoder) -> None:
+    start = buf.find(MAGIC)
+    if start > 0:
+        log_decoder.feed(bytes(buf[:start]))
+        del buf[:start]
+        return
+
+    if start < 0 and len(buf) > len(MAGIC) - 1:
+        keep = len(MAGIC) - 1
+        log_decoder.feed(bytes(buf[:-keep]))
+        del buf[:-keep]
+
+
+def _flush_idle_text_tail(buf: bytearray, log_decoder: DeviceLogDecoder) -> None:
+    if buf and buf.find(MAGIC) < 0:
+        log_decoder.feed(bytes(buf))
+        buf.clear()
+
+
 def run_serial_receiver_with_args(config: ExampleConfig, args: argparse.Namespace) -> int:
     if getattr(args, "list_ports", False):
         return list_available_ports()
@@ -175,7 +306,7 @@ def run_serial_receiver_with_args(config: ExampleConfig, args: argparse.Namespac
     args.port = port_name
     os.makedirs(args.output, exist_ok=True)
 
-    ser = serial.Serial(port_name, args.baud, timeout=0.2)
+    ser = open_serial_port_with_retry(port_name, args.baud, timeout=0.2)
     print(f"[INFO] Opened {port_name} at {args.baud}")
     print(
         f"[INFO] task={config.task_name} model={config.model_info.name} "
@@ -183,21 +314,29 @@ def run_serial_receiver_with_args(config: ExampleConfig, args: argparse.Namespac
         f"payload_limit={args.max_payload}"
     )
 
-    buf = bytearray()
+    log_decoder = DeviceLogDecoder()
+    buf = read_startup_banner(ser)
     decoded = 0
     last_log = time.time()
+    last_data_time = time.time()
 
     try:
         while True:
             chunk = ser.read(4096)
             if chunk:
                 buf.extend(chunk)
-            elif time.time() - last_log > 3.0:
-                print(f"[INFO] waiting... buffered={len(buf)} bytes")
-                last_log = time.time()
+                last_data_time = time.time()
+            else:
+                if time.time() - last_data_time >= STARTUP_IDLE_GRACE_SEC:
+                    _flush_idle_text_tail(buf, log_decoder)
+                log_decoder.flush_if_idle()
+                if time.time() - last_log > 3.0:
+                    print(f"[INFO] waiting... buffered={len(buf)} bytes")
+                    last_log = time.time()
 
             while True:
-                packet = extract_packet(buf, args.max_payload)
+                _consume_device_log_prefix(buf, log_decoder)
+                packet = extract_packet(buf, args.max_payload, log_decoder=log_decoder)
                 if packet is None:
                     break
 
@@ -244,27 +383,39 @@ def run_serial_receiver_with_args(config: ExampleConfig, args: argparse.Namespac
         print("\n[INFO] stopped by user")
         return 0
     finally:
+        log_decoder.flush()
         ser.close()
         if args.show_img:
             cv2.destroyAllWindows()
 
 
-def extract_packet(buf: bytearray, max_payload: int) -> tuple[int, bytes] | None:
+def extract_packet(
+    buf: bytearray,
+    max_payload: int,
+    *,
+    log_decoder: DeviceLogDecoder | None = None,
+) -> tuple[int, bytes] | None:
     start = buf.find(MAGIC)
     if start < 0:
         if len(buf) > 3:
+            if log_decoder is not None:
+                log_decoder.feed(bytes(buf[:-3]))
             del buf[:-3]
         return None
 
     if start > 0:
+        if log_decoder is not None:
+            log_decoder.feed(bytes(buf[:start]))
         del buf[:start]
     if len(buf) < HEADER_SIZE:
         return None
 
     magic, version, packet_type, header_len, seq, payload_len, checksum = struct.unpack(HEADER_FMT, buf[:HEADER_SIZE])
     if magic != MAGIC or version != 1 or header_len != HEADER_SIZE:
+        if log_decoder is not None:
+            log_decoder.feed(bytes(buf[:1]))
         del buf[0]
-        return extract_packet(buf, max_payload)
+        return extract_packet(buf, max_payload, log_decoder=log_decoder)
 
     if payload_len < 0:
         print(f"[WARN] seq={seq} frame read failed on device")
@@ -274,7 +425,7 @@ def extract_packet(buf: bytearray, max_payload: int) -> tuple[int, bytes] | None
     if payload_len > max_payload:
         print(f"[WARN] seq={seq} oversized payload={payload_len}, drop")
         del buf[0]
-        return extract_packet(buf, max_payload)
+        return extract_packet(buf, max_payload, log_decoder=log_decoder)
 
     full_len = HEADER_SIZE + payload_len
     if len(buf) < full_len:

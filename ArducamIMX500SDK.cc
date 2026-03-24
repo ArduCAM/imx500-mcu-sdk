@@ -2066,7 +2066,6 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("Error: invalid spi format");
         break;
     }
-    imx500_res_write(IMX500_COMMAND_SET_FRAMERATE, &fps, 10);
 
     return true;
 }
