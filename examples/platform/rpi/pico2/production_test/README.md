@@ -6,7 +6,7 @@ This demo provides a simple production-test flow for Pico2 + IMX500.
 - The board boots directly into command-wait mode and does not block waiting for a USB console attach.
 - On `RUN`, it reads module information, loads the bundled model, starts streaming, reads the first metadata frame, and checks whether the first byte is `0x01`.
 - The board prints a fixed result marker so a host Python script can decide pass/fail.
-- An optional compile-time macro can enable builtin-LED indication and continuous testing without power cycling the Pico board.
+- An optional compile-time macro can enable BOOT-button-triggered repeated testing with builtin LED indication, without power cycling the Pico board.
 - After each test run, the firmware reboots the board so the next run can start from a clean state.
 
 ## 1. Build and flash the Pico2 firmware
@@ -21,19 +21,22 @@ cmake --build .
 
 Flash `imx500_production_test.uf2` to Pico2.
 
-To enable continuous test mode with builtin LED indication:
+To enable BOOT-button-triggered reusable test mode with builtin LED indication:
 
 ```bash
-cmake .. -DPRODUCTION_TEST_CONTINUOUS_LED_MODE=ON
+cmake .. -DPRODUCTION_TEST_BOOT_TRIGGER_MODE=ON
 cmake --build .
 ```
 
 Mode summary:
 
 - `OFF` (default): existing behavior is preserved. The board reboots after each `RUN`.
-- `ON`: the board does not reboot after a test. It waits for module removal, then waits for the next module insertion and automatically starts the next test cycle.
-- `ON`: builtin LED behavior is `solid on = PASS`, `blinking = FAIL`, `off = waiting/running`.
-- `ON`: the same camera will not be retested repeatedly while it remains connected. A new test starts only after a disconnect -> reconnect transition is detected.
+- `PRODUCTION_TEST_BOOT_TRIGGER_MODE=OFF` (default): existing behavior is preserved. The board reboots after each `RUN`.
+- `PRODUCTION_TEST_BOOT_TRIGGER_MODE=ON`: the board does not reboot after a test. Press the Pico `BOOT` button to start each test cycle.
+- `PRODUCTION_TEST_BOOT_TRIGGER_MODE=ON`: builtin LED behavior is `solid on = PASS`, `blinking = FAIL`, `off = waiting/running`.
+- `PRODUCTION_TEST_BOOT_TRIGGER_MODE=ON`: repeated BOOT presses are ignored while a test is already running.
+- `PRODUCTION_TEST_BOOT_TRIGGER_MODE=ON`: after one test finishes, you can keep Pico powered, replace the camera if needed, then press `BOOT` again for the next cycle.
+- `PRODUCTION_TEST_BOOT_TRIGGER_MODE=ON`: module handshake/probe is still used in the background. If the camera is unplugged, the board clears the latched PASS/FAIL state and resets back to `READY`.
 
 ## 2. Install host dependencies
 
@@ -47,10 +50,10 @@ pip install pyserial
 python host_production_test.py
 ```
 
-For continuous auto-test mode monitoring:
+For BOOT-button-triggered mode monitoring:
 
 ```bash
-python host_production_test.py --continuous-monitor
+python host_production_test.py --boot-trigger-monitor
 ```
 
 If auto-detection is ambiguous:
@@ -72,10 +75,10 @@ Supported host commands:
 
 - `RUN`
 - `PING`
-- `LED_OFF` when `PRODUCTION_TEST_CONTINUOUS_LED_MODE=ON`
+- `LED_OFF` when `PRODUCTION_TEST_BOOT_TRIGGER_MODE=ON`
 
 The host script actively sends `PING` while probing the board, so it does not depend on catching the initial boot banner.
-In continuous mode, the Pico firmware owns the test cycle and automatically waits for module insertion/removal. Use `--continuous-monitor` if you want the PC to stay connected and print each cycle result.
+In BOOT-trigger mode, the Pico firmware waits for a `BOOT` button press before each test cycle. It also probes the module state in the background, so unplugging the camera resets the board back to a clean `READY` state. Use `--boot-trigger-monitor` if you want the PC to stay connected and print each cycle result while the operator triggers tests from the board.
 If you still see `TEST_STATUS: BUSY`, the board is likely running an older firmware image and needs to be reflashed or manually reset once.
 
 ## 5. Pass criteria

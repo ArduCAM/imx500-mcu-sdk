@@ -2,9 +2,14 @@
 #include <string.h>
 
 #include "pico/stdlib.h"
+#include "pico/platform.h"
+#include "hardware/regs/io_qspi.h"
 #include "hardware/watchdog.h"
 #include "hardware/i2c.h"
 #include "hardware/spi.h"
+#include "hardware/sync.h"
+#include "hardware/structs/ioqspi.h"
+#include "hardware/structs/sio.h"
 
 #include "g_config.h"
 #include "ArducamIMX500SDK.h"
@@ -18,11 +23,17 @@
 #define NN_NETWORK_INFO_SIZE    InputTensorOnly_network_info_size
 #define MAX_FRAME_SIZE          (1024 * 10)
 #define COMMAND_BUFFER_SIZE     64
-#define MODULE_POLL_INTERVAL_MS 100
-#define MODULE_STABLE_POLLS     3
+#define BOOT_BUTTON_POLL_INTERVAL_MS 20
+#define BOOT_BUTTON_STABLE_POLLS     3
+#define MODULE_PROBE_INTERVAL_MS     100
+#define MODULE_STABLE_POLLS          3
 
-#ifndef PRODUCTION_TEST_CONTINUOUS_LED_MODE
-#define PRODUCTION_TEST_CONTINUOUS_LED_MODE 0
+#ifndef PRODUCTION_TEST_BOOT_TRIGGER_MODE
+#ifdef PRODUCTION_TEST_CONTINUOUS_LED_MODE
+#define PRODUCTION_TEST_BOOT_TRIGGER_MODE PRODUCTION_TEST_CONTINUOUS_LED_MODE
+#else
+#define PRODUCTION_TEST_BOOT_TRIGGER_MODE 0
+#endif
 #endif
 
 namespace {
@@ -43,17 +54,12 @@ enum class LedState {
     Fail,
 };
 
-enum class AutoTestState {
-    WaitModuleInsert,
-    WaitModuleRemove,
-};
-
 LedState g_led_state = LedState::Idle;
 bool g_led_level = false;
 absolute_time_t g_led_toggle_at;
 
 void init_test_led() {
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
+#if PRODUCTION_TEST_BOOT_TRIGGER_MODE
     if constexpr (kHasBuiltinLed) {
         gpio_init(kLedPin);
         gpio_set_dir(kLedPin, GPIO_OUT);
@@ -64,7 +70,7 @@ void init_test_led() {
 }
 
 void set_test_led_state(LedState state) {
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
+#if PRODUCTION_TEST_BOOT_TRIGGER_MODE
     g_led_state = state;
     g_led_level = false;
     g_led_toggle_at = get_absolute_time();
@@ -85,7 +91,7 @@ void set_test_led_state(LedState state) {
 }
 
 void service_test_led() {
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
+#if PRODUCTION_TEST_BOOT_TRIGGER_MODE
     if constexpr (!kHasBuiltinLed) {
         return;
     }
@@ -124,12 +130,12 @@ void spi_master_init(uint32_t baudrate) {
 
 void print_banner() {
     printf("IMX500 Pico2 production test ready\n");
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
-    printf("CONTINUOUS_MODE: ON\n");
-    printf("Board will automatically test a newly inserted module and then wait for removal\n");
-    printf("TEST_STATUS: WAIT_MODULE_INSERT\n");
+#if PRODUCTION_TEST_BOOT_TRIGGER_MODE
+    printf("BOOT_TRIGGER_MODE: ON\n");
+    printf("Press the Pico BOOT button to start one test cycle\n");
+    printf("Additional BOOT presses are ignored while a test is running\n");
 #else
-    printf("CONTINUOUS_MODE: OFF\n");
+    printf("BOOT_TRIGGER_MODE: OFF\n");
     printf("TEST_STATUS: READY\n");
     printf("Send RUN to start the production test\n");
 #endif
@@ -188,6 +194,55 @@ bool poll_command_line(char *buf, size_t buf_len) {
         line_buf[pos++] = (char)ch;
     }
     return false;
+}
+
+bool __no_inline_not_in_flash_func(read_boot_button_pressed_raw)() {
+    const uint cs_pin_index = 1;
+
+    uint32_t flags = save_and_disable_interrupts();
+
+    hw_write_masked(&ioqspi_hw->io[cs_pin_index].ctrl,
+                    GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+                    IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+
+    for (volatile int i = 0; i < 1000; ++i) {
+    }
+
+#ifdef __ARM_ARCH_6M__
+    constexpr uint32_t cs_bit = 1u << 1;
+#else
+    constexpr uint32_t cs_bit = SIO_GPIO_HI_IN_QSPI_CSN_BITS;
+#endif
+    const bool pin_high = (sio_hw->gpio_hi_in & cs_bit) != 0;
+
+    hw_write_masked(&ioqspi_hw->io[cs_pin_index].ctrl,
+                    GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+                    IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+
+    restore_interrupts(flags);
+    return !pin_high;
+}
+
+bool poll_boot_button_pressed() {
+    static bool last_raw = false;
+    static bool debounced = false;
+    static uint32_t stable_count = 0;
+
+    const bool raw = read_boot_button_pressed_raw();
+    if (raw == last_raw) {
+        if (stable_count < BOOT_BUTTON_STABLE_POLLS) {
+            stable_count++;
+        }
+    } else {
+        last_raw = raw;
+        stable_count = 1;
+    }
+
+    if (stable_count >= BOOT_BUTTON_STABLE_POLLS) {
+        debounced = raw;
+    }
+
+    return debounced;
 }
 
 void print_module_identity() {
@@ -275,15 +330,13 @@ bool probe_module_ready(uint32_t *device_id, uint32_t *boot_status) {
     return local_boot_status >= 1u;
 }
 
-void print_probe_status(const char *label, uint32_t device_id, uint32_t boot_status) {
-    printf("%s device_id=0x%08lx boot_status=%lu\n",
-           label,
-           (unsigned long)device_id,
-           (unsigned long)boot_status);
+void print_boot_trigger_ready_message() {
+    printf("TEST_STATUS: READY\n");
+    printf("TEST_REASON: press_boot_button_or_send_run_to_start_test\n");
     fflush(stdout);
 }
 
-void handle_continuous_mode_command(const char *command) {
+bool handle_boot_trigger_mode_command(const char *command) {
     if (strcmp(command, "PING") == 0) {
         printf("PONG\n");
         if (g_led_state == LedState::Pass) {
@@ -294,83 +347,105 @@ void handle_continuous_mode_command(const char *command) {
             printf("LED_STATUS: IDLE_OFF\n");
         }
         fflush(stdout);
-        return;
+        return false;
     }
 
     if (strcmp(command, "LED_OFF") == 0) {
         set_test_led_state(LedState::Idle);
         printf("LED_STATUS: IDLE_OFF\n");
         fflush(stdout);
-        return;
+        return false;
     }
 
     if (strcmp(command, "RUN") == 0) {
-        printf("TEST_STATUS: AUTO_MODE_WAITING_MODULE_CHANGE\n");
-        printf("TEST_REASON: continuous_mode_runs_automatically_after_module_insert\n");
+        printf("TEST_TRIGGER: HOST_RUN\n");
         fflush(stdout);
-        return;
+        return true;
     }
 
     printf("Unknown command: %s\n", command);
-    printf("Supported commands: PING, LED_OFF\n");
+    printf("Supported commands: RUN, PING, LED_OFF\n");
     fflush(stdout);
+    return false;
 }
 
-void run_continuous_mode() {
-    AutoTestState state = AutoTestState::WaitModuleInsert;
-    bool module_present = false;
-    uint32_t stable_count = 0;
-    uint32_t last_device_id = 0;
-    uint32_t last_boot_status = 0;
+void run_boot_trigger_mode() {
     char command[COMMAND_BUFFER_SIZE];
+    bool last_button_pressed = false;
+    bool module_present = false;
+    bool last_module_sample = false;
+    uint32_t module_stable_count = 0;
+    absolute_time_t next_module_probe_at = get_absolute_time();
 
-    printf("TEST_STATUS: WAIT_MODULE_INSERT\n");
-    fflush(stdout);
+    print_boot_trigger_ready_message();
 
     while (true) {
+        bool should_start_test = false;
+
         if (poll_command_line(command, sizeof(command))) {
-            handle_continuous_mode_command(command);
+            should_start_test = handle_boot_trigger_mode_command(command);
         }
 
-        uint32_t device_id = 0;
-        uint32_t boot_status = 0;
-        const bool ready = probe_module_ready(&device_id, &boot_status);
+        const bool button_pressed = poll_boot_button_pressed();
+        if (button_pressed && !last_button_pressed) {
+            printf("TEST_TRIGGER: BOOT_BUTTON\n");
+            fflush(stdout);
+            should_start_test = true;
+        }
+        last_button_pressed = button_pressed;
 
-        if (ready == module_present) {
-            if (stable_count < MODULE_STABLE_POLLS) {
-                stable_count++;
+        if (time_reached(next_module_probe_at)) {
+            uint32_t device_id = 0;
+            uint32_t boot_status = 0;
+            const bool ready = probe_module_ready(&device_id, &boot_status);
+
+            if (ready == last_module_sample) {
+                if (module_stable_count < MODULE_STABLE_POLLS) {
+                    module_stable_count++;
+                }
+            } else {
+                last_module_sample = ready;
+                module_stable_count = 1;
             }
-        } else {
-            module_present = ready;
-            stable_count = 1;
-            last_device_id = device_id;
-            last_boot_status = boot_status;
+
+            if (module_stable_count >= MODULE_STABLE_POLLS && module_present != ready) {
+                module_present = ready;
+                if (module_present) {
+                    printf("MODULE_DETECTED device_id=0x%08lx boot_status=%lu\n",
+                           (unsigned long)device_id,
+                           (unsigned long)boot_status);
+                    fflush(stdout);
+                } else {
+                    set_test_led_state(LedState::Idle);
+                    printf("MODULE_REMOVED\n");
+                    printf("TEST_STATUS: READY\n");
+                    printf("TEST_REASON: module_removed_reset_state\n");
+                    fflush(stdout);
+                }
+            }
+
+            next_module_probe_at = delayed_by_ms(get_absolute_time(), MODULE_PROBE_INTERVAL_MS);
         }
 
-        if (stable_count >= MODULE_STABLE_POLLS) {
-            if (state == AutoTestState::WaitModuleInsert && module_present) {
-                print_probe_status("MODULE_DETECTED", device_id, boot_status);
-                run_production_test();
-                printf("TEST_STATUS: WAIT_MODULE_REMOVE\n");
-                printf("TEST_REASON: remove_tested_module_before_next_cycle\n");
-                fflush(stdout);
-                state = AutoTestState::WaitModuleRemove;
-                stable_count = 0;
-            } else if (state == AutoTestState::WaitModuleRemove && !module_present) {
+        if (should_start_test) {
+            uint32_t device_id = 0;
+            uint32_t boot_status = 0;
+            if (!probe_module_ready(&device_id, &boot_status)) {
                 set_test_led_state(LedState::Idle);
-                printf("MODULE_REMOVED last_device_id=0x%08lx last_boot_status=%lu\n",
-                       (unsigned long)last_device_id,
-                       (unsigned long)last_boot_status);
-                printf("TEST_STATUS: WAIT_MODULE_INSERT\n");
+                printf("TEST_STATUS: READY\n");
+                printf("TEST_REASON: module_not_detected_or_not_ready\n");
                 fflush(stdout);
-                state = AutoTestState::WaitModuleInsert;
-                stable_count = 0;
-                last_device_id = 0;
-                last_boot_status = 0;
+                sleep_ms(BOOT_BUTTON_POLL_INTERVAL_MS);
+                continue;
             }
+            module_present = true;
+            last_module_sample = true;
+            module_stable_count = MODULE_STABLE_POLLS;
+            run_production_test();
+            print_boot_trigger_ready_message();
         }
 
-        sleep_ms(MODULE_POLL_INTERVAL_MS);
+        sleep_ms(BOOT_BUTTON_POLL_INTERVAL_MS);
     }
 }
 
@@ -387,8 +462,8 @@ int main() {
 
     print_banner();
 
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
-    run_continuous_mode();
+#if PRODUCTION_TEST_BOOT_TRIGGER_MODE
+    run_boot_trigger_mode();
     return 0;
 #else
 
@@ -399,27 +474,18 @@ int main() {
         }
 
         if (strcmp(command, "RUN") == 0) {
-            const bool passed = run_production_test();
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
-            printf("TEST_STATUS: READY\n");
-            printf("TEST_REASON: continuous_mode_waiting_next_run\n");
-            printf("LED_STATUS: %s\n", passed ? "PASS_SOLID_ON" : "FAIL_BLINKING");
-            fflush(stdout);
-            continue;
-#else
-            (void)passed;
+            (void)run_production_test();
             fflush(stdout);
             sleep_ms(200);
             watchdog_reboot(0, 0, 0);
             while (true) {
                 tight_loop_contents();
             }
-#endif
         }
 
         if (strcmp(command, "PING") == 0) {
             printf("PONG\n");
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
+#if PRODUCTION_TEST_BOOT_TRIGGER_MODE
             if (g_led_state == LedState::Pass) {
                 printf("LED_STATUS: PASS_SOLID_ON\n");
             } else if (g_led_state == LedState::Fail) {
@@ -432,7 +498,7 @@ int main() {
             continue;
         }
 
-#if PRODUCTION_TEST_CONTINUOUS_LED_MODE
+#if PRODUCTION_TEST_BOOT_TRIGGER_MODE
         if (strcmp(command, "LED_OFF") == 0) {
             set_test_led_state(LedState::Idle);
             printf("LED_STATUS: IDLE_OFF\n");

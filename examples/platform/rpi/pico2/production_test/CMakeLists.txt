@@ -29,8 +29,18 @@ project(imx500_production_test C CXX ASM)
 
 pico_sdk_init()
 
-set(PRODUCTION_TEST_CONTINUOUS_LED_MODE "OFF" CACHE STRING "Enable continuous production test mode with builtin LED indication: ON or OFF")
-set_property(CACHE PRODUCTION_TEST_CONTINUOUS_LED_MODE PROPERTY STRINGS OFF ON)
+set(_production_test_boot_trigger_mode_default "OFF")
+if(DEFINED PRODUCTION_TEST_CONTINUOUS_LED_MODE)
+    set(_production_test_boot_trigger_mode_default "${PRODUCTION_TEST_CONTINUOUS_LED_MODE}")
+endif()
+
+set(PRODUCTION_TEST_BOOT_TRIGGER_MODE "${_production_test_boot_trigger_mode_default}" CACHE STRING "Enable reusable BOOT-button-triggered production test mode with builtin LED indication: ON or OFF")
+set_property(CACHE PRODUCTION_TEST_BOOT_TRIGGER_MODE PROPERTY STRINGS OFF ON)
+
+if(DEFINED PRODUCTION_TEST_CONTINUOUS_LED_MODE AND PRODUCTION_TEST_BOOT_TRIGGER_MODE STREQUAL PRODUCTION_TEST_CONTINUOUS_LED_MODE)
+    message(WARNING "PRODUCTION_TEST_CONTINUOUS_LED_MODE is deprecated. Use PRODUCTION_TEST_BOOT_TRIGGER_MODE instead.")
+    unset(PRODUCTION_TEST_CONTINUOUS_LED_MODE CACHE)
+endif()
 
 add_executable(imx500_production_test
         ${IMX500_FIRMWARE_CPP_FILES}
@@ -48,16 +58,16 @@ target_include_directories(imx500_production_test PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 
-if(PRODUCTION_TEST_CONTINUOUS_LED_MODE STREQUAL "ON")
+if(PRODUCTION_TEST_BOOT_TRIGGER_MODE STREQUAL "ON")
     target_compile_definitions(imx500_production_test PRIVATE
-        PRODUCTION_TEST_CONTINUOUS_LED_MODE=1
+        PRODUCTION_TEST_BOOT_TRIGGER_MODE=1
     )
-elseif(PRODUCTION_TEST_CONTINUOUS_LED_MODE STREQUAL "OFF")
+elseif(PRODUCTION_TEST_BOOT_TRIGGER_MODE STREQUAL "OFF")
     target_compile_definitions(imx500_production_test PRIVATE
-        PRODUCTION_TEST_CONTINUOUS_LED_MODE=0
+        PRODUCTION_TEST_BOOT_TRIGGER_MODE=0
     )
 else()
-    message(FATAL_ERROR "Unsupported PRODUCTION_TEST_CONTINUOUS_LED_MODE=${PRODUCTION_TEST_CONTINUOUS_LED_MODE}, expected OFF or ON")
+    message(FATAL_ERROR "Unsupported PRODUCTION_TEST_BOOT_TRIGGER_MODE=${PRODUCTION_TEST_BOOT_TRIGGER_MODE}, expected OFF or ON")
 endif()
 
 target_link_libraries(imx500_production_test pico_stdlib hardware_spi hardware_i2c hardware_dma)
