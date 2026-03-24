@@ -9,7 +9,12 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(PICO_EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(PICO_EXAMPLE_DIR))
 
-from camera_serial_stream_multitask.common.host_runtime import ExampleConfig, add_common_arguments, run_serial_receiver_with_args
+from camera_serial_stream_multitask.common.host_runtime import (
+    ExampleConfig,
+    add_common_arguments,
+    list_available_ports,
+    run_serial_receiver_with_args,
+)
 from camera_serial_stream_multitask.common.model_info import load_model_info
 from camera_serial_stream_multitask.common.renderers import (
     ClassificationRenderer,
@@ -104,7 +109,7 @@ TASK_CONFIGS = {
 
 def build_dispatch_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Receive IMX500 packets from Pico2 and parse/save annotated JPEGs for multiple tasks."
+        description="Receive IMX500 packets from Pico2 and optionally save annotated JPEGs for multiple tasks."
     )
     parser.add_argument(
         "--task",
@@ -119,13 +124,6 @@ def build_dispatch_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-
-def build_list_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--list-tasks", action="store_true")
-    return parser
-
-
 def print_supported_tasks() -> None:
     for task_name, config in TASK_CONFIGS.items():
         print(
@@ -137,15 +135,16 @@ def print_supported_tasks() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    list_args, _ = build_list_parser().parse_known_args(argv)
-    if list_args.list_tasks:
-        print_supported_tasks()
-        return 0
-
     parser = build_dispatch_parser()
     args = parser.parse_args(argv)
+    if args.list_tasks:
+        print_supported_tasks()
+    if args.list_ports:
+        list_available_ports()
+    if args.list_tasks or args.list_ports:
+        return 0
     if not args.task:
-        parser.error("--task is required unless --list-tasks is used")
+        parser.error("--task is required unless --list-tasks or --list-ports is used")
 
     config = TASK_CONFIGS[args.task]
     if args.output is None:

@@ -43,34 +43,37 @@ List the supported task names:
 python host_receiver.py --list-tasks
 ```
 
-Run classification:
+Run classification and save annotated JPEGs:
 
 ```bash
-python host_receiver.py --port COM7 --task classification --save-metadata-json --save-tensors
+python host_receiver.py --task classification --save-img --save-metadata-json --save-tensors
 ```
 
 Run object detection:
 
 ```bash
-python host_receiver.py --port COM7 --task object_detection
+python host_receiver.py --task object_detection
 ```
 
 Run pose estimation with realtime preview:
 
 ```bash
-python host_receiver.py --port COM7 --task pose_estimation --show-img --show-fps
+python host_receiver.py --task pose_estimation --show-img --show-fps
 ```
 
 Run segmentation:
 
 ```bash
-python host_receiver.py --port COM7 --task segmentation
+python host_receiver.py --task segmentation
 ```
 
 Useful options:
 
+- `--port`: explicitly select a serial port instead of auto-detecting one
+- `--list-ports`: print all currently available serial ports and exit
 - `--output`: override the task-specific default output directory
 - `--max-payload`: override the task-specific payload safety limit
+- `--save-img`: save annotated JPEGs (disabled by default)
 - `--save-raw`: save the original framed metadata payload as `.bin`
 - `--save-metadata-json`: save parsed metadata summaries as `.json`
 - `--save-tensors`: save parsed tensor arrays as `.npz`
@@ -81,6 +84,9 @@ Useful options:
 ## 4. Notes
 
 - `--task` must match the network currently loaded on the IMX500 camera module.
+- If `--port` is omitted, the host script tries to auto-detect the Pico2 USB CDC port.
+- If multiple likely serial ports are present, use `--list-ports` to inspect them and then pass `--port`.
+- Annotated JPEGs are not written unless `--save-img` is provided.
 - The serial packet format is unchanged from the existing `camera_serial_stream_jpeg` and task-specific demos.
 - The multitask host script keeps its reusable Python helpers under `camera_serial_stream_multitask/common` for packet extraction, metadata parsing, and rendering.
 - `open(nullptr, 0, nullptr, 0, ...)` intentionally does not pass model data from Pico2. Pico flash is too small to store both the forwarding firmware and an IMX500 `.fpk` package, so the model must be programmed onto the camera module separately.
