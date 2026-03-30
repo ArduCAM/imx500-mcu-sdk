@@ -327,10 +327,11 @@ class PoseRenderer(_RendererBase):
         tag_threshold: float,
         max_num_people: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        output_shape = (144, 192)
         np_outputs = [np.expand_dims(np.asarray(tensor.data, dtype=np.float32), axis=0) for tensor in network.output_tensors]
         grouped, scores = self._parse_network_postprocess_outputs(
             outputs=[np_outputs[0][0, ...], np_outputs[1][0, ...], np_outputs[2][0, ...]],
-            output_shape=(144, 192),
+            output_shape=output_shape,
             detection_threshold=detection_threshold,
             max_num_people=max_num_people,
             tag_threshold=tag_threshold,
@@ -343,8 +344,15 @@ class PoseRenderer(_RendererBase):
             )
 
         image_h, image_w = image_shape
-        grouped[:, :, 0] *= image_w / 384.0
-        grouped[:, :, 1] *= image_h / 288.0
+        input_h, input_w = network.input_tensors[0].data.shape[:2]
+
+        # The pose decoder returns coordinates in the 144x192 heatmap domain.
+        # Map them back to the network input domain first, then to the preview.
+        grouped[:, :, 0] *= input_w / float(output_shape[1])
+        grouped[:, :, 1] *= input_h / float(output_shape[0])
+        if input_w != image_w or input_h != image_h:
+            grouped[:, :, 0] *= image_w / float(input_w)
+            grouped[:, :, 1] *= image_h / float(input_h)
 
         keypoints_list: list[np.ndarray] = []
         scores_list: list[float] = []
