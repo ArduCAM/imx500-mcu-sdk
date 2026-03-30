@@ -112,6 +112,31 @@ static inline int calc_align(int num, int align) {
   return ((num + align - 1) / align) * align;
 }
 
+static uint8_t clamp_u8_range(uint32_t v, uint8_t min_v, uint8_t max_v) {
+    if (v < min_v) {
+        return min_v;
+    }
+    if (v > max_v) {
+        return max_v;
+    }
+    return (uint8_t)v;
+}
+
+static uint16_t clamp_u16_range(uint32_t v, uint16_t min_v, uint16_t max_v) {
+    if (v < min_v) {
+        return min_v;
+    }
+    if (v > max_v) {
+        return max_v;
+    }
+    return (uint16_t)v;
+}
+
+static uint8_t ae_gain_db_to_reg(uint8_t gain_db) {
+    uint32_t reg = ((uint32_t)gain_db * 10u) / 3u;
+    return (reg > 0xFFu) ? 0xFFu : (uint8_t)reg;
+}
+
 static uint32_t crc32_update_local(uint32_t crc, const uint8_t *data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         crc ^= data[i];
@@ -288,6 +313,23 @@ extern "C" {
 sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
 static uint32_t s_dnn_nw_id = 0;
 static uint8_t s_num_of_networks = 0;
+static const imx500_ae_config_t kDefaultAeConfig = {
+    100,
+    70,
+    40,
+    160,
+    false,
+    {0, 0, 0, 0},
+};
+static const imx500_white_balance_config_t kDefaultWhiteBalanceConfig = {
+    IMX500_WB_MODE_AUTO,
+    IMX500_WB_PRESET_4300,
+    false,
+    {0, 0, 0, 0},
+};
+static imx500_ae_config_t s_ae_config = kDefaultAeConfig;
+static imx500_white_balance_config_t s_white_balance_config =
+    kDefaultWhiteBalanceConfig;
 
 static const uint16_t REG_OFST0_LEV_PL_NORM_YM_YADD = 0x00;
 static const uint16_t REG_OFST1_LEV_PL_NORM_YM_YADD = (REG_OFST0_LEV_PL_NORM_YM_YADD + 0x1A);
@@ -881,6 +923,176 @@ static int i2c_passthrough_write(uint16_t reg_addr, uint32_t data, uint32_t size
         return sensor_i2c_write_16_32(reg_addr, data);
     }
     return -1;
+}
+
+static int fold_passthrough_write_status(int status, int ret) {
+    return (ret < 0) ? ret : status;
+}
+
+static void sanitize_ae_config(imx500_ae_config_t *config) {
+    if (!config) {
+        return;
+    }
+    config->max_exposure_time_100us =
+        clamp_u16_range(config->max_exposure_time_100us, 1u, 333u);
+    config->max_gain_db = clamp_u8_range(config->max_gain_db, 0u, 75u);
+    if (config->brightness == 0u) {
+        config->brightness = 1u;
+    }
+    if (config->speed == 0u) {
+        config->speed = kDefaultAeConfig.speed;
+    }
+    if (config->roi.width == 0u || config->roi.height == 0u) {
+        config->has_roi = false;
+    }
+}
+
+static void sanitize_white_balance_config(imx500_white_balance_config_t *config) {
+    if (!config) {
+        return;
+    }
+    if ((int)config->mode < (int)IMX500_WB_MODE_AUTO ||
+        (int)config->mode > (int)IMX500_WB_MODE_PRESET) {
+        config->mode = kDefaultWhiteBalanceConfig.mode;
+    }
+    if ((int)config->preset < (int)IMX500_WB_PRESET_3200 ||
+        (int)config->preset > (int)IMX500_WB_PRESET_6500) {
+        config->preset = kDefaultWhiteBalanceConfig.preset;
+    }
+    if (config->roi.width == 0u || config->roi.height == 0u) {
+        config->has_roi = false;
+    }
+}
+
+void imx500_get_default_ae_config(imx500_ae_config_t *config) {
+    if (!config) {
+        return;
+    }
+    *config = kDefaultAeConfig;
+}
+
+void imx500_get_default_white_balance_config(
+    imx500_white_balance_config_t *config) {
+    if (!config) {
+        return;
+    }
+    *config = kDefaultWhiteBalanceConfig;
+}
+
+int imx500_set_ae_config(const imx500_ae_config_t *config) {
+    if (!config) {
+        s_ae_config = kDefaultAeConfig;
+        return 0;
+    }
+    s_ae_config = *config;
+    sanitize_ae_config(&s_ae_config);
+    return 0;
+}
+
+int imx500_set_white_balance_config(
+    const imx500_white_balance_config_t *config) {
+    if (!config) {
+        s_white_balance_config = kDefaultWhiteBalanceConfig;
+        return 0;
+    }
+    s_white_balance_config = *config;
+    sanitize_white_balance_config(&s_white_balance_config);
+    return 0;
+}
+
+int imx500_apply_ae_config(void) {
+    sanitize_ae_config(&s_ae_config);
+
+    int status = 0;
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD800, 0, 1));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD23D, 0, 1));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD2B2, 1, 1));
+    status = fold_passthrough_write_status(
+        status, i2c_passthrough_write(0xD2B4, s_ae_config.max_exposure_time_100us, 2));
+    status = fold_passthrough_write_status(
+        status, i2c_passthrough_write(0xD26E, ae_gain_db_to_reg(s_ae_config.max_gain_db), 1));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xE600, 8, 1));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xE601, 0, 1));
+    status = fold_passthrough_write_status(
+        status, i2c_passthrough_write(0xD260, (uint32_t)s_ae_config.brightness * 160u, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD227, 0, 1));
+    status = fold_passthrough_write_status(
+        status, i2c_passthrough_write(0xD2D8, s_ae_config.speed, 1));
+
+    if (s_ae_config.has_roi) {
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD228, 1, 1));
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD229, 0xFF, 1));
+        status = fold_passthrough_write_status(
+            status, i2c_passthrough_write(0xE65C, s_ae_config.roi.top, 2));
+        status = fold_passthrough_write_status(
+            status, i2c_passthrough_write(0xE65E, s_ae_config.roi.left, 2));
+        status = fold_passthrough_write_status(
+            status, i2c_passthrough_write(0xE660, s_ae_config.roi.height, 2));
+        status = fold_passthrough_write_status(
+            status, i2c_passthrough_write(0xE662, s_ae_config.roi.width, 2));
+        status = fold_passthrough_write_status(
+            status, i2c_passthrough_write(0xD22A, (uint32_t)s_ae_config.brightness * 160u, 2));
+    } else {
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD228, 0, 1));
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD229, 0, 1));
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD24C, 450, 2));
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD24E, 434, 2));
+    }
+    return status;
+}
+
+int imx500_apply_white_balance_config(void) {
+    sanitize_white_balance_config(&s_white_balance_config);
+
+    int status = 0;
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD02C, 0x0DF2, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD02E, 0x105C, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD030, 0x0188, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD032, 0x0289, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD804, 0x032A, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD806, 0x0100, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD808, 0x0100, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD80A, 0x01CC, 2));
+
+    if (s_white_balance_config.mode == IMX500_WB_MODE_AUTO) {
+        imx500_roi_t roi = s_white_balance_config.roi;
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD23C, 0, 1));
+        if (s_white_balance_config.has_roi) {
+            roi.top = (uint16_t)calc_align(roi.top, 2);
+            roi.left = (uint16_t)calc_align(roi.left, 2);
+            roi.width = (uint16_t)calc_align(roi.width, 32);
+            roi.height = (uint16_t)calc_align(roi.height, 24);
+            status = fold_passthrough_write_status(
+                status, i2c_passthrough_write(0xE664, roi.width / 16u, 1));
+            status = fold_passthrough_write_status(
+                status, i2c_passthrough_write(0xE665, roi.height / 12u, 1));
+            status = fold_passthrough_write_status(
+                status, i2c_passthrough_write(0xE670, roi.left, 2));
+            status = fold_passthrough_write_status(
+                status, i2c_passthrough_write(0xE672, roi.top, 2));
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xE674, 1, 1));
+        } else {
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xE674, 0, 1));
+        }
+    } else if (s_white_balance_config.mode == IMX500_WB_MODE_ONE_PUSH) {
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD23C, 2, 1));
+    } else if (s_white_balance_config.mode == IMX500_WB_MODE_PRESET) {
+        status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD23C, 4, 1));
+        if (s_white_balance_config.preset == IMX500_WB_PRESET_3200) {
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE20, 0x1000, 2));
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE22, 0x1000, 2));
+        } else if (s_white_balance_config.preset == IMX500_WB_PRESET_4300) {
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE20, 0x0B96, 2));
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE22, 0x17EC, 2));
+        } else if (s_white_balance_config.preset == IMX500_WB_PRESET_5600) {
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE20, 0x0C7F, 2));
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE22, 0x156B, 2));
+        } else if (s_white_balance_config.preset == IMX500_WB_PRESET_6500) {
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE20, 0x0C53, 2));
+            status = fold_passthrough_write_status(status, i2c_passthrough_write(0xDE22, 0x15D6, 2));
+        }
+    }
+    return status;
 }
 
 static int init_input_tensor_preprocess_config(void) {
@@ -2066,6 +2278,18 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("Error: invalid spi format");
         break;
     }
+
+    // isp for dnn
+    if (imx500_apply_ae_config() < 0) {
+        printf("[IMX500] apply AE config failed\n");
+    }
+    if (imx500_apply_white_balance_config() < 0) {
+        printf("[IMX500] apply white balance config failed\n");
+    }
+
+    int status = 0;
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD804, 0x0278, 2));
+    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD80A, 0x01CC, 2));
 
     return true;
 }

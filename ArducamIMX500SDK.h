@@ -185,6 +185,42 @@ typedef struct {
 	uint32_t bytes_total;
 } spi_flash_status_t;
 
+typedef struct {
+    uint16_t top;
+    uint16_t left;
+    uint16_t height;
+    uint16_t width;
+} imx500_roi_t;
+
+typedef struct {
+    uint16_t max_exposure_time_100us;
+    uint8_t max_gain_db;
+    uint8_t brightness;
+    uint8_t speed;
+    bool has_roi;
+    imx500_roi_t roi;
+} imx500_ae_config_t;
+
+typedef enum {
+    IMX500_WB_MODE_AUTO = 0,
+    IMX500_WB_MODE_ONE_PUSH = 1,
+    IMX500_WB_MODE_PRESET = 2,
+} imx500_white_balance_mode_t;
+
+typedef enum {
+    IMX500_WB_PRESET_3200 = 0,
+    IMX500_WB_PRESET_4300 = 1,
+    IMX500_WB_PRESET_5600 = 2,
+    IMX500_WB_PRESET_6500 = 3,
+} imx500_white_balance_preset_t;
+
+typedef struct {
+    imx500_white_balance_mode_t mode;
+    imx500_white_balance_preset_t preset;
+    bool has_roi;
+    imx500_roi_t roi;
+} imx500_white_balance_config_t;
+
 #ifdef __cplusplus
 #include "ApParams.h"
 extern "C" {
@@ -221,6 +257,12 @@ void dump_network_info_list(void);
 void get_fw_ver(uint32_t* v);
 void get_pid(uint32_t* v);
 bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
+void imx500_get_default_ae_config(imx500_ae_config_t *config);
+void imx500_get_default_white_balance_config(imx500_white_balance_config_t *config);
+int imx500_set_ae_config(const imx500_ae_config_t *config);
+int imx500_apply_ae_config(void);
+int imx500_set_white_balance_config(const imx500_white_balance_config_t *config);
+int imx500_apply_white_balance_config(void);
 int sensor_i2c_write_16_8(uint16_t reg_addr, uint8_t data);
 int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data);
 int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data);
