@@ -1,0 +1,17 @@
+version: "2.0.1"
+description: "Espressif camera sensor drivers, it is recommended to use with esp_video"
+targets:
+  - esp32p4
+  - esp32s3
+  - esp32c3
+  - esp32c5
+  - esp32c6
+  - esp32c61
+url: https://github.com/espressif/esp-video-components/tree/master/esp_cam_sensor
+repository: https://github.com/espressif/esp-video-components.git
+issues: https://github.com/espressif/esp-video-components/issues
+dependencies:
+    idf: ">=5.3"
+    espressif/esp_sccb_intf:
+      version: ">=0.0.5"
+    espressif/cmake_utilities: "0.*"
