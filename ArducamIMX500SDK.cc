@@ -2388,10 +2388,10 @@ int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data) {
 }
 
 int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data) {
-    if (sensor_i2c_write_16_8(reg_addr, (uint8_t)(data & 0xFFu)) < 0) {
+    if (sensor_i2c_write_16_8(reg_addr, (uint8_t)((data >> 8) & 0xFFu)) < 0) {
         return -1;
     }
-    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)((data >> 8) & 0xFFu)) < 0) {
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)(data & 0xFFu)) < 0) {
         return -1;
     }
     return 0;
@@ -2401,29 +2401,29 @@ int sensor_i2c_read_16_16(uint16_t reg_addr, uint16_t *data) {
     if (!data) {
         return -1;
     }
-    uint8_t b0 = 0;
-    uint8_t b1 = 0;
-    if (sensor_i2c_read_16_8(reg_addr, &b0) < 0) {
+    uint8_t msb = 0;
+    uint8_t lsb = 0;
+    if (sensor_i2c_read_16_8(reg_addr, &msb) < 0) {
         return -1;
     }
-    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &b1) < 0) {
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &lsb) < 0) {
         return -1;
     }
-    *data = (uint16_t)((uint16_t)b0 | ((uint16_t)b1 << 8));
+    *data = (uint16_t)(((uint16_t)msb << 8) | (uint16_t)lsb);
     return 0;
 }
 
 int sensor_i2c_write_16_32(uint16_t reg_addr, uint32_t data) {
-    if (sensor_i2c_write_16_8(reg_addr, (uint8_t)(data & 0xFFu)) < 0) {
+    if (sensor_i2c_write_16_8(reg_addr, (uint8_t)((data >> 24) & 0xFFu)) < 0) {
         return -1;
     }
-    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)((data >> 8) & 0xFFu)) < 0) {
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)((data >> 16) & 0xFFu)) < 0) {
         return -1;
     }
-    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 2u), (uint8_t)((data >> 16) & 0xFFu)) < 0) {
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 2u), (uint8_t)((data >> 8) & 0xFFu)) < 0) {
         return -1;
     }
-    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 3u), (uint8_t)((data >> 24) & 0xFFu)) < 0) {
+    if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 3u), (uint8_t)(data & 0xFFu)) < 0) {
         return -1;
     }
     return 0;
@@ -2433,26 +2433,26 @@ int sensor_i2c_read_16_32(uint16_t reg_addr, uint32_t *data) {
     if (!data) {
         return -1;
     }
-    uint8_t b0 = 0;
-    uint8_t b1 = 0;
-    uint8_t b2 = 0;
     uint8_t b3 = 0;
-    if (sensor_i2c_read_16_8(reg_addr, &b0) < 0) {
+    uint8_t b2 = 0;
+    uint8_t b1 = 0;
+    uint8_t b0 = 0;
+    if (sensor_i2c_read_16_8(reg_addr, &b3) < 0) {
         return -1;
     }
-    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &b1) < 0) {
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &b2) < 0) {
         return -1;
     }
-    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 2u), &b2) < 0) {
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 2u), &b1) < 0) {
         return -1;
     }
-    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 3u), &b3) < 0) {
+    if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 3u), &b0) < 0) {
         return -1;
     }
-    *data = ((uint32_t)b0) |
-            ((uint32_t)b1 << 8) |
+    *data = ((uint32_t)b3 << 24) |
             ((uint32_t)b2 << 16) |
-            ((uint32_t)b3 << 24);
+            ((uint32_t)b1 << 8) |
+            ((uint32_t)b0);
     return 0;
 }
 
