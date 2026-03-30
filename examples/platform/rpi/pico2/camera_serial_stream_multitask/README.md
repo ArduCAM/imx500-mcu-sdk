@@ -94,10 +94,7 @@ Useful options:
 
 To program a model onto the IMX500 camera module:
 
-1. Hold the `Mode` button on the camera module, then connect it to the host PC over USB Type-C. A removable drive named `IMX500` should appear.
-2. Drag the target `.fpk` file onto the `IMX500` drive and wait until the green LED on the back of the camera module stays on.
-3. Drag the matching `network_info.txt` for that `.fpk` onto the same `IMX500` drive and wait until the red LED on the back of the camera module stays on.
-4. Wait about 3 seconds. If the red and green LEDs blink twice and then turn off, the model update completed successfully.
-5. After a successful update, the camera module reboots automatically.
+1. Hold the `Mode` button on the camera module, then connect it to the host PC over USB Type-C.
+2. Run command `python tools/imx500_usb_flash.py --model <selected_network.fpk> --network-info <selected_network_info.txt>`
 
-The `network_info.txt` file must match the `.fpk` being programmed, and the programmed model must also match the host-side `--task` selection.
+The programmed model must also match the host-side `--task` selection.
