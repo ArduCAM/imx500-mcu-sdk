@@ -25,9 +25,10 @@ from camera_serial_stream_multitask.common.renderers import (
 from camera_serial_stream_multitask.common.spi_output_adapter import adapt_spi_jpeg_metadata_to_networks
 
 MODEL_ROOT = REPO_ROOT / "tools" / "assets" / "models"
+LABEL_ROOT = REPO_ROOT / "labels"
 
-CLASSIFICATION_RENDERER = ClassificationRenderer()
-DETECTION_RENDERER = DetectionRenderer()
+CLASSIFICATION_RENDERER = ClassificationRenderer(str(LABEL_ROOT / "imagenet_labels.txt"))
+DETECTION_RENDERER = DetectionRenderer(str(LABEL_ROOT / "coco_ssd.txt"))
 POSE_RENDERER = PoseRenderer()
 SEGMENTATION_RENDERER = SegmentationRenderer()
 

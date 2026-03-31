@@ -7,6 +7,7 @@ import numpy as np
 
 from .metadata_parser import Network
 
+
 def _load_labels(label_file: str | None) -> list[str]:
     if not label_file:
         return []
@@ -19,6 +20,115 @@ def _load_labels(label_file: str | None) -> list[str]:
             parts = line.split(":", 1)
             labels.append(parts[1].strip() if len(parts) == 2 else line)
     return labels
+
+
+def _short_label(label: str) -> str:
+    label = label.strip()
+    if not label or label == "-":
+        return ""
+    primary = label.split(",", 1)[0].strip()
+    return primary or label
+
+
+def _format_score_percent(score: float) -> str:
+    value = float(score)
+    if not np.isfinite(value):
+        value = 0.0
+    if value <= 1.0 + 1e-6:
+        value *= 100.0
+    return f"{value:.1f}%"
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3].rstrip()}..."
+
+
+def _draw_info_panel(
+    image: np.ndarray,
+    lines: list[tuple[str, tuple[int, int, int]]],
+    *,
+    origin: tuple[int, int],
+    font_scale: float,
+    thickness: int,
+    padding: int = 10,
+    line_gap: int = 8,
+    panel_color: tuple[int, int, int] = (24, 24, 24),
+    panel_alpha: float = 0.72,
+) -> None:
+    if not lines:
+        return
+
+    metrics = [
+        cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+        for text, _color in lines
+    ]
+    text_width = max(size[0][0] for size in metrics)
+    text_height = sum(size[0][1] for size in metrics)
+    baseline = max(size[1] for size in metrics)
+    total_height = text_height + line_gap * (len(lines) - 1) + baseline
+
+    x, y = origin
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(image.shape[1] - 1, x1 + text_width + padding * 2)
+    y2 = min(image.shape[0] - 1, y1 + total_height + padding * 2)
+
+    overlay = image.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), panel_color, thickness=-1)
+    cv2.addWeighted(overlay, panel_alpha, image, 1.0 - panel_alpha, 0.0, image)
+
+    cursor_y = y1 + padding
+    for (text, color), (size, text_baseline) in zip(lines, metrics):
+        cursor_y += size[1]
+        cv2.putText(
+            image,
+            text,
+            (x1 + padding, cursor_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+        cursor_y += line_gap + text_baseline
+
+
+def _draw_text_tag(
+    image: np.ndarray,
+    text: str,
+    *,
+    anchor: tuple[int, int],
+    font_scale: float,
+    thickness: int,
+    bg_color: tuple[int, int, int],
+) -> None:
+    (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+    pad_x = max(6, int(font_scale * 10))
+    pad_y = max(5, int(font_scale * 8))
+    x, y = anchor
+
+    x1 = max(0, x)
+    y2 = max(text_h + baseline + pad_y * 2, y)
+    y1 = max(0, y2 - text_h - baseline - pad_y * 2)
+    x2 = min(image.shape[1] - 1, x1 + text_w + pad_x * 2)
+    y2 = min(image.shape[0] - 1, y2)
+
+    luminance = 0.299 * bg_color[2] + 0.587 * bg_color[1] + 0.114 * bg_color[0]
+    text_color = (16, 16, 16) if luminance > 150 else (245, 245, 245)
+
+    cv2.rectangle(image, (x1, y1), (x2, y2), bg_color, thickness=-1)
+    cv2.putText(
+        image,
+        text,
+        (x1 + pad_x, y2 - baseline - pad_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        text_color,
+        thickness,
+        cv2.LINE_AA,
+    )
 
 
 class _RendererBase:
@@ -63,23 +173,37 @@ class ClassificationRenderer(_RendererBase):
         top_indices = top_indices[np.argsort(-scores[top_indices])]
 
         annotated = image_bgr.copy()
-        font_scale = max(0.6, min(annotated.shape[:2]) / 720.0)
+        font_scale = max(0.42, min(annotated.shape[:2]) / 1280.0)
         thickness = max(1, int(font_scale * 2))
-        y = 30
+        label_offset = 0
+        if len(self.labels) == scores.size + 1 and self.labels[0].strip().lower() == "background":
+            label_offset = 1
+
+        lines: list[tuple[str, tuple[int, int, int]]] = []
         for rank, class_id in enumerate(top_indices, start=1):
-            label = self.labels[class_id] if class_id < len(self.labels) else f"Class {class_id}"
-            text = f"Top{rank}: {label} {scores[class_id]:.1f}%"
-            cv2.putText(
-                annotated,
-                text,
-                (20, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale,
-                (0, 255, 0),
-                thickness,
-                cv2.LINE_AA,
-            )
-            y += int(36 * font_scale)
+            label_index = int(class_id) + label_offset
+            label = self.labels[label_index] if label_index < len(self.labels) else f"Class {class_id}"
+            label = _short_label(label) or f"Class {class_id}"
+            score_text = _format_score_percent(scores[class_id])
+            if rank == 1:
+                text = f"Top1 {_truncate_text(label, 20)} {score_text}"
+                color = (120, 255, 120)
+            else:
+                text = f"{rank}. {_truncate_text(label, 16)} {score_text}"
+                color = (230, 230, 230)
+            lines.append((text, color))
+
+        _draw_info_panel(
+            annotated,
+            lines,
+            origin=(10, 10),
+            font_scale=font_scale,
+            thickness=thickness,
+            padding=6,
+            line_gap=4,
+            panel_color=(20, 20, 20),
+            panel_alpha=0.52,
+        )
         return self._finalize_render(annotated, show_img=show_img, show_fps=show_fps)
 
 
@@ -101,7 +225,7 @@ class DetectionRenderer(_RendererBase):
         network = networks[0]
         boxes = np.asarray(network.output_tensors[0].data, dtype=np.float32)
         scores = np.asarray(network.output_tensors[1].data, dtype=np.float32).reshape(-1)
-        class_ids = np.asarray(network.output_tensors[2].data, dtype=np.int32).reshape(-1)
+        class_ids = np.rint(np.asarray(network.output_tensors[2].data, dtype=np.float32).reshape(-1)).astype(np.int32)
         valid_count = int(np.asarray(network.output_tensors[3].data).reshape(-1)[0])
 
         boxes = boxes[:valid_count].copy()
@@ -111,6 +235,8 @@ class DetectionRenderer(_RendererBase):
         boxes = boxes[keep]
         class_ids = class_ids[keep]
         scores = scores[keep]
+        if self.labels and class_ids.size and np.min(class_ids) >= 1 and np.max(class_ids) >= len(self.labels):
+            class_ids = class_ids - 1
 
         input_h, input_w = network.input_tensors[0].data.shape[:2]
         image_h, image_w = image_bgr.shape[:2]
@@ -122,24 +248,48 @@ class DetectionRenderer(_RendererBase):
         boxes[:, [0, 2]] *= image_h / input_h
 
         annotated = image_bgr.copy()
-        font_scale = max(0.5, min(annotated.shape[:2]) / 900.0)
+        font_scale = max(0.5, min(annotated.shape[:2]) / 960.0)
         thickness = max(1, int(font_scale * 2))
-        for box, score, class_id in zip(boxes.astype(np.int32), scores, class_ids):
+        order = np.argsort(-scores)
+        boxes = boxes[order].astype(np.int32)
+        class_ids = class_ids[order]
+        scores = scores[order]
+
+        if scores.size:
+            _draw_info_panel(
+                annotated,
+                [(f"Detections > {_format_score_percent(score_thr)}: {scores.size}", (255, 255, 255))],
+                origin=(16, 16),
+                font_scale=max(0.45, font_scale * 0.9),
+                thickness=thickness,
+                padding=8,
+                line_gap=4,
+                panel_color=(18, 18, 18),
+                panel_alpha=0.6,
+            )
+
+        for box, score, class_id in zip(boxes, scores, class_ids):
             y1, x1, y2, x2 = box
+            x1 = int(np.clip(x1, 0, image_w - 1))
+            x2 = int(np.clip(x2, 0, image_w - 1))
+            y1 = int(np.clip(y1, 0, image_h - 1))
+            y2 = int(np.clip(y2, 0, image_h - 1))
+            if x2 <= x1 or y2 <= y1:
+                continue
             color = self.colors[int(class_id) % len(self.colors)].tolist()
             color = tuple(int(channel) for channel in color)
-            label = self.labels[class_id] if class_id < len(self.labels) else f"Class {class_id}"
-            caption = f"{label} {score * 100:.0f}%"
+            label = self.labels[class_id] if 0 <= class_id < len(self.labels) else f"Class {class_id}"
+            label = _short_label(label) or f"Class {class_id}"
+            caption = _truncate_text(f"{label} {_format_score_percent(score)}", 30)
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
-            cv2.putText(
+            tag_bottom = y1 - 4 if y1 > 28 else min(image_h - 1, y1 + int(28 * font_scale) + 10)
+            _draw_text_tag(
                 annotated,
                 caption,
-                (x1, max(20, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale,
-                color,
-                thickness,
-                cv2.LINE_AA,
+                anchor=(x1, tag_bottom),
+                font_scale=font_scale,
+                thickness=thickness,
+                bg_color=color,
             )
         return self._finalize_render(annotated, show_img=show_img, show_fps=show_fps)
 
