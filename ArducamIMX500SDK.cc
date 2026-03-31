@@ -2234,8 +2234,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
 
     uint32_t val;
     imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
-    imx500_res_read(IMX500_COMMAND_SENSOR_MIPI_COMMON_RAW10_2LANES_CONFIG, &val, 500);
-    imx500_res_read(IMX500_COMMAND_SENSOR_MIPI_1024x600_2LANES_CONFIG, &val, 500);
+    imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
     switch (mipi_format)
     {
     case MIPI_DATA_IMAGE:
@@ -2278,18 +2277,6 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("Error: invalid spi format");
         break;
     }
-
-    // isp for dnn
-    if (imx500_apply_ae_config() < 0) {
-        printf("[IMX500] apply AE config failed\n");
-    }
-    if (imx500_apply_white_balance_config() < 0) {
-        printf("[IMX500] apply white balance config failed\n");
-    }
-
-    int status = 0;
-    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD804, 0x0278, 2));
-    status = fold_passthrough_write_status(status, i2c_passthrough_write(0xD80A, 0x01CC, 2));
 
     return true;
 }
