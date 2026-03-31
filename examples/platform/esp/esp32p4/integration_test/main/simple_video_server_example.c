@@ -34,6 +34,7 @@
 #include "app_drawing_utils.h"
 #include "app_lcd.h"
 #include "app_video.h"
+#include "imx500_sdk_integration_test.h"
 
 #define EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER  CONFIG_EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER
 
@@ -887,8 +888,18 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
-    /*For camera devices that require the host to provide XCLK, the video_init() must be called immediately after the device is restarted,
-    otherwise the camera device may not be able to start due to the lack of the main clock.*/
+    /* For camera devices that require the host to provide XCLK, bring up the
+     * camera control path immediately after restart. This keeps the SDK
+     * integration test ahead of esp_video sensor initialization. */
+    ESP_ERROR_CHECK(example_video_prepare_camera_control());
+
+#if CONFIG_EXAMPLE_ENABLE_IMX500_SDK_TEST
+    ret = imx500_sdk_integration_test_run();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "IMX500 SDK benchmark failed (%s), continue with the original example flow", esp_err_to_name(ret));
+    }
+#endif
+
     ESP_ERROR_CHECK(example_video_init());
 
 #if CONFIG_EXAMPLE_ENABLE_LCD_DISPLAY

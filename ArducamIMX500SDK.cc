@@ -1,6 +1,7 @@
 #include "ArducamIMX500SDK.h"
 #include "ArducamIMX500SDK.h"
 #include <algorithm>
+#include <inttypes.h>
 #include <vector>
 #include <string>
 #include "stdio.h"
@@ -166,7 +167,7 @@ static std::vector<uint8_t> byteswap_u32_words(const uint8_t *src, uint32_t size
     return out;
 }
 
-static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uint32_t size) {
+[[maybe_unused]] static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uint32_t size) {
     std::vector<uint8_t> out;
     if (!src || size == 0) {
         return out;
@@ -181,7 +182,7 @@ static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uin
     return out;
 }
 
-static bool sdk_i2c_write_reg(uint16_t addr, uint32_t val) {
+[[maybe_unused]] static bool sdk_i2c_write_reg(uint16_t addr, uint32_t val) {
     if (!g_i2c_driver.write) {
         return false;
     }
@@ -696,7 +697,7 @@ int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len) {
         return -1;
     }
     if (dnnHeaderSize > MAX_DNN_HEADER_SIZE) {
-        printf("[NW_INFO] Invalid DNN Header Size %u\n", dnnHeaderSize);
+        printf("[NW_INFO] Invalid DNN Header Size %d\n", dnnHeaderSize);
         return -1;
     }
     if (s_num_of_networks == 0 || s_num_of_networks > MAX_NUM_OF_NETWORKS) {
@@ -1095,7 +1096,7 @@ int imx500_apply_white_balance_config(void) {
     return status;
 }
 
-static int init_input_tensor_preprocess_config(void) {
+[[maybe_unused]] static int init_input_tensor_preprocess_config(void) {
     if (s_num_of_networks == 0) {
         return 0;
     }
@@ -1386,8 +1387,6 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
     const auto* bbox_tensor = output_tensors->Get(0);
     const auto* score_tensor = output_tensors->Get(1);
     const auto* class_tensor = output_tensors->Get(2);
-    const auto* detect_num_tensor = output_tensors->Get(3);
-
     const auto* bbox_data = reinterpret_cast<const int16_t*>(output_tensor_ptrs[0]);
     const auto* score_data = reinterpret_cast<const uint8_t*>(output_tensor_ptrs[1]);
     const auto* class_data = reinterpret_cast<const int16_t*>(output_tensor_ptrs[2]);
@@ -1606,7 +1605,7 @@ void imx500_dump_basic_info()
 
     for (size_t i = 0; i < sizeof(cmd_list) / sizeof(cmd_list[0]); i++) {
         int ret = imx500_res_read(cmd_list[i].cmd, &val, 10);
-        printf("%-22s : 0x%08X (%u) ec: %d\n", cmd_list[i].name, val, val, ret);
+        printf("%-22s : 0x%08" PRIX32 " (%" PRIu32 ") ec: %d\n", cmd_list[i].name, val, val, ret);
     }
     uint32_t dev_id[4];
     imx500_res_read(IMX500_COMMAND_GET_SENSOR_DEVICE_ID_1, &dev_id[0], 10);
@@ -1618,10 +1617,10 @@ void imx500_dump_basic_info()
         uint32_t v = dev_id[i];
 
         printf("%02X%02X%02X%02X",
-               (v >> 24) & 0xFF,
-               (v >> 16) & 0xFF,
-               (v >>  8) & 0xFF,
-               (v >>  0) & 0xFF);
+               (unsigned int)((v >> 24) & 0xFFu),
+               (unsigned int)((v >> 16) & 0xFFu),
+               (unsigned int)((v >>  8) & 0xFFu),
+               (unsigned int)((v >>  0) & 0xFFu));
 
         if (i != 3) {
             printf("-");
@@ -1642,7 +1641,7 @@ bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m) {
         return false;
     }
     while (elapsed < timeout_ms) {
-        printf("wait for imx500 module spi data forward mode switching %d ... \n", m);
+        printf("wait for imx500 module spi data forward mode switching %" PRIu32 " ... \n", t_m);
         g_i2c_driver.slp_ms(poll_interval_ms);
         elapsed += poll_interval_ms;
         ret = g_i2c_driver.read(METADATA_SPI_FORWARD_MODE_REG, &c_m, 4);
@@ -1653,11 +1652,11 @@ bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m) {
         if (c_m == t_m) break;
     }
     if (c_m != t_m) {
-        printf("switch spi data forward mode timeout: target=%u current=%u\n",
-               (unsigned)t_m, (unsigned)c_m);
+        printf("switch spi data forward mode timeout: target=%" PRIu32 " current=%" PRIu32 "\n",
+               t_m, c_m);
         return false;
     }
-    printf("wait for imx500 module spi data forward mode: %d switch completed\n", c_m);
+    printf("wait for imx500 module spi data forward mode: %" PRIu32 " switch completed\n", c_m);
     return true;
 }
 
@@ -1999,14 +1998,16 @@ static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
 
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
     const uint32_t wait_short_ms = 100;
-    const uint32_t wait_dd_reply_ms = 3000;
+    const uint32_t wait_dd_reply_ms = 5000;
     uint32_t val = 0;
+    int ec = 0;
     if (!fw || size == 0u) {
         printf("load_imx500_fw invalid input\n");
         return -1;
     }
-    if (imx500_res_read(IMX500_COMMAND_PREPARE_DOWNLOAD_FIRMWARE, &val, 500) != IMX500_CMD_OK) {
-        printf("prepare download firmware failed\n");
+    ec = imx500_res_read(IMX500_COMMAND_PREPARE_DOWNLOAD_FIRMWARE, &val, 500);
+    if (ec != IMX500_CMD_OK) {
+        printf("prepare download firmware failed (ec: %d)\n", ec);
         return -1;
     }
     if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, wait_short_ms) != IMX500_CMD_OK) {
@@ -2014,7 +2015,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     uint32_t DD_CMD_REPLY_STS_CNT = val;
-    printf("DD_CMD_REPLY_STS_CNT = %x\n", DD_CMD_REPLY_STS_CNT);
+    printf("DD_CMD_REPLY_STS_CNT = %" PRIx32 "\n", DD_CMD_REPLY_STS_CNT);
 
     uint32_t division = size / IMX500_MAX_BUFFER;
     if (imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_1, &fw_type, wait_short_ms) != IMX500_CMD_OK ||
@@ -2024,7 +2025,8 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         printf("before download firmware setup failed\n");
         return -1;
     }
-    if (imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, wait_dd_reply_ms) != IMX500_CMD_OK) {
+    ec = imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, wait_dd_reply_ms);
+    if (ec != IMX500_CMD_OK) {
         printf("wait DD reply (ready) failed\n");
         return -1;
     }
@@ -2034,7 +2036,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     DD_CMD_REPLY_STS_CNT = val;
-    printf("DD_CMD_REPLY_STS_CNT = %x\n", DD_CMD_REPLY_STS_CNT);
+    printf("DD_CMD_REPLY_STS_CNT = %" PRIx32 "\n", DD_CMD_REPLY_STS_CNT);
     g_i2c_driver.slp_ms(10);
 
     if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS, &val, wait_short_ms) != IMX500_CMD_OK) {
@@ -2042,7 +2044,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     uint32_t DD_CMD_REPLY_STS = val;
-    printf("DD_CMD_REPLY_STS = %x: %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
+    printf("DD_CMD_REPLY_STS = %" PRIx32 ": %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
     if (DD_CMD_REPLY_STS != 0x00) {
         printf("DD_CMD_REPLY_STS is not ready: %s\n", get_imx500_cmd_status(DD_CMD_REPLY_STS));
         return -1;
@@ -2074,7 +2076,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     DD_CMD_REPLY_STS = val;
-    printf("DD_CMD_REPLY_STS = %x: %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
+    printf("DD_CMD_REPLY_STS = %" PRIx32 ": %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
     if (DD_CMD_REPLY_STS != 0x01) {
         printf("DD_CMD_REPLY_STS is not done: %s\n", get_imx500_cmd_status(DD_CMD_REPLY_STS));
         return -1;
@@ -2090,32 +2092,32 @@ void stream_on() {
 
 int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax) {
     if (xmin > DWP_AP_VC_HSIZE) {
-        printf("xmin should be in range [0, %u], but got %u\n", DWP_AP_VC_HSIZE, xmin);
+        printf("xmin should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_HSIZE, xmin);
         return -1;
     }
 
     if (xmax > DWP_AP_VC_HSIZE) {
-        printf("xmax should be in range [0, %u], but got %u\n", DWP_AP_VC_HSIZE, xmax);
+        printf("xmax should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_HSIZE, xmax);
         return -1;
     }
 
     if (ymin > DWP_AP_VC_VSIZE) {
-        printf("ymin should be in range [0, %u], but got %u\n", DWP_AP_VC_VSIZE, ymin);
+        printf("ymin should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_VSIZE, ymin);
         return -1;
     }
 
     if (ymax > DWP_AP_VC_VSIZE) {
-        printf("ymax should be in range [0, %u], but got %u\n", DWP_AP_VC_VSIZE, ymax);
+        printf("ymax should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_VSIZE, ymax);
         return -1;
     }
 
     if (xmin > xmax) {
-        printf("xmin should be less than or equal to xmax, but got %u > %u\n", xmin, xmax);
+        printf("xmin should be less than or equal to xmax, but got %" PRIu32 " > %" PRIu32 "\n", xmin, xmax);
         return -1;
     }
 
     if (ymin > ymax) {
-        printf("ymin should be less than or equal to ymax, but got %u > %u\n", ymin, ymax);
+        printf("ymin should be less than or equal to ymax, but got %" PRIu32 " > %" PRIu32 "\n", ymin, ymax);
         return -1;
     }
 
@@ -2127,7 +2129,6 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
   // dump_s_nw_info_list();
   // init_input_tensor_preprocess_config();
 
-  uint32_t r_buff_offset = 0;
   const sc_dnn_nw_info_t* net = &network_info[0];
 
   int input_tensor_data_size =
@@ -2218,7 +2219,10 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         const uint32_t load_nn_timeout_ms = 20000;
         const uint32_t load_nn_poll_ms = 500;
         uint32_t load_nn_elapsed = 0;
-        int ret = g_i2c_driver.write(LOAD_MODEL_FROM_FLASH, 1, 4);
+        if (g_i2c_driver.write(LOAD_MODEL_FROM_FLASH, 1, 4) < 0) {
+            printf("request load model from flash failed\n");
+            return false;
+        }
         while (load_nn_elapsed < load_nn_timeout_ms) {
             int ret = g_i2c_driver.read(BOOT_STATUS_REG, &imx500_boot_status, 4);
             if (ret < 0) {
@@ -2287,7 +2291,7 @@ uint32_t get_metadata_size(void) {
         printf("Error: Failed to read METADATA_SIZE_REG\n");
         return 0;
     }
-    printf("data_size: %u\n", data_size);
+    printf("data_size: %" PRIu32 "\n", data_size);
     return data_size;
 }
 

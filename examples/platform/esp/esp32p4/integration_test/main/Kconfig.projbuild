@@ -95,4 +95,67 @@ menu "Example Configuration"
                 Height of the crop region in pixels.
                 Must be greater than 0 and not exceed the sensor output height.
     endif
+
+    menu "IMX500 MCU SDK Integration Test"
+        config EXAMPLE_ENABLE_IMX500_SDK_TEST
+            bool "Enable IMX500 MCU SDK benchmark"
+            default y
+            help
+                Runs the Arducam IMX500 MCU SDK benchmark before the normal ESP
+                video example continues. Errors are logged and do not stop the
+                original example flow.
+
+        if EXAMPLE_ENABLE_IMX500_SDK_TEST
+            choice EXAMPLE_IMX500_SDK_BOOT_MODE
+                prompt "IMX500 SDK boot mode"
+                default EXAMPLE_IMX500_SDK_BOOT_MODE_DIRECT
+                help
+                    DIRECT loads the bundled model over SPI at startup.
+                    FLASH first programs the model and network_info into the
+                    module flash, then boots from flash.
+
+                config EXAMPLE_IMX500_SDK_BOOT_MODE_DIRECT
+                    bool "Direct boot"
+
+                config EXAMPLE_IMX500_SDK_BOOT_MODE_FLASH
+                    bool "Flash boot"
+            endchoice
+
+            config EXAMPLE_IMX500_SDK_PRE_INJECT_FRAMES
+                int "Frames before data injection"
+                default 30
+                range 1 1000
+
+            config EXAMPLE_IMX500_SDK_POST_INJECT_FRAMES
+                int "Frames after data injection"
+                default 30
+                range 1 1000
+
+            config EXAMPLE_IMX500_SDK_MAX_FRAME_SIZE
+                int "Max metadata frame size"
+                default 10240
+                range 1024 65536
+
+            config EXAMPLE_IMX500_SDK_SPI_CLOCK_HZ
+                int "SDK SPI clock (Hz)"
+                default 5000000
+                range 1000000 40000000
+
+            config EXAMPLE_IMX500_SDK_SPI_SCK_PIN
+                int "SDK SPI SCK GPIO"
+                default 5
+
+            config EXAMPLE_IMX500_SDK_SPI_RX_PIN
+                int "SDK SPI RX GPIO"
+                default 3
+
+            config EXAMPLE_IMX500_SDK_SPI_TX_PIN
+                int "SDK SPI TX GPIO"
+                default 2
+
+            config EXAMPLE_IMX500_SDK_SPI_CS_PIN
+                int "SDK SPI CS GPIO"
+                default 4
+        endif
+    endmenu
 endmenu

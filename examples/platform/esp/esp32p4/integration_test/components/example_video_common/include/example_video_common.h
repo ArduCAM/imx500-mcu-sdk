@@ -7,6 +7,7 @@
 #pragma once
 
 #include "linux/videodev2.h"
+#include "driver/i2c_master.h"
 #include "esp_video_device.h"
 #include "esp_video_init.h"
 #include "esp_video_ioctl.h"
@@ -51,11 +52,28 @@ typedef struct example_encoder_config {
 } example_encoder_config_t;
 
 /**
+ * @brief Prepare the camera control path only.
+ *
+ * This starts XCLK and creates the shared I2C bus used for camera control,
+ * but does not initialize the esp_video sensor/video pipeline.
+ *
+ * @return ESP_OK on success or other value on failure
+ */
+esp_err_t example_video_prepare_camera_control(void);
+
+/**
  * @brief Initialize the video system
  *
  * @return ESP_OK on success or other value on failure
  */
 esp_err_t example_video_init(void);
+
+/**
+ * @brief Get the shared I2C master bus used for camera control.
+ *
+ * @return I2C master bus handle, or NULL if camera control has not been prepared yet.
+ */
+i2c_master_bus_handle_t example_video_get_i2c_bus_handle(void);
 
 /**
  * @brief Deinitialize the video system
