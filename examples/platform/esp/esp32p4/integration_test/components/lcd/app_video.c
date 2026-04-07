@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include <inttypes.h>
 #include <string.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -37,6 +38,7 @@ typedef struct {
     app_video_frame_operation_cb_t user_camera_video_frame_operation_cb;
     TaskHandle_t video_stream_task_handle;
     uint8_t video_task_core_id;
+    int video_fd;
     bool video_task_delete;
     void *video_task_user_data;
 } app_video_t;
@@ -88,7 +90,7 @@ int app_video_open(char *dev, video_fmt_t init_fmt)
     struct v4l2_ext_control control[1];
 #endif
 
-    int fd = open(dev, O_RDONLY);
+    int fd = open(dev, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
         ESP_LOGE(TAG, "Open video failed");
         return -1;
@@ -257,15 +259,27 @@ uint32_t app_video_get_buf_size(void)
 
 static inline esp_err_t video_receive_video_frame(int video_fd)
 {
+    static uint32_t wait_poll_count = 0;
     memset(&app_camera_video.v4l2_buf, 0, sizeof(app_camera_video.v4l2_buf));
     app_camera_video.v4l2_buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     app_camera_video.v4l2_buf.memory = app_camera_video.camera_mem_mode;
 
     int res = ioctl(video_fd, VIDIOC_DQBUF, &(app_camera_video.v4l2_buf));
     if (res != 0) {
-        ESP_LOGE(TAG, "failed to receive video frame");
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (wait_poll_count == 0) {
+                ESP_LOGI(TAG, "display task waiting for first CSI frame");
+            } else if ((wait_poll_count % 120) == 0) {
+                ESP_LOGI(TAG, "waiting for video frame, fd=%d polls=%" PRIu32, video_fd, wait_poll_count);
+            }
+            wait_poll_count++;
+            vTaskDelay(pdMS_TO_TICKS(5));
+            return ESP_ERR_NOT_FOUND;
+        }
+        ESP_LOGE(TAG, "failed to receive video frame, fd=%d errno=%d", video_fd, errno);
         goto errout;
     }
+    wait_poll_count = 0;
 
     return ESP_OK;
 
@@ -344,12 +358,31 @@ errout:
 
 static void video_stream_task(void *arg)
 {
-    int video_fd = *((int *)arg);
+    int video_fd = app_camera_video.video_fd;
+    uint32_t frame_count = 0;
+    ESP_LOGI(TAG, "video stream task started: fd=%d core=%d mem_mode=%d size=%" PRIu32 " x %" PRIu32 " buf_size=%u",
+             video_fd,
+             xPortGetCoreID(),
+             app_camera_video.camera_mem_mode,
+             app_camera_video.camera_buf_hes,
+             app_camera_video.camera_buf_ves,
+             (unsigned)app_camera_video.camera_buf_size);
 
     while (1) {
-        ESP_ERROR_CHECK(video_receive_video_frame(video_fd));
+        esp_err_t ret = video_receive_video_frame(video_fd);
+        if (ret == ESP_ERR_NOT_FOUND) {
+            continue;
+        }
+        ESP_ERROR_CHECK(ret);
 
         video_operation_video_frame(video_fd);
+        if (frame_count < 5 || (frame_count % 60) == 0) {
+            ESP_LOGI(TAG, "video stream task frame=%" PRIu32 " index=%u bytes=%u",
+                     frame_count,
+                     (unsigned)app_camera_video.v4l2_buf.index,
+                     (unsigned)app_camera_video.v4l2_buf.bytesused);
+        }
+        frame_count++;
 
         ESP_ERROR_CHECK(video_free_video_frame(video_fd));
 
@@ -366,10 +399,11 @@ esp_err_t app_video_stream_task_start(int video_fd, int core_id, void *user_data
 {
     app_camera_video.video_task_core_id = core_id;
     app_camera_video.video_task_user_data = user_data;
+    app_camera_video.video_fd = video_fd;
 
     video_stream_start(video_fd);
 
-    BaseType_t result = xTaskCreatePinnedToCore(video_stream_task, "video stream task", VIDEO_TASK_STACK_SIZE, &video_fd, VIDEO_TASK_PRIORITY, &app_camera_video.video_stream_task_handle, core_id);
+    BaseType_t result = xTaskCreatePinnedToCore(video_stream_task, "video stream task", VIDEO_TASK_STACK_SIZE, NULL, VIDEO_TASK_PRIORITY, &app_camera_video.video_stream_task_handle, core_id);
 
     if (result != pdPASS) {
         ESP_LOGE(TAG, "failed to create video stream task");

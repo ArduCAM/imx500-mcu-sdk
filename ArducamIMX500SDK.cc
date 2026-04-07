@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <vector>
 #include <string>
+#include "flatbuffers/flatbuffers.h"
 #include "stdio.h"
 #include "string.h"
 
@@ -299,17 +300,355 @@ void imx500_print_header(const IMX500OutputHeader *h)
     printf("}\n");
 }
 
-void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header) {
-    const IMX500OutputHeader *data_ = (const IMX500OutputHeader *)data;
-    memcpy(header, data_, sizeof(IMX500OutputHeader));
-    // imx500_print_header(header); // for debug
+extern "C" void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header) {
+    if (!data || !header) {
+        return;
+    }
+
+    header->valid_flag = data[0];
+    header->frame_count = data[1];
+    header->max_length_of_line = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+    header->size_of_ap_parameter = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+    header->network_ordinal = (uint16_t)data[6] | ((uint16_t)data[7] << 8);
+    header->indicator = data[8];
+}
+
+static uint32_t imx500_align_up_u32(uint32_t value, uint32_t base)
+{
+    return (value + base - 1u) / base * base;
+}
+
+static uint32_t imx500_calculate_jpeg_aligned_size(uint32_t jpeg_size)
+{
+    return MAX(4096u, imx500_align_up_u32(jpeg_size + 3u, 1024u));
+}
+
+static void imx500_copy_fb_string(char *dst, size_t dst_size, const flatbuffers::String *src)
+{
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!src) {
+        return;
+    }
+    size_t copy_len = std::min<size_t>(dst_size - 1, static_cast<size_t>(src->size()));
+    memcpy(dst, src->c_str(), copy_len);
+    dst[copy_len] = '\0';
+}
+
+static bool imx500_parse_header_at_impl(const uint8_t *data, uint32_t data_len, uint32_t offset,
+                                        bool require_valid_flag, IMX500OutputHeader *header)
+{
+    if (!data || !header) {
+        return false;
+    }
+    if (offset + IMX500_HEADER_LEN > data_len) {
+        return false;
+    }
+
+    unpack_imx500_output_header(data + offset, header);
+    if (require_valid_flag && header->valid_flag != 1) {
+        return false;
+    }
+    if (header->size_of_ap_parameter > data_len) {
+        return false;
+    }
+    if (offset + IMX500_HEADER_LEN + header->size_of_ap_parameter > data_len) {
+        return false;
+    }
+    return true;
+}
+
+static bool imx500_tensor_parse_dimensions(IMX500ParsedTensor *dst, const flatbuffers::Vector<flatbuffers::Offset<apParams::fb::FBDimension>> *dims)
+{
+    if (!dst || !dims) {
+        return false;
+    }
+
+    dst->dimension_count = (uint8_t)std::min<size_t>(IMX500_MAX_TENSOR_DIMS, static_cast<size_t>(dims->size()));
+    dst->element_count = 1;
+    for (uint8_t i = 0; i < dst->dimension_count; ++i) {
+        const auto *dim = dims->Get(i);
+        if (!dim || dim->size() == 0) {
+            return false;
+        }
+        dst->dimensions[i].id = (uint16_t)dim->id();
+        dst->dimensions[i].size = (uint16_t)dim->size();
+        dst->dimensions[i].serialization_index = (uint16_t)dim->serializationIndex();
+        dst->dimensions[i].padding = (uint16_t)dim->padding();
+        if (dst->element_count > UINT32_MAX / (uint32_t)dst->dimensions[i].size) {
+            return false;
+        }
+        dst->element_count *= (uint32_t)dst->dimensions[i].size;
+    }
+    return true;
+}
+
+static bool imx500_parse_tensor_common(IMX500ParsedTensor *dst,
+                                       uint32_t id,
+                                       const flatbuffers::String *name,
+                                       int32_t shift,
+                                       float scale,
+                                       uint8_t format,
+                                       uint8_t bits_per_element,
+                                       const flatbuffers::Vector<flatbuffers::Offset<apParams::fb::FBDimension>> *dims)
+{
+    if (!dst) {
+        return false;
+    }
+    memset(dst, 0, sizeof(*dst));
+    dst->id = id;
+    imx500_copy_fb_string(dst->name, sizeof(dst->name), name);
+    dst->zero_point = shift;
+    dst->scale = scale;
+    dst->format = format;
+    dst->bits_per_element = bits_per_element;
+
+    if (!imx500_tensor_parse_dimensions(dst, dims)) {
+        return false;
+    }
+
+    uint32_t bytes_per_element = MAX(1u, ((uint32_t)bits_per_element + 7u) / 8u);
+    if (dst->element_count > UINT32_MAX / bytes_per_element) {
+        return false;
+    }
+    dst->data_bytes = dst->element_count * bytes_per_element;
+    dst->aligned_data_bytes = imx500_align_up_u32(dst->data_bytes, 4u);
+    return true;
+}
+
+static bool imx500_parse_networks_from_ap_params(const uint8_t *ap_buf, uint32_t ap_len, IMX500ParsedMetadata *parsed_metadata)
+{
+    if (!ap_buf || !parsed_metadata) {
+        return false;
+    }
+
+    flatbuffers::Verifier verifier(ap_buf, ap_len);
+    if (!apParams::fb::VerifyFBApParamsBuffer(verifier)) {
+        return false;
+    }
+
+    const auto *ap_parameter = apParams::fb::GetFBApParams(ap_buf);
+    if (!ap_parameter) {
+        return false;
+    }
+
+    const auto *networks = ap_parameter->networks();
+    if (!networks || networks->size() == 0) {
+        return false;
+    }
+
+    parsed_metadata->network_count = (uint8_t)std::min<size_t>(IMX500_MAX_NETWORKS, static_cast<size_t>(networks->size()));
+    parsed_metadata->selected_network_index = 0;
+    for (uint8_t network_index = 0; network_index < parsed_metadata->network_count; ++network_index) {
+        auto *dst_network = &parsed_metadata->networks[network_index];
+        const auto *src_network = networks->Get(network_index);
+        if (!src_network) {
+            return false;
+        }
+
+        memset(dst_network, 0, sizeof(*dst_network));
+        dst_network->id = src_network->id();
+        imx500_copy_fb_string(dst_network->name, sizeof(dst_network->name), src_network->name());
+        imx500_copy_fb_string(dst_network->type, sizeof(dst_network->type), src_network->type());
+
+        const auto *input_tensors = src_network->inputTensors();
+        const auto *output_tensors = src_network->outputTensors();
+
+        if (input_tensors) {
+            dst_network->input_tensor_count = (uint8_t)std::min<size_t>(IMX500_MAX_INPUT_TENSORS, static_cast<size_t>(input_tensors->size()));
+            for (uint8_t i = 0; i < dst_network->input_tensor_count; ++i) {
+                const auto *src_tensor = input_tensors->Get(i);
+                if (!src_tensor) {
+                    return false;
+                }
+                if (!imx500_parse_tensor_common(&dst_network->input_tensors[i],
+                                                src_tensor->id(),
+                                                src_tensor->name(),
+                                                src_tensor->shift(),
+                                                src_tensor->scale(),
+                                                src_tensor->format(),
+                                                8,
+                                                src_tensor->dimensions())) {
+                    return false;
+                }
+            }
+        }
+
+        if (output_tensors) {
+            dst_network->output_tensor_count = (uint8_t)std::min<size_t>(IMX500_MAX_OUTPUT_TENSORS, static_cast<size_t>(output_tensors->size()));
+            for (uint8_t i = 0; i < dst_network->output_tensor_count; ++i) {
+                const auto *src_tensor = output_tensors->Get(i);
+                if (!src_tensor) {
+                    return false;
+                }
+                if (!imx500_parse_tensor_common(&dst_network->output_tensors[i],
+                                                src_tensor->id(),
+                                                src_tensor->name(),
+                                                src_tensor->shift(),
+                                                src_tensor->scale(),
+                                                src_tensor->format(),
+                                                src_tensor->bitsPerElement(),
+                                                src_tensor->dimensions())) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+static uint32_t imx500_estimate_output_payload_bytes(const IMX500ParsedMetadata *parsed_metadata)
+{
+    uint32_t total = 0;
+    if (!parsed_metadata) {
+        return 0;
+    }
+
+    for (uint8_t network_index = 0; network_index < parsed_metadata->network_count; ++network_index) {
+        const IMX500ParsedNetwork *network = &parsed_metadata->networks[network_index];
+        for (uint8_t tensor_index = 0; tensor_index < network->output_tensor_count; ++tensor_index) {
+            if (UINT32_MAX - total < network->output_tensors[tensor_index].aligned_data_bytes) {
+                return 0;
+            }
+            total += network->output_tensors[tensor_index].aligned_data_bytes;
+        }
+    }
+    return total;
+}
+
+static void imx500_bind_output_tensor_payload(IMX500ParsedMetadata *parsed_metadata, const uint8_t *payload)
+{
+    if (!parsed_metadata || !payload) {
+        return;
+    }
+
+    uint32_t offset = 0;
+    for (uint8_t network_index = 0; network_index < parsed_metadata->network_count; ++network_index) {
+        IMX500ParsedNetwork *network = &parsed_metadata->networks[network_index];
+        for (uint8_t tensor_index = 0; tensor_index < network->output_tensor_count; ++tensor_index) {
+            IMX500ParsedTensor *tensor = &network->output_tensors[tensor_index];
+            tensor->data = payload + offset;
+            offset += tensor->aligned_data_bytes;
+        }
+    }
+}
+
+extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata)
+{
+    IMX500OutputHeader primary_header = {};
+    IMX500OutputHeader output_header = {};
+
+    if (!data || !parsed_metadata) {
+        printf("parse_output_tensor_data: null input\n");
+        return false;
+    }
+    memset(parsed_metadata, 0, sizeof(*parsed_metadata));
+
+    if (!imx500_parse_header_at_impl(data, data_len, 0, false, &primary_header)) {
+        IMX500OutputHeader unpacked = {};
+        if (data_len >= IMX500_HEADER_LEN) {
+            unpack_imx500_output_header(data, &unpacked);
+        }
+        printf("parse_output_tensor_data: failed to parse primary metadata header "
+               "(valid=%u frame=%u line=%u ap=%u ord=%u ind=%u bytes=%02X %02X %02X %02X %02X %02X %02X %02X %02X)\n",
+               unpacked.valid_flag,
+               unpacked.frame_count,
+               unpacked.max_length_of_line,
+               unpacked.size_of_ap_parameter,
+               unpacked.network_ordinal,
+               unpacked.indicator,
+               data_len > 0 ? data[0] : 0,
+               data_len > 1 ? data[1] : 0,
+               data_len > 2 ? data[2] : 0,
+               data_len > 3 ? data[3] : 0,
+               data_len > 4 ? data[4] : 0,
+               data_len > 5 ? data[5] : 0,
+               data_len > 6 ? data[6] : 0,
+               data_len > 7 ? data[7] : 0,
+               data_len > 8 ? data[8] : 0);
+        return false;
+    }
+
+    parsed_metadata->has_primary_header = true;
+    parsed_metadata->primary_header = primary_header;
+    parsed_metadata->ap_param_offset = IMX500_HEADER_LEN;
+    parsed_metadata->ap_param_size = primary_header.size_of_ap_parameter;
+    parsed_metadata->ap_param_end_offset = parsed_metadata->ap_param_offset + parsed_metadata->ap_param_size;
+
+    if (!imx500_parse_networks_from_ap_params(data + parsed_metadata->ap_param_offset,
+                                              parsed_metadata->ap_param_size,
+                                              parsed_metadata)) {
+        printf("parse_output_tensor_data: failed to parse ApParams block\n");
+        return false;
+    }
+
+    uint32_t output_payload_offset = parsed_metadata->ap_param_end_offset;
+    if (parsed_metadata->ap_param_end_offset + 4 <= data_len) {
+        uint32_t jpeg_size = ((uint32_t)data[parsed_metadata->ap_param_end_offset]) |
+                             ((uint32_t)data[parsed_metadata->ap_param_end_offset + 1] << 8) |
+                             ((uint32_t)data[parsed_metadata->ap_param_end_offset + 2] << 16) |
+                             ((uint32_t)data[parsed_metadata->ap_param_end_offset + 3] << 24);
+        uint32_t jpeg_block_offset = parsed_metadata->ap_param_end_offset + 4;
+        uint32_t jpeg_block_size = imx500_calculate_jpeg_aligned_size(jpeg_size);
+        uint32_t jpeg_block_end = jpeg_block_offset;
+        if (jpeg_block_offset <= data_len && jpeg_block_size >= 4 && jpeg_block_offset + jpeg_block_size - 4 <= data_len) {
+            jpeg_block_end = jpeg_block_offset + jpeg_block_size - 4;
+            const uint8_t *jpeg_block = data + jpeg_block_offset;
+            uint32_t soi = UINT32_MAX;
+            uint32_t eoi = UINT32_MAX;
+            for (uint32_t i = 0; i + 1 < jpeg_block_end - jpeg_block_offset; ++i) {
+                if (jpeg_block[i] == 0xFF && jpeg_block[i + 1] == 0xD8) {
+                    soi = i;
+                    break;
+                }
+            }
+            for (uint32_t i = (jpeg_block_end - jpeg_block_offset > 1) ? (jpeg_block_end - jpeg_block_offset - 2) : 0; i > 0; --i) {
+                if (jpeg_block[i] == 0xFF && jpeg_block[i + 1] == 0xD9) {
+                    eoi = i + 2;
+                    break;
+                }
+            }
+            if (soi != UINT32_MAX && eoi != UINT32_MAX && eoi > soi) {
+                parsed_metadata->jpeg_size = jpeg_size;
+                parsed_metadata->jpeg_block_offset = jpeg_block_offset;
+                parsed_metadata->jpeg_block_end_offset = jpeg_block_end;
+                parsed_metadata->jpeg_data_offset = jpeg_block_offset + soi;
+                parsed_metadata->jpeg_data_len = eoi - soi;
+                parsed_metadata->jpeg_data = data + parsed_metadata->jpeg_data_offset;
+                output_payload_offset = jpeg_block_end;
+            }
+        }
+    }
+
+    if (imx500_parse_header_at_impl(data, data_len, output_payload_offset, false, &output_header)) {
+        parsed_metadata->has_output_header = true;
+        parsed_metadata->output_header = output_header;
+        parsed_metadata->output_header_offset = output_payload_offset;
+        output_payload_offset += IMX500_HEADER_LEN + output_header.size_of_ap_parameter;
+    }
+
+    uint32_t expected_output_bytes = imx500_estimate_output_payload_bytes(parsed_metadata);
+    if (expected_output_bytes == 0 || output_payload_offset > data_len || data_len - output_payload_offset < expected_output_bytes) {
+        printf("parse_output_tensor_data: output payload too short: off=%lu remain=%lu need=%lu\n",
+               (unsigned long)output_payload_offset,
+               (unsigned long)(output_payload_offset <= data_len ? (data_len - output_payload_offset) : 0),
+               (unsigned long)expected_output_bytes);
+        return false;
+    }
+
+    parsed_metadata->output_payload_offset = output_payload_offset;
+    parsed_metadata->output_payload_length = data_len - output_payload_offset;
+    imx500_bind_output_tensor_payload(parsed_metadata, data + output_payload_offset);
+    if (primary_header.network_ordinal < parsed_metadata->network_count) {
+        parsed_metadata->selected_network_index = (uint8_t)primary_header.network_ordinal;
+    }
+    return true;
 }
 
 extern "C" {
-#include <algorithm>
-#include <vector>
-#include <cstdio>
-#include "flatbuffers/flatbuffers.h"
 
 sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
 static uint32_t s_dnn_nw_id = 0;

@@ -69,6 +69,14 @@ esp_err_t example_video_prepare_camera_control(void);
 esp_err_t example_video_init(void);
 
 /**
+ * @brief Initialize the video system while preserving the sensor state that was already
+ * configured by the IMX500 SDK. This also supports a direct external CSI-format path.
+ *
+ * @return ESP_OK on success or other value on failure
+ */
+esp_err_t example_video_init_preserving_sensor_state(void);
+
+/**
  * @brief Get the shared I2C master bus used for camera control.
  *
  * @return I2C master bus handle, or NULL if camera control has not been prepared yet.

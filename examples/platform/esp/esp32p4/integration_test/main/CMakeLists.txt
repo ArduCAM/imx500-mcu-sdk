@@ -8,13 +8,12 @@ set(srcs
 if(CONFIG_EXAMPLE_ENABLE_IMX500_SDK_TEST)
     set(imx500_sdk_test_srcs
         "imx500_sdk_integration_test.cpp"
+        "higherhrnet_postprocess.cpp"
         "${IMX500_SDK_DIR}/ArducamIMX500SDK.cc")
     list(APPEND srcs
         ${imx500_sdk_test_srcs}
         "peripherals_adapter.c"
-        "${IMX500_SDK_DIR}/ai_driver.c"
-        "${IMX500_FIRMWARE_CPP_DIR}/InputTensorOnly_NoID.cpp"
-        "${IMX500_FIRMWARE_CPP_DIR}/InputTensorOnly_network_info.cpp")
+        "${IMX500_SDK_DIR}/ai_driver.c")
 
     set_source_files_properties(${imx500_sdk_test_srcs}
         PROPERTIES COMPILE_DEFINITIONS "open=imx500_sdk_open")

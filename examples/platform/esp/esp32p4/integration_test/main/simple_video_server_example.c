@@ -895,9 +895,11 @@ void app_main(void)
 
 #if CONFIG_EXAMPLE_ENABLE_IMX500_SDK_TEST
     ret = imx500_sdk_integration_test_run();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "IMX500 SDK benchmark failed (%s), continue with the original example flow", esp_err_to_name(ret));
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "IMX500 SDK integration test has taken over the application flow");
+        return;
     }
+    ESP_LOGW(TAG, "IMX500 SDK integration test failed (%s), continue with the original example flow", esp_err_to_name(ret));
 #endif
 
     ESP_ERROR_CHECK(example_video_init());

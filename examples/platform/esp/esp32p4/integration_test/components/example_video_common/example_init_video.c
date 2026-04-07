@@ -38,11 +38,17 @@ static esp_video_init_cam_motor_config_t s_cam_motor_config = {
 };
 #endif /* EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR */
 
-static const esp_video_init_config_t s_cam_config = {
-    .csi      = &s_csi_config,
-#if EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
-    .cam_motor = &s_cam_motor_config,
-#endif /* EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR */
+static const esp_cam_sensor_isp_info_t s_imx500_external_isp_info = {
+    .isp_v1_info = {
+        .version = 1,
+        .pclk = 837000000,
+        .hts = 12518,
+        .vts = 2248,
+        .exp_def = 1121,
+        .gain_def = 500,
+        .tline_ns = 14955,
+        .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
+    },
 };
 
 #if defined(EXAMPLE_MIPI_CSI_XCLK_PIN) && EXAMPLE_MIPI_CSI_XCLK_PIN > 0
@@ -191,17 +197,48 @@ failed_0:
  *
  * @return ESP_OK on success or other value on failure
  */
-esp_err_t example_video_init(void)
+static esp_err_t example_video_init_internal(bool preserve_sensor_state)
 {
+    esp_video_init_csi_config_t csi_config = s_csi_config;
+    esp_video_init_config_t cam_config = {
+        .csi = &csi_config,
+#if EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
+        .cam_motor = &s_cam_motor_config,
+#endif /* EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR */
+    };
+
     if (s_is_init) {
         return ESP_OK;
     }
 
     ESP_RETURN_ON_ERROR(example_video_prepare_camera_control(), TAG, "failed to prepare camera control");
-    ESP_RETURN_ON_ERROR(esp_video_init(&s_cam_config), TAG, "failed to initialize video");
+    if (preserve_sensor_state) {
+        ESP_LOGI(TAG, "using external CSI format for IMX500 passthrough; sensor detect is bypassed");
+        csi_config.preserve_sensor_state = true;
+        csi_config.use_external_format = true;
+        csi_config.external_format.width = 1024;
+        csi_config.external_format.height = 600;
+        csi_config.external_format.format = ESP_CAM_SENSOR_PIXFORMAT_RAW10;
+        csi_config.external_format.mipi_clk = 640000000;
+        csi_config.external_format.lane_num = 2;
+        csi_config.external_format.line_sync_en = false;
+        csi_config.external_format.isp_info = &s_imx500_external_isp_info;
+        ESP_LOGI(TAG, "initializing video pipeline with preserve_sensor_state=1");
+    }
+    ESP_RETURN_ON_ERROR(esp_video_init(&cam_config), TAG, "failed to initialize video");
 
     s_is_init = true;
     return ESP_OK;
+}
+
+esp_err_t example_video_init(void)
+{
+    return example_video_init_internal(false);
+}
+
+esp_err_t example_video_init_preserving_sensor_state(void)
+{
+    return example_video_init_internal(true);
 }
 
 /**

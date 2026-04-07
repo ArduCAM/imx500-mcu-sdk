@@ -1,310 +1,603 @@
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <inttypes.h>
+#include <sys/ioctl.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include "esp_check.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "linux/videodev2.h"
+#include "driver/jpeg_decode.h"
 
 #include "ArducamIMX500SDK.h"
+#include "app_drawing_utils.h"
+#include "app_lcd.h"
+#include "app_video.h"
+#include "example_video_common.h"
+#include "higherhrnet_postprocess.h"
 #include "imx500_sdk_integration_test.h"
 #include "peripherals_adapter.h"
-#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_NoID.h"
-#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_network_info.h"
 
-#define NN_FW_DATA InputTensorOnly_NoID_data
-#define NN_FW_SIZE InputTensorOnly_NoID_size
-#define NN_NETWORK_INFO_DATA InputTensorOnly_network_info_data
-#define NN_NETWORK_INFO_SIZE InputTensorOnly_network_info_size
+#define EXAMPLE_IMX500_ENABLE_SPI_METADATA 1
 
 static const char *TAG = "imx500_sdk_test";
 
 namespace {
 
 constexpr uint32_t kMaxFrameSize = CONFIG_EXAMPLE_IMX500_SDK_MAX_FRAME_SIZE;
+constexpr uint16_t kSpiThumbMaxWidth = 192;
+constexpr uint16_t kSpiThumbMaxHeight = 144;
+constexpr uint32_t kSpiTaskStackSize = 8 * 1024;
+constexpr uint32_t kMetadataDisableThreshold = 3;
+constexpr uint32_t kPoseExpiryUs = 1000000;
+constexpr uint32_t kThumbDecodeMaxWidth = 384;
+constexpr uint32_t kThumbDecodeMaxHeight = 288;
+constexpr uint32_t kThumbDecodeBufferBytes = kThumbDecodeMaxWidth * kThumbDecodeMaxHeight * 2;
+constexpr uint32_t kSkeleton[][2] = {
+    {0, 1}, {0, 2}, {1, 3}, {2, 4},
+    {5, 6}, {5, 11}, {11, 12}, {12, 6},
+    {5, 7}, {7, 9}, {6, 8}, {8, 10},
+    {11, 13}, {13, 15}, {12, 14}, {14, 16},
+};
+
 uint8_t g_frame_buf[kMaxFrameSize];
+IMX500ParsedMetadata *g_parsed_metadata = nullptr;
+TaskHandle_t g_spi_task_handle = nullptr;
+SemaphoreHandle_t g_overlay_mutex = nullptr;
+int g_video_fd = -1;
+esp_lcd_panel_handle_t g_display_panel = nullptr;
+void *g_lcd_buffers[EXAMPLE_LCD_BUF_NUM] = {};
 
-typedef struct {
-    uint32_t requested_frames;
-    uint32_t success_frames;
-    uint32_t failed_frames;
-    uint64_t total_bytes;
-    uint64_t first_frame_us;
-    uint64_t last_frame_us;
-    uint64_t total_read_cost_us;
-    float fps;
-    float avg_read_ms;
-    float avg_bytes_per_frame;
-} FrameBenchmarkResult;
+uint8_t *g_spi_thumb_buffer = nullptr;
+uint8_t *g_spi_thumb_staging = nullptr;
+uint8_t *g_spi_jpeg_full_buffer = nullptr;
+jpeg_decoder_handle_t g_jpeg_decoder = nullptr;
 
-static float bench_us_to_ms(uint64_t us)
-{
-    return static_cast<float>(us) / 1000.0f;
-}
+struct SharedOverlayState {
+    bool thumbnail_ready = false;
+    uint16_t thumb_width = 0;
+    uint16_t thumb_height = 0;
+    uint64_t thumb_updated_us = 0;
+    bool ai_overlay_enabled = true;
+    bool spi_metadata_enabled = true;
+    uint32_t zero_header_failures = 0;
+    HigherhrnetResult hrnet = {};
+    uint64_t hrnet_updated_us = 0;
+};
+
+SharedOverlayState g_overlay_state = {};
+volatile bool g_display_first_frame_seen = false;
 
 static uint64_t now_us()
 {
     return static_cast<uint64_t>(esp_timer_get_time());
 }
 
-static void print_benchmark_row(const char *metric, const char *value)
+static void log_metadata_first_12_bytes(const uint8_t *data, uint32_t len, const char *prefix)
 {
-    std::printf("| %-39s | %-23s |\n", metric, value);
-}
-
-static void print_hex_sample(const uint8_t *buf, uint32_t len)
-{
-    for (uint32_t i = 0; i < len; ++i) {
-        std::printf("%02X ", buf[i]);
-    }
-}
-
-static void print_benchmark_table(uint64_t open_cost_us, uint64_t stream_on_cost_us,
-                                  uint64_t startup_total_us, uint64_t first_frame_latency_us,
-                                  const FrameBenchmarkResult *pre_inject,
-                                  const FrameBenchmarkResult *post_inject)
-{
-    char value[64];
-
-    std::printf("\n================ IMX500 Benchmark Summary ================\n");
-    std::printf("+-----------------------------------------+-------------------------+\n");
-    std::printf("| Metric                                  | Value                   |\n");
-    std::printf("+-----------------------------------------+-------------------------+\n");
-
-    std::snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(open_cost_us));
-    print_benchmark_row("open() duration", value);
-
-    std::snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(stream_on_cost_us));
-    print_benchmark_row("stream_on() duration", value);
-
-    std::snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(first_frame_latency_us));
-    print_benchmark_row("stream_on -> first frame", value);
-
-    std::snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(startup_total_us));
-    print_benchmark_row("open -> first frame (startup)", value);
-
-    std::snprintf(value, sizeof(value), "%lu/%lu",
-                  static_cast<unsigned long>(pre_inject->success_frames),
-                  static_cast<unsigned long>(pre_inject->requested_frames));
-    print_benchmark_row("frames before injection", value);
-
-    std::snprintf(value, sizeof(value), "%.2f fps", pre_inject->fps);
-    print_benchmark_row("FPS before injection", value);
-
-    std::snprintf(value, sizeof(value), "%.2f bytes", pre_inject->avg_bytes_per_frame);
-    print_benchmark_row("avg metadata bytes/frame (before)", value);
-
-    std::snprintf(value, sizeof(value), "%lu/%lu",
-                  static_cast<unsigned long>(post_inject->success_frames),
-                  static_cast<unsigned long>(post_inject->requested_frames));
-    print_benchmark_row("frames after injection", value);
-
-    std::snprintf(value, sizeof(value), "%.2f fps", post_inject->fps);
-    print_benchmark_row("FPS after injection", value);
-
-    std::snprintf(value, sizeof(value), "%.2f bytes", post_inject->avg_bytes_per_frame);
-    print_benchmark_row("avg metadata bytes/frame (after)", value);
-
-    std::printf("+-----------------------------------------+-------------------------+\n");
-}
-
-static uint32_t provider_fill_0x55(uint8_t *buf, uint32_t max_len, uint32_t offset)
-{
-    (void)offset;
-    std::memset(buf, 0x55, max_len);
-    return max_len;
-}
-
-static FrameBenchmarkResult benchmark_read_frame(uint32_t count, uint8_t *buf,
-                                                 uint32_t max_buf_size, bool print_frame_sample)
-{
-    FrameBenchmarkResult result = {};
-    result.requested_frames = count;
-
+    char bytes[3 * 12 + 1] = {};
+    uint32_t count = std::min<uint32_t>(12, len);
+    char *p = bytes;
     for (uint32_t i = 0; i < count; ++i) {
-        std::printf("\n=== Frame %lu/%lu ===\n",
-                    static_cast<unsigned long>(i + 1),
-                    static_cast<unsigned long>(count));
-        uint64_t read_start_us = now_us();
-        int32_t bytes_read = read_metadata(buf, max_buf_size);
-        uint64_t read_end_us = now_us();
+        int written = snprintf(p, sizeof(bytes) - static_cast<size_t>(p - bytes), "%02X%s",
+                               data[i], (i + 1 < count) ? " " : "");
+        if (written <= 0) {
+            break;
+        }
+        p += written;
+    }
+    ESP_LOGI(TAG, "%s first12=[%s]", prefix, bytes);
+}
 
-        if (bytes_read > 0) {
-            if (result.success_frames == 0) {
-                result.first_frame_us = read_end_us;
-            }
-            result.last_frame_us = read_end_us;
-            result.success_frames++;
-            result.total_bytes += static_cast<uint64_t>(bytes_read);
-            result.total_read_cost_us += (read_end_us - read_start_us);
-            std::printf("Successfully read %ld bytes, read cost=%.2f ms\n",
-                        static_cast<long>(bytes_read),
-                        bench_us_to_ms(read_end_us - read_start_us));
-            if (print_frame_sample) {
-                print_hex_sample(buf, 12);
-                std::printf("\n");
-            }
-        } else {
-            result.failed_frames++;
-            std::printf("Failed to read frame\n");
+static void log_parsed_metadata_basic_info(const IMX500ParsedMetadata &parsed, uint32_t payload_size)
+{
+    const IMX500ParsedNetwork &network = parsed.networks[parsed.selected_network_index];
+    ESP_LOGI(TAG,
+             "metadata basic: payload=%" PRIu32 " primary(valid=%u frame=%u ap=%u ord=%u ind=%u) jpeg=%" PRIu32
+             " output_off=%" PRIu32 " output_len=%" PRIu32 " networks=%u selected=%u outputs=%u",
+             payload_size,
+             parsed.primary_header.valid_flag,
+             parsed.primary_header.frame_count,
+             parsed.primary_header.size_of_ap_parameter,
+             parsed.primary_header.network_ordinal,
+             parsed.primary_header.indicator,
+             parsed.jpeg_data_len,
+             parsed.output_payload_offset,
+             parsed.output_payload_length,
+             parsed.network_count,
+             parsed.selected_network_index,
+             network.output_tensor_count);
+}
+
+static bool is_zero_header_payload(const uint8_t *data, uint32_t len)
+{
+    if (!data || len < 9) {
+        return false;
+    }
+    for (uint32_t i = 0; i < 9; ++i) {
+        if (data[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void clear_overlay_state_locked()
+{
+    g_overlay_state.thumbnail_ready = false;
+    g_overlay_state.thumb_width = 0;
+    g_overlay_state.thumb_height = 0;
+    g_overlay_state.thumb_updated_us = 0;
+    memset(&g_overlay_state.hrnet, 0, sizeof(g_overlay_state.hrnet));
+    g_overlay_state.hrnet_updated_us = 0;
+}
+
+static bool allocate_parsed_metadata_buffer()
+{
+    if (g_parsed_metadata) {
+        return true;
+    }
+    g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(heap_caps_calloc(1, sizeof(IMX500ParsedMetadata), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    if (!g_parsed_metadata) {
+        g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(calloc(1, sizeof(IMX500ParsedMetadata)));
+    }
+    if (!g_parsed_metadata) {
+        ESP_LOGE(TAG, "failed to allocate parsed metadata buffer");
+        return false;
+    }
+    ESP_LOGI(TAG, "allocated parsed metadata buffer: %u bytes", static_cast<unsigned>(sizeof(IMX500ParsedMetadata)));
+    return true;
+}
+
+static bool allocate_spi_thumbnail_buffers()
+{
+    if (!g_overlay_mutex) {
+        g_overlay_mutex = xSemaphoreCreateMutex();
+    }
+    if (!g_overlay_mutex) {
+        ESP_LOGE(TAG, "failed to create overlay mutex");
+        return false;
+    }
+
+    if (!g_spi_thumb_buffer) {
+        g_spi_thumb_buffer = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        g_spi_thumb_staging = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        g_spi_jpeg_full_buffer = static_cast<uint8_t *>(heap_caps_malloc(kThumbDecodeBufferBytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_spi_thumb_buffer || !g_spi_thumb_staging || !g_spi_jpeg_full_buffer) {
+        ESP_LOGE(TAG, "failed to allocate SPI thumbnail buffers");
+        return false;
+    }
+
+    if (!g_jpeg_decoder) {
+        jpeg_decode_engine_cfg_t cfg = {
+            .intr_priority = 0,
+            .timeout_ms = 2000,
+        };
+        if (jpeg_new_decoder_engine(&cfg, &g_jpeg_decoder) != ESP_OK) {
+            ESP_LOGE(TAG, "failed to create JPEG decoder");
+            return false;
         }
     }
 
-    if (result.success_frames > 1 && result.last_frame_us > result.first_frame_us) {
-        uint64_t span_us = result.last_frame_us - result.first_frame_us;
-        result.fps = (static_cast<float>(result.success_frames - 1) * 1000000.0f) /
-                     static_cast<float>(span_us);
-    }
-    if (result.success_frames > 0) {
-        result.avg_read_ms = bench_us_to_ms(result.total_read_cost_us) /
-                             static_cast<float>(result.success_frames);
-        result.avg_bytes_per_frame = static_cast<float>(result.total_bytes) /
-                                     static_cast<float>(result.success_frames);
-    }
-
-    return result;
+    ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u",
+             kSpiThumbMaxWidth, kSpiThumbMaxHeight, kThumbDecodeBufferBytes);
+    return true;
 }
 
-static void dump_spi_flash_status(const char *label)
+static bool find_jpeg_span(const uint8_t *data, uint32_t len, const uint8_t **jpeg_ptr, uint32_t *jpeg_len)
 {
-    spi_flash_status_t status = {};
-    if (!get_spi_flash_status(&status)) {
-        std::printf("%s failed to read spi flash status\n", label);
+    if (!data || len < 4 || !jpeg_ptr || !jpeg_len) {
+        return false;
+    }
+
+    uint32_t soi = UINT32_MAX;
+    uint32_t eoi = UINT32_MAX;
+    for (uint32_t i = 0; i + 1 < len; ++i) {
+        if (data[i] == 0xFF && data[i + 1] == 0xD8) {
+            soi = i;
+            break;
+        }
+    }
+    if (soi == UINT32_MAX) {
+        return false;
+    }
+    for (uint32_t i = len - 2; i > soi; --i) {
+        if (data[i] == 0xFF && data[i + 1] == 0xD9) {
+            eoi = i + 2;
+            break;
+        }
+    }
+    if (eoi == UINT32_MAX || eoi <= soi) {
+        return false;
+    }
+
+    *jpeg_ptr = data + soi;
+    *jpeg_len = eoi - soi;
+    return true;
+}
+
+static bool decode_spi_jpeg_thumbnail_span(const uint8_t *jpeg_data, uint32_t jpeg_len)
+{
+    if (!jpeg_data || jpeg_len == 0 || !g_jpeg_decoder) {
+        return false;
+    }
+
+    jpeg_decode_picture_info_t info = {};
+    if (jpeg_decoder_get_info(jpeg_data, jpeg_len, &info) != ESP_OK) {
+        ESP_LOGW(TAG, "failed to query SPI JPEG info len=%" PRIu32, jpeg_len);
+        return false;
+    }
+
+    uint16_t scaled_width = static_cast<uint16_t>(std::max<uint32_t>(1, info.width / 2));
+    uint16_t scaled_height = static_cast<uint16_t>(std::max<uint32_t>(1, info.height / 2));
+    if (scaled_width > kSpiThumbMaxWidth || scaled_height > kSpiThumbMaxHeight) {
+        ESP_LOGW(TAG, "SPI JPEG thumbnail too large after scaling: raw=%" PRIu32 "x%" PRIu32 " scaled=%ux%u limit=%ux%u",
+                 info.width, info.height, scaled_width, scaled_height, kSpiThumbMaxWidth, kSpiThumbMaxHeight);
+        return false;
+    }
+
+    jpeg_decode_cfg_t decode_cfg = {
+        .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
+        .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
+        .conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
+    };
+    uint32_t out_size = 0;
+    if (jpeg_decoder_process(g_jpeg_decoder, &decode_cfg, jpeg_data, jpeg_len,
+                             g_spi_jpeg_full_buffer, kThumbDecodeBufferBytes, &out_size) != ESP_OK) {
+        ESP_LOGW(TAG, "failed to decode SPI JPEG len=%" PRIu32, jpeg_len);
+        return false;
+    }
+
+    const uint16_t *src = reinterpret_cast<const uint16_t *>(g_spi_jpeg_full_buffer);
+    uint16_t *dst = reinterpret_cast<uint16_t *>(g_spi_thumb_staging);
+    for (uint16_t y = 0; y < scaled_height; ++y) {
+        uint32_t src_y = static_cast<uint32_t>(y) * info.height / scaled_height;
+        for (uint16_t x = 0; x < scaled_width; ++x) {
+            uint32_t src_x = static_cast<uint32_t>(x) * info.width / scaled_width;
+            dst[y * scaled_width + x] = src[src_y * info.width + src_x];
+        }
+    }
+
+    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        memcpy(g_spi_thumb_buffer, g_spi_thumb_staging, scaled_width * scaled_height * 2);
+        g_overlay_state.thumbnail_ready = true;
+        g_overlay_state.thumb_width = scaled_width;
+        g_overlay_state.thumb_height = scaled_height;
+        g_overlay_state.thumb_updated_us = now_us();
+        xSemaphoreGive(g_overlay_mutex);
+    }
+    return true;
+}
+
+static bool update_spi_thumbnail_from_metadata(const IMX500ParsedMetadata &parsed)
+{
+    if (parsed.jpeg_data && parsed.jpeg_data_len > 0 && decode_spi_jpeg_thumbnail_span(parsed.jpeg_data, parsed.jpeg_data_len)) {
+        return true;
+    }
+
+    if (parsed.jpeg_block_offset < parsed.jpeg_block_end_offset &&
+        parsed.jpeg_block_end_offset <= kMaxFrameSize) {
+        const uint8_t *jpeg_ptr = nullptr;
+        uint32_t jpeg_len = 0;
+        const uint8_t *jpeg_block = g_frame_buf + parsed.jpeg_block_offset;
+        uint32_t jpeg_block_len = parsed.jpeg_block_end_offset - parsed.jpeg_block_offset;
+        if (find_jpeg_span(jpeg_block, jpeg_block_len, &jpeg_ptr, &jpeg_len)) {
+            ESP_LOGI(TAG, "retrying SPI JPEG decode with fallback span: off=%" PRIu32 " len=%" PRIu32,
+                     static_cast<uint32_t>(jpeg_ptr - g_frame_buf), jpeg_len);
+            return decode_spi_jpeg_thumbnail_span(jpeg_ptr, jpeg_len);
+        }
+    }
+    return false;
+}
+
+static float clamp_coord(float value, float max_value)
+{
+    if (value < 0.0f) {
+        return 0.0f;
+    }
+    if (value > max_value) {
+        return max_value;
+    }
+    return value;
+}
+
+static void blit_spi_thumbnail_with_pose(uint16_t *frame, uint32_t frame_w, uint32_t frame_h)
+{
+    if (!frame || !g_overlay_mutex) {
         return;
     }
-    std::printf("%s status=%lu result=%lu bytes=%lu/%lu\n",
-                label,
-                static_cast<unsigned long>(status.status),
-                static_cast<unsigned long>(status.result),
-                static_cast<unsigned long>(status.bytes_done),
-                static_cast<unsigned long>(status.bytes_total));
-}
 
-static bool program_flash_assets()
-{
-    std::printf("Programming model to module flash...\n");
-    if (!spi_slave_write_model_to_flash(NN_FW_DATA, NN_FW_SIZE)) {
-        dump_spi_flash_status("[MODEL FLASH]");
-        return false;
+    uint16_t local_thumb_w = 0;
+    uint16_t local_thumb_h = 0;
+    uint64_t local_pose_updated_us = 0;
+    HigherhrnetResult local_result = {};
+
+    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
     }
 
-    std::printf("Programming network_info to module flash...\n");
-    if (!spi_slave_write_nn_info_to_flash(NN_NETWORK_INFO_DATA, NN_NETWORK_INFO_SIZE)) {
-        dump_spi_flash_status("[NN INFO FLASH]");
-        return false;
+    if (g_overlay_state.thumbnail_ready) {
+        local_thumb_w = g_overlay_state.thumb_width;
+        local_thumb_h = g_overlay_state.thumb_height;
+        for (uint16_t y = 0; y < local_thumb_h && y < frame_h; ++y) {
+            memcpy(frame + y * frame_w, g_spi_thumb_buffer + y * local_thumb_w * 2, local_thumb_w * 2);
+        }
     }
 
-    dump_spi_flash_status("[FLASH PROGRAM DONE]");
-    return true;
+    local_result = g_overlay_state.hrnet;
+    local_pose_updated_us = g_overlay_state.hrnet_updated_us;
+    xSemaphoreGive(g_overlay_mutex);
+
+    if (local_thumb_w == 0 || local_thumb_h == 0 || now_us() - local_pose_updated_us > kPoseExpiryUs) {
+        return;
+    }
+
+    float max_x = 0.0f;
+    float max_y = 0.0f;
+    for (uint32_t i = 0; i < local_result.pose_count; ++i) {
+        for (uint32_t j = 0; j < kHigherhrnetJointCount; ++j) {
+            if (local_result.poses[i].keypoints[j].score > 0.05f) {
+                max_x = std::max(max_x, local_result.poses[i].keypoints[j].x);
+                max_y = std::max(max_y, local_result.poses[i].keypoints[j].y);
+            }
+        }
+    }
+
+    float src_w = (max_x <= local_thumb_w * 1.5f && max_y <= local_thumb_h * 1.5f) ? static_cast<float>(local_thumb_w) : 384.0f;
+    float src_h = (max_x <= local_thumb_w * 1.5f && max_y <= local_thumb_h * 1.5f) ? static_cast<float>(local_thumb_h) : 288.0f;
+    static uint32_t mapping_log_count = 0;
+    if (mapping_log_count < 5 || (mapping_log_count % 60) == 0) {
+        ESP_LOGI(TAG, "pose overlay mapping: thumb=%ux%u max_pose=%.1fx%.1f src=%.0fx%.0f people=%" PRIu32,
+                 local_thumb_w, local_thumb_h, max_x, max_y, src_w, src_h, local_result.pose_count);
+    }
+    mapping_log_count++;
+
+    for (uint32_t i = 0; i < local_result.pose_count; ++i) {
+        const HigherhrnetPose &pose = local_result.poses[i];
+        int x1 = static_cast<int>(clamp_coord(pose.x1 * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
+        int y1 = static_cast<int>(clamp_coord(pose.y1 * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+        int x2 = static_cast<int>(clamp_coord(pose.x2 * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
+        int y2 = static_cast<int>(clamp_coord(pose.y2 * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+        draw_rectangle_rgb(frame, frame_w, frame_h, x1, y1, x2, y2, 0, 0, 0, 255, 0, 2, false);
+
+        for (const auto &joint : kSkeleton) {
+            const HigherhrnetKeypoint &a = pose.keypoints[joint[0]];
+            const HigherhrnetKeypoint &b = pose.keypoints[joint[1]];
+            if (a.score > 0.05f && b.score > 0.05f) {
+                int ax = static_cast<int>(clamp_coord(a.x * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
+                int ay = static_cast<int>(clamp_coord(a.y * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+                int bx = static_cast<int>(clamp_coord(b.x * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
+                int by = static_cast<int>(clamp_coord(b.y * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+                draw_line_rgb(frame, frame_w, frame_h, ax, ay, bx, by, 0, 0, 255, 255, 255, 2, false);
+            }
+        }
+
+        for (uint32_t j = 0; j < kHigherhrnetJointCount; ++j) {
+            const HigherhrnetKeypoint &keypoint = pose.keypoints[j];
+            if (keypoint.score <= 0.05f) {
+                continue;
+            }
+            int x = static_cast<int>(clamp_coord(keypoint.x * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
+            int y = static_cast<int>(clamp_coord(keypoint.y * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+            draw_point_rgb(frame, frame_w, frame_h, x, y, 0, 0, 255, 0, 0, 3, false);
+        }
+    }
 }
 
-static const char *get_boot_mode_name()
+static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf_index, uint32_t camera_buf_hes,
+                                         uint32_t camera_buf_ves, size_t camera_buf_len, void *user_data)
 {
-#if CONFIG_EXAMPLE_IMX500_SDK_BOOT_MODE_FLASH
-    return "FLASH_BOOT";
+    static bool callback_logged = false;
+    static uint64_t first_frame_us = 0;
+    static uint32_t frame_count = 0;
+    (void)user_data;
+
+    if (!callback_logged) {
+        ESP_LOGI(TAG, "display callback started: fd=%d camera=%" PRIu32 "x%" PRIu32 " len=%u",
+                 g_video_fd, camera_buf_hes, camera_buf_ves, static_cast<unsigned>(camera_buf_len));
+        ESP_LOGI(TAG, "MIPI main image resolution: %" PRIu32 "x%" PRIu32, camera_buf_hes, camera_buf_ves);
+        callback_logged = true;
+        g_display_first_frame_seen = true;
+        first_frame_us = now_us();
+    }
+
+    blit_spi_thumbnail_with_pose(reinterpret_cast<uint16_t *>(camera_buf), camera_buf_hes, camera_buf_ves);
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(g_display_panel, 0, 0, camera_buf_hes, camera_buf_ves, camera_buf));
+
+    uint64_t now = now_us();
+    float fps = 0.0f;
+    if (frame_count > 0 && now > first_frame_us) {
+        fps = static_cast<float>(frame_count) * 1000000.0f / static_cast<float>(now - first_frame_us);
+    }
+    if (frame_count < 5 || (frame_count % 60) == 0) {
+        ESP_LOGI(TAG, "display frame=%" PRIu32 " buf=%u size=%" PRIu32 "x%" PRIu32 " bytes=%u fps=%.2f",
+                 frame_count, camera_buf_index, camera_buf_hes, camera_buf_ves, static_cast<unsigned>(camera_buf_len), fps);
+    }
+    frame_count++;
+}
+
+static esp_err_t init_mipi_display_path()
+{
+    struct v4l2_format format = {};
+
+    ESP_LOGI(TAG, "initializing MIPI display path without reconfiguring the sensor");
+    ESP_RETURN_ON_ERROR(app_lcd_init(&g_display_panel), TAG, "failed to init LCD");
+    ESP_RETURN_ON_ERROR(example_video_init_preserving_sensor_state(), TAG, "failed to initialize video pipeline");
+
+    g_video_fd = app_video_open((char *)EXAMPLE_CAM_DEV_PATH, APP_VIDEO_FMT);
+    ESP_RETURN_ON_FALSE(g_video_fd >= 0, ESP_FAIL, TAG, "video open failed");
+
+#if EXAMPLE_LCD_BUF_NUM == 2
+    ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 2, &g_lcd_buffers[0], &g_lcd_buffers[1]),
+                        TAG, "failed to get LCD frame buffers");
 #else
-    return "DIRECT_BOOT";
+    ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 3, &g_lcd_buffers[0], &g_lcd_buffers[1], &g_lcd_buffers[2]),
+                        TAG, "failed to get LCD frame buffers");
 #endif
+    ESP_RETURN_ON_ERROR(app_video_set_bufs(g_video_fd, EXAMPLE_CAM_BUF_NUM, (const void **)g_lcd_buffers),
+                        TAG, "failed to set video buffers");
+
+    memset(&format, 0, sizeof(format));
+    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    ioctl(g_video_fd, VIDIOC_G_FMT, &format);
+    ESP_LOGI(TAG, "MIPI display ready: %" PRIu32 "x%" PRIu32 " fmt=0x%08" PRIx32 " fd=%d",
+             format.fmt.pix.width, format.fmt.pix.height, format.fmt.pix.pixelformat, g_video_fd);
+    return ESP_OK;
 }
 
-static bool reset_sensor_before_open()
+static bool open_imx500_stream()
 {
-    int ret = sensor_i2c_write_16_8(0x0103, 0x01);
-    if (ret < 0) {
-        ESP_LOGE(TAG, "sensor reset failed, ret=%d", ret);
-        return false;
-    }
+    uint32_t module_fw_ver = 0;
+    uint32_t module_pid = 0;
+    get_fw_ver(&module_fw_ver);
+    get_pid(&module_pid);
+    ESP_LOGI(TAG, "module fw version: 0x%" PRIx32, module_fw_ver);
+    ESP_LOGI(TAG, "module pid: 0x%" PRIx32, module_pid);
 
-    ESP_LOGI(TAG, "sensor reset issued, waiting 5 seconds for startup");
-    vTaskDelay(pdMS_TO_TICKS(5000));
-    return true;
-}
-
-static bool open_with_selected_boot_mode()
-{
-    vTaskDelay(pdMS_TO_TICKS(5000));
-    // std::printf("Boot mode: %s\n", get_boot_mode_name());
-    // if (!reset_sensor_before_open()) {
-    //     return false;
-    // }
-#if CONFIG_EXAMPLE_IMX500_SDK_BOOT_MODE_FLASH
-    if (!program_flash_assets()) {
-        std::printf("flash programming failed\n");
-        return false;
-    }
-    return open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR, 10);
+    ESP_LOGI(TAG, "opening IMX500 with preloaded module flash assets");
+    return open(nullptr, 0, nullptr, 0,
+                MIPI_DATA_IMAGE,
+#if EXAMPLE_IMX500_ENABLE_SPI_METADATA
+                SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
 #else
-    return open(NN_FW_DATA, NN_FW_SIZE,
-                NN_NETWORK_INFO_DATA, NN_NETWORK_INFO_SIZE,
-                MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR, 10);
+                SPI_METADATA_NONE,
 #endif
+                10);
+}
+
+static void spi_metadata_task(void *arg)
+{
+    (void)arg;
+    uint32_t wait_loops = 0;
+    uint32_t metadata_frame_count = 0;
+    ESP_LOGI(TAG, "spi task started: stack=%u parsed_metadata=%u",
+             static_cast<unsigned>(kSpiTaskStackSize),
+             static_cast<unsigned>(sizeof(IMX500ParsedMetadata)));
+
+    while (!g_display_first_frame_seen && wait_loops < 400) {
+        if (wait_loops == 0) {
+            ESP_LOGI(TAG, "waiting to start SPI metadata parsing until the first MIPI frame arrives");
+        } else if ((wait_loops % 100) == 0) {
+            ESP_LOGI(TAG, "still waiting for first MIPI frame before parsing SPI metadata, loops=%" PRIu32, wait_loops);
+        }
+        wait_loops++;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGI(TAG, "SPI metadata parser armed: first_frame_seen=%d wait_loops=%" PRIu32,
+             g_display_first_frame_seen ? 1 : 0, wait_loops);
+
+    while (true) {
+        int32_t data_size = read_metadata(g_frame_buf, kMaxFrameSize);
+        if (data_size <= 0) {
+            continue;
+        }
+
+        if (metadata_frame_count < 5 || (metadata_frame_count % 30) == 0) {
+            ESP_LOGI(TAG, "metadata frame=%" PRIu32 " payload=%ld", metadata_frame_count, static_cast<long>(data_size));
+            log_metadata_first_12_bytes(g_frame_buf, static_cast<uint32_t>(data_size), "metadata raw");
+        }
+
+        if (!g_overlay_state.spi_metadata_enabled) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        if (!parse_output_tensor_data_with_metadata(g_frame_buf, static_cast<uint32_t>(data_size), g_parsed_metadata)) {
+            ESP_LOGW(TAG, "failed to parse metadata frame=%u payload=%ld", 0u, static_cast<long>(data_size));
+            if (is_zero_header_payload(g_frame_buf, static_cast<uint32_t>(data_size))) {
+                g_overlay_state.zero_header_failures++;
+                if (g_overlay_state.zero_header_failures >= kMetadataDisableThreshold) {
+                    ESP_LOGW(TAG, "metadata appears disabled in firmware; disabling SPI metadata/AI overlay after %u consecutive zero-header frames",
+                             g_overlay_state.zero_header_failures);
+                    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                        g_overlay_state.spi_metadata_enabled = false;
+                        g_overlay_state.ai_overlay_enabled = false;
+                        clear_overlay_state_locked();
+                        xSemaphoreGive(g_overlay_mutex);
+                    }
+                }
+            } else {
+                g_overlay_state.zero_header_failures = 0;
+            }
+            metadata_frame_count++;
+            continue;
+        }
+
+        g_overlay_state.zero_header_failures = 0;
+        if (metadata_frame_count < 5 || (metadata_frame_count % 30) == 0) {
+            log_parsed_metadata_basic_info(*g_parsed_metadata, static_cast<uint32_t>(data_size));
+        }
+        update_spi_thumbnail_from_metadata(*g_parsed_metadata);
+
+        HigherhrnetResult hrnet = {};
+        if (higherhrnet_postprocess_from_metadata(g_parsed_metadata, &hrnet)) {
+            if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                g_overlay_state.hrnet = hrnet;
+                g_overlay_state.hrnet_updated_us = now_us();
+                xSemaphoreGive(g_overlay_mutex);
+            }
+            ESP_LOGI(TAG, "higherhrnet poses=%" PRIu32 " spi_thumb=%s %ux%u",
+                     hrnet.pose_count,
+                     g_overlay_state.thumbnail_ready ? "ready" : "not-ready",
+                     g_overlay_state.thumb_width,
+                     g_overlay_state.thumb_height);
+        }
+        metadata_frame_count++;
+    }
+}
+
+static esp_err_t start_worker_tasks()
+{
+    ESP_RETURN_ON_ERROR(app_video_register_frame_operation_cb(mipi_display_frame_operation),
+                        TAG, "failed to register display callback");
+    ESP_RETURN_ON_ERROR(app_video_stream_task_start(g_video_fd, 0, nullptr),
+                        TAG, "failed to start app_video stream task");
+    ESP_LOGI(TAG, "display pipeline armed: callback registered and app_video stream task started");
+
+#if EXAMPLE_IMX500_ENABLE_SPI_METADATA
+    if (!g_spi_task_handle) {
+        BaseType_t result = xTaskCreatePinnedToCore(spi_metadata_task, "spi metadata task",
+                                                    kSpiTaskStackSize, nullptr, 4,
+                                                    &g_spi_task_handle, 1);
+        ESP_RETURN_ON_FALSE(result == pdPASS, ESP_FAIL, TAG, "failed to create SPI task");
+    }
+#else
+    ESP_LOGI(TAG, "SPI metadata task disabled while validating LCD path");
+#endif
+    return ESP_OK;
 }
 
 } // namespace
 
-esp_err_t imx500_sdk_integration_test_run(void)
+extern "C" esp_err_t imx500_sdk_integration_test_run(void)
 {
-    if (!bind_peripherals_api()) {
-        ESP_LOGE(TAG, "failed to bind SDK peripheral adapters");
-        return ESP_FAIL;
-    }
+    ESP_RETURN_ON_FALSE(bind_peripherals_api(), ESP_FAIL, TAG, "failed to bind SDK peripherals");
+    ESP_RETURN_ON_FALSE(allocate_parsed_metadata_buffer(), ESP_FAIL, TAG, "failed to prepare parsed metadata buffer");
+    ESP_RETURN_ON_FALSE(allocate_spi_thumbnail_buffers(), ESP_FAIL, TAG, "failed to prepare SPI thumbnail buffers");
 
-    uint32_t module_fw_ver = 0;
-    get_fw_ver(&module_fw_ver);
-    ESP_LOGI(TAG, "module fw version: 0x%" PRIx32, module_fw_ver);
+    ESP_RETURN_ON_FALSE(open_imx500_stream(), ESP_FAIL, TAG, "open() failed");
+    ESP_RETURN_ON_ERROR(init_mipi_display_path(), TAG, "failed to initialize MIPI display path");
+    ESP_RETURN_ON_ERROR(start_worker_tasks(), TAG, "failed to start display workers");
 
-    uint32_t module_pid = 0;
-    get_pid(&module_pid);
-    ESP_LOGI(TAG, "module pid: 0x%" PRIx32, module_pid);
-
-    uint64_t open_start_us = now_us();
-    bool open_ret = open_with_selected_boot_mode();
-    uint64_t open_end_us = now_us();
-    if (!open_ret) {
-        ESP_LOGE(TAG, "open() failed");
-        return ESP_FAIL;
-    }
-
-    uint64_t stream_on_start_us = now_us();
+    ESP_LOGI(TAG, "starting IMX500 stream after arming display workers");
     stream_on();
-    uint64_t stream_on_end_us = now_us();
+    vTaskDelay(pdMS_TO_TICKS(50));
 
-    FrameBenchmarkResult pre_inject_bench = benchmark_read_frame(
-        CONFIG_EXAMPLE_IMX500_SDK_PRE_INJECT_FRAMES,
-        g_frame_buf,
-        sizeof(g_frame_buf),
-        true);
-
-    uint64_t first_frame_latency_us = 0;
-    uint64_t startup_total_us = 0;
-    if (pre_inject_bench.success_frames > 0) {
-        if (pre_inject_bench.first_frame_us >= stream_on_end_us) {
-            first_frame_latency_us = pre_inject_bench.first_frame_us - stream_on_end_us;
-        }
-        if (pre_inject_bench.first_frame_us >= open_start_us) {
-            startup_total_us = pre_inject_bench.first_frame_us - open_start_us;
-        }
-    }
-
-    switch_spi_data_forward_mode(SPI_SLAVE_TO_IMX500_SSPI);
-    do_data_injection_stream(provider_fill_0x55, 640U * 480U * 3U, true);
-    stop_data_injection();
-    switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_MSPI);
-
-    FrameBenchmarkResult post_inject_bench = benchmark_read_frame(
-        CONFIG_EXAMPLE_IMX500_SDK_POST_INJECT_FRAMES,
-        g_frame_buf,
-        sizeof(g_frame_buf),
-        false);
-
-    print_benchmark_table(open_end_us - open_start_us,
-                          stream_on_end_us - stream_on_start_us,
-                          startup_total_us,
-                          first_frame_latency_us,
-                          &pre_inject_bench,
-                          &post_inject_bench);
+#if EXAMPLE_IMX500_ENABLE_SPI_METADATA
+    ESP_LOGI(TAG, "IMX500 test running: MIPI image is displayed on LCD, SPI metadata is parsed in the background");
+#else
+    ESP_LOGI(TAG, "SPI metadata task disabled while validating LCD path");
+    ESP_LOGI(TAG, "IMX500 test running: validating MIPI image on LCD only, SPI metadata is disabled");
+    ESP_LOGI(TAG, "display path is independent from SPI metadata; if AI metadata is absent, LCD should remain active in MIPI-only mode");
+#endif
     return ESP_OK;
 }

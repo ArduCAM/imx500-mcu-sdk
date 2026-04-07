@@ -7,6 +7,7 @@
 #define APP_VIDEO_H
 
 #include "esp_err.h"
+#include "driver/i2c_master.h"
 #include "linux/videodev2.h"
 #include "esp_video_device.h"
 #include "esp_lcd_mipi_dsi.h"

@@ -9,6 +9,10 @@
 #include "esp_lcd_types.h"
 #include "linux/videodev2.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define EXAMPLE_LCD_H_RES                   (1024)
 #define EXAMPLE_LCD_V_RES                   (600)
 
@@ -36,5 +40,9 @@
  *    - ESP_FAIL: Failure
  */
 esp_err_t app_lcd_init(esp_lcd_panel_handle_t *panel_handle);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
