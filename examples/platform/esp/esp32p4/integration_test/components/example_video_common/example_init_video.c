@@ -25,6 +25,38 @@ static esp_video_init_csi_config_t s_csi_config = {
 #endif /* CONFIG_EXAMPLE_MIPI_CSI_VIDEO_DEVICE_DONT_INIT_LDO */
 };
 
+static const esp_cam_sensor_isp_info_t s_imx500_external_isp_info = {
+    .isp_v1_info = {
+        .version = 1,
+        .pclk = 837000000,
+        .hts = 12518,
+        .vts = 2248,
+        .exp_def = 1121,
+        .gain_def = 500,
+        .tline_ns = 14955,
+        .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
+    },
+};
+
+static const esp_cam_sensor_format_t s_imx500_external_format = {
+    .name = "IMX500_MIPI_2lane_RAW10_1024x600_10fps_external",
+    .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
+    .port = ESP_CAM_SENSOR_MIPI_CSI,
+    .xclk = 0,
+    .width = 1024,
+    .height = 600,
+    .regs = NULL,
+    .regs_size = 0,
+    .fps = 10,
+    .isp_info = &s_imx500_external_isp_info,
+    .mipi_info = {
+        .mipi_clk = 640000000,
+        .lane_num = 2,
+        .line_sync_en = false,
+    },
+    .reserved = NULL,
+};
+
 #if EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
 static esp_video_init_cam_motor_config_t s_cam_motor_config = {
     .sccb_config = {
@@ -200,8 +232,10 @@ static esp_err_t example_video_init_internal(bool preserve_sensor_state)
 
     ESP_RETURN_ON_ERROR(example_video_prepare_camera_control(), TAG, "failed to prepare camera control");
     if (preserve_sensor_state) {
-        ESP_LOGW(TAG, "current esp_video component does not expose external CSI-format init fields; continuing with standard CSI init");
-        ESP_LOGI(TAG, "initializing video pipeline for a preconfigured sensor state");
+        csi_config.preserve_sensor_state = true;
+        csi_config.external_format = &s_imx500_external_format;
+        ESP_LOGI(TAG, "initializing video pipeline with preserved sensor state, external format=%s",
+                 s_imx500_external_format.name);
     }
     ESP_RETURN_ON_ERROR(esp_video_init(&cam_config), TAG, "failed to initialize video");
 

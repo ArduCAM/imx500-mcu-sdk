@@ -902,7 +902,8 @@ void app_main(void)
     ESP_LOGW(TAG, "IMX500 SDK integration test failed (%s), continue with the original example flow", esp_err_to_name(ret));
 #endif
 
-    ESP_ERROR_CHECK(example_video_init());
+    ESP_LOGI(TAG, "initializing CSI video path without default sensor init; expecting external IMX500 state at 1024x600@10fps");
+    ESP_ERROR_CHECK(example_video_init_preserving_sensor_state());
 
 #if CONFIG_EXAMPLE_ENABLE_LCD_DISPLAY
     // Initialize the LCD

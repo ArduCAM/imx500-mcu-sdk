@@ -18,6 +18,7 @@
 
 #define PIVARIETY_ADDR 0x0C
 #define IMX500_SPI_HOST SPI2_HOST
+#define IMX500_SPI_MAX_TRANSFER_SZ (284 * 1024)
 
 static const char *TAG = "peripherals_adapter";
 static i2c_master_dev_handle_t s_camera_i2c_dev_handle;
@@ -68,11 +69,11 @@ static esp_err_t ensure_spi_device(void)
         .sclk_io_num = CONFIG_EXAMPLE_IMX500_SDK_SPI_SCK_PIN,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = CONFIG_EXAMPLE_IMX500_SDK_MAX_FRAME_SIZE,
+        .max_transfer_sz = IMX500_SPI_MAX_TRANSFER_SZ,
     };
     spi_device_interface_config_t devcfg = {
         .clock_speed_hz = CONFIG_EXAMPLE_IMX500_SDK_SPI_CLOCK_HZ,
-        .mode = 0,
+        .mode = 3,
         .spics_io_num = CONFIG_EXAMPLE_IMX500_SDK_SPI_CS_PIN,
         .queue_size = 1,
     };

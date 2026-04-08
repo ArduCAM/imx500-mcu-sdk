@@ -32,7 +32,8 @@ static const char *TAG = "imx500_sdk_test";
 
 namespace {
 
-constexpr uint32_t kMaxFrameSize = CONFIG_EXAMPLE_IMX500_SDK_MAX_FRAME_SIZE;
+constexpr uint32_t kMinFrameBufferSize = CONFIG_EXAMPLE_IMX500_SDK_MAX_FRAME_SIZE;
+constexpr uint32_t kMaxFrameBufferSize = 284 * 1024;
 constexpr uint16_t kSpiThumbMaxWidth = 192;
 constexpr uint16_t kSpiThumbMaxHeight = 144;
 constexpr uint32_t kSpiTaskStackSize = 8 * 1024;
@@ -41,6 +42,9 @@ constexpr uint32_t kPoseExpiryUs = 1000000;
 constexpr uint32_t kThumbDecodeMaxWidth = 384;
 constexpr uint32_t kThumbDecodeMaxHeight = 288;
 constexpr uint32_t kThumbDecodeBufferBytes = kThumbDecodeMaxWidth * kThumbDecodeMaxHeight * 2;
+constexpr size_t kPsramFrameBufferAlignment = 64;
+constexpr uint32_t kJpegAlignment = 1024;
+constexpr uint32_t kJpegMinBlockBytes = 4 * 1024;
 constexpr uint32_t kSkeleton[][2] = {
     {0, 1}, {0, 2}, {1, 3}, {2, 4},
     {5, 6}, {5, 11}, {11, 12}, {12, 6},
@@ -48,17 +52,22 @@ constexpr uint32_t kSkeleton[][2] = {
     {11, 13}, {13, 15}, {12, 14}, {14, 16},
 };
 
-uint8_t g_frame_buf[kMaxFrameSize];
+uint8_t *g_frame_buf = nullptr;
+uint32_t g_frame_buf_capacity = 0;
 IMX500ParsedMetadata *g_parsed_metadata = nullptr;
 TaskHandle_t g_spi_task_handle = nullptr;
 SemaphoreHandle_t g_overlay_mutex = nullptr;
 int g_video_fd = -1;
 esp_lcd_panel_handle_t g_display_panel = nullptr;
 void *g_lcd_buffers[EXAMPLE_LCD_BUF_NUM] = {};
+void *g_camera_buffers[EXAMPLE_LCD_BUF_NUM] = {};
 
 uint8_t *g_spi_thumb_buffer = nullptr;
 uint8_t *g_spi_thumb_staging = nullptr;
+uint8_t *g_spi_jpeg_input_buffer = nullptr;
+size_t g_spi_jpeg_input_buffer_size = 0;
 uint8_t *g_spi_jpeg_full_buffer = nullptr;
+size_t g_spi_jpeg_full_buffer_size = 0;
 jpeg_decoder_handle_t g_jpeg_decoder = nullptr;
 HigherhrnetResult *g_overlay_pose_snapshot = nullptr;
 HigherhrnetResult *g_spi_hrnet_result = nullptr;
@@ -81,6 +90,21 @@ volatile bool g_display_first_frame_seen = false;
 static uint64_t now_us()
 {
     return static_cast<uint64_t>(esp_timer_get_time());
+}
+
+static uint32_t align_up_u32(uint32_t value, uint32_t base)
+{
+    return ((value + base - 1) / base) * base;
+}
+
+static uint32_t calculate_jpeg_aligned_size(uint32_t jpeg_size)
+{
+    return std::max(kJpegMinBlockBytes, align_up_u32(jpeg_size + 3, kJpegAlignment));
+}
+
+static inline uint16_t swap_rgb565_bytes(uint16_t pixel)
+{
+    return static_cast<uint16_t>((pixel << 8) | (pixel >> 8));
 }
 
 static void log_metadata_first_12_bytes(const uint8_t *data, uint32_t len, const char *prefix)
@@ -144,18 +168,44 @@ static void clear_overlay_state_locked()
 
 static bool allocate_parsed_metadata_buffer()
 {
-    if (g_parsed_metadata) {
-        return true;
+    uint32_t reported_size = get_metadata_size();
+    uint32_t desired_size = kMaxFrameBufferSize;
+
+    if (!g_frame_buf || g_frame_buf_capacity < desired_size) {
+        if (g_frame_buf) {
+            free(g_frame_buf);
+            g_frame_buf = nullptr;
+            g_frame_buf_capacity = 0;
+        }
+
+        g_frame_buf = static_cast<uint8_t *>(heap_caps_calloc(1, desired_size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        if (!g_frame_buf) {
+            g_frame_buf = static_cast<uint8_t *>(calloc(1, desired_size));
+        }
+        if (!g_frame_buf) {
+            ESP_LOGE(TAG, "failed to allocate metadata frame buffer");
+            return false;
+        }
+        g_frame_buf_capacity = desired_size;
     }
-    g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(heap_caps_calloc(1, sizeof(IMX500ParsedMetadata), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+
     if (!g_parsed_metadata) {
-        g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(calloc(1, sizeof(IMX500ParsedMetadata)));
+        g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(heap_caps_calloc(1, sizeof(IMX500ParsedMetadata), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        if (!g_parsed_metadata) {
+            g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(calloc(1, sizeof(IMX500ParsedMetadata)));
+        }
+        if (!g_parsed_metadata) {
+            ESP_LOGE(TAG, "failed to allocate parsed metadata buffer");
+            return false;
+        }
     }
-    if (!g_parsed_metadata) {
-        ESP_LOGE(TAG, "failed to allocate parsed metadata buffer");
-        return false;
-    }
-    ESP_LOGI(TAG, "allocated parsed metadata buffer: %u bytes", static_cast<unsigned>(sizeof(IMX500ParsedMetadata)));
+    ESP_LOGI(TAG, "allocated parsed metadata buffer: parsed=%u frame_buf=%u",
+             static_cast<unsigned>(sizeof(IMX500ParsedMetadata)),
+             static_cast<unsigned>(g_frame_buf_capacity));
+    ESP_LOGI(TAG, "metadata size planning: reported=%u configured_min=%u actual_alloc=%u",
+             static_cast<unsigned>(reported_size),
+             static_cast<unsigned>(kMinFrameBufferSize),
+             static_cast<unsigned>(g_frame_buf_capacity));
     return true;
 }
 
@@ -172,7 +222,13 @@ static bool allocate_spi_thumbnail_buffers()
     if (!g_spi_thumb_buffer) {
         g_spi_thumb_buffer = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
         g_spi_thumb_staging = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
-        g_spi_jpeg_full_buffer = static_cast<uint8_t *>(heap_caps_malloc(kThumbDecodeBufferBytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_spi_jpeg_full_buffer) {
+        jpeg_decode_memory_alloc_cfg_t out_mem_cfg = {
+            .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER,
+        };
+        g_spi_jpeg_full_buffer = static_cast<uint8_t *>(
+            jpeg_alloc_decoder_mem(kThumbDecodeBufferBytes, &out_mem_cfg, &g_spi_jpeg_full_buffer_size));
     }
     if (!g_spi_thumb_buffer || !g_spi_thumb_staging || !g_spi_jpeg_full_buffer) {
         ESP_LOGE(TAG, "failed to allocate SPI thumbnail buffers");
@@ -207,9 +263,34 @@ static bool allocate_spi_thumbnail_buffers()
         }
     }
 
-    ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u hrnet=%u",
+    ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u alloc=%u hrnet=%u",
              kSpiThumbMaxWidth, kSpiThumbMaxHeight, kThumbDecodeBufferBytes,
+             static_cast<unsigned>(g_spi_jpeg_full_buffer_size),
              static_cast<unsigned>(sizeof(HigherhrnetResult)));
+    return true;
+}
+
+static bool ensure_spi_jpeg_input_buffer(uint32_t jpeg_len)
+{
+    if (g_spi_jpeg_input_buffer && g_spi_jpeg_input_buffer_size >= jpeg_len) {
+        return true;
+    }
+
+    if (g_spi_jpeg_input_buffer) {
+        free(g_spi_jpeg_input_buffer);
+        g_spi_jpeg_input_buffer = nullptr;
+        g_spi_jpeg_input_buffer_size = 0;
+    }
+
+    jpeg_decode_memory_alloc_cfg_t in_mem_cfg = {
+        .buffer_direction = JPEG_DEC_ALLOC_INPUT_BUFFER,
+    };
+    g_spi_jpeg_input_buffer = static_cast<uint8_t *>(
+        jpeg_alloc_decoder_mem(jpeg_len, &in_mem_cfg, &g_spi_jpeg_input_buffer_size));
+    if (!g_spi_jpeg_input_buffer) {
+        ESP_LOGE(TAG, "failed to allocate SPI JPEG input buffer len=%" PRIu32, jpeg_len);
+        return false;
+    }
     return true;
 }
 
@@ -245,8 +326,23 @@ static bool find_jpeg_span(const uint8_t *data, uint32_t len, const uint8_t **jp
     return true;
 }
 
+static bool trim_jpeg_block_span(const uint8_t *data, uint32_t block_len, uint32_t claimed_jpeg_len,
+                                 const uint8_t **jpeg_ptr, uint32_t *jpeg_len)
+{
+    if (!data || !jpeg_ptr || !jpeg_len || block_len < 4) {
+        return false;
+    }
+
+    uint32_t candidate_len = block_len;
+    if (claimed_jpeg_len > 0) {
+        candidate_len = std::min(block_len, calculate_jpeg_aligned_size(claimed_jpeg_len));
+    }
+    return find_jpeg_span(data, candidate_len, jpeg_ptr, jpeg_len);
+}
+
 static bool decode_spi_jpeg_thumbnail_span(const uint8_t *jpeg_data, uint32_t jpeg_len)
 {
+    static bool rgb565_swap_logged = false;
     if (!jpeg_data || jpeg_len == 0 || !g_jpeg_decoder) {
         return false;
     }
@@ -270,9 +366,14 @@ static bool decode_spi_jpeg_thumbnail_span(const uint8_t *jpeg_data, uint32_t jp
         .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
         .conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
     };
+    if (!ensure_spi_jpeg_input_buffer(jpeg_len)) {
+        return false;
+    }
+    memcpy(g_spi_jpeg_input_buffer, jpeg_data, jpeg_len);
+
     uint32_t out_size = 0;
-    if (jpeg_decoder_process(g_jpeg_decoder, &decode_cfg, jpeg_data, jpeg_len,
-                             g_spi_jpeg_full_buffer, kThumbDecodeBufferBytes, &out_size) != ESP_OK) {
+    if (jpeg_decoder_process(g_jpeg_decoder, &decode_cfg, g_spi_jpeg_input_buffer, jpeg_len,
+                             g_spi_jpeg_full_buffer, static_cast<uint32_t>(g_spi_jpeg_full_buffer_size), &out_size) != ESP_OK) {
         ESP_LOGW(TAG, "failed to decode SPI JPEG len=%" PRIu32, jpeg_len);
         return false;
     }
@@ -283,7 +384,15 @@ static bool decode_spi_jpeg_thumbnail_span(const uint8_t *jpeg_data, uint32_t jp
         uint32_t src_y = static_cast<uint32_t>(y) * info.height / scaled_height;
         for (uint16_t x = 0; x < scaled_width; ++x) {
             uint32_t src_x = static_cast<uint32_t>(x) * info.width / scaled_width;
-            dst[y * scaled_width + x] = src[src_y * info.width + src_x];
+            uint16_t pixel = src[src_y * info.width + src_x];
+#if CONFIG_LCD_PIXEL_FORMAT_RGB565
+            pixel = swap_rgb565_bytes(pixel);
+            if (!rgb565_swap_logged) {
+                ESP_LOGI(TAG, "applying RGB565 byte swap to SPI JPEG thumbnail before LCD overlay");
+                rgb565_swap_logged = true;
+            }
+#endif
+            dst[y * scaled_width + x] = pixel;
         }
     }
 
@@ -305,12 +414,12 @@ static bool update_spi_thumbnail_from_metadata(const IMX500ParsedMetadata &parse
     }
 
     if (parsed.jpeg_block_offset < parsed.jpeg_block_end_offset &&
-        parsed.jpeg_block_end_offset <= kMaxFrameSize) {
+        parsed.jpeg_block_end_offset <= g_frame_buf_capacity) {
         const uint8_t *jpeg_ptr = nullptr;
         uint32_t jpeg_len = 0;
         const uint8_t *jpeg_block = g_frame_buf + parsed.jpeg_block_offset;
         uint32_t jpeg_block_len = parsed.jpeg_block_end_offset - parsed.jpeg_block_offset;
-        if (find_jpeg_span(jpeg_block, jpeg_block_len, &jpeg_ptr, &jpeg_len)) {
+        if (trim_jpeg_block_span(jpeg_block, jpeg_block_len, parsed.jpeg_data_len, &jpeg_ptr, &jpeg_len)) {
             ESP_LOGI(TAG, "retrying SPI JPEG decode with fallback span: off=%" PRIu32 " len=%" PRIu32,
                      static_cast<uint32_t>(jpeg_ptr - g_frame_buf), jpeg_len);
             return decode_spi_jpeg_thumbnail_span(jpeg_ptr, jpeg_len);
@@ -416,6 +525,7 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
                                          uint32_t camera_buf_ves, size_t camera_buf_len, void *user_data)
 {
     static bool callback_logged = false;
+    static bool compose_mode_logged = false;
     static uint64_t first_frame_us = 0;
     static uint32_t frame_count = 0;
     (void)user_data;
@@ -430,8 +540,19 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
         first_frame_us = now_us();
     }
 
-    blit_spi_thumbnail_with_pose(reinterpret_cast<uint16_t *>(camera_buf), camera_buf_hes, camera_buf_ves);
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(g_display_panel, 0, 0, camera_buf_hes, camera_buf_ves, camera_buf));
+    uint8_t *display_buf = camera_buf;
+    if (camera_buf_index < EXAMPLE_LCD_BUF_NUM && g_lcd_buffers[camera_buf_index] != nullptr) {
+        display_buf = reinterpret_cast<uint8_t *>(g_lcd_buffers[camera_buf_index]);
+        memcpy(display_buf, camera_buf, camera_buf_len);
+        if (!compose_mode_logged) {
+            ESP_LOGI(TAG, "display composition uses dedicated LCD buffer index=%u; SPI thumbnail is overlaid after the main frame leaves the capture pipeline",
+                     camera_buf_index);
+            compose_mode_logged = true;
+        }
+    }
+
+    blit_spi_thumbnail_with_pose(reinterpret_cast<uint16_t *>(display_buf), camera_buf_hes, camera_buf_ves);
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(g_display_panel, 0, 0, camera_buf_hes, camera_buf_ves, display_buf));
 
     uint64_t now = now_us();
     float fps = 0.0f;
@@ -463,7 +584,16 @@ static esp_err_t init_mipi_display_path()
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 3, &g_lcd_buffers[0], &g_lcd_buffers[1], &g_lcd_buffers[2]),
                         TAG, "failed to get LCD frame buffers");
 #endif
-    ESP_RETURN_ON_ERROR(app_video_set_bufs(g_video_fd, EXAMPLE_CAM_BUF_NUM, (const void **)g_lcd_buffers),
+
+    for (uint32_t i = 0; i < EXAMPLE_CAM_BUF_NUM; ++i) {
+        if (!g_camera_buffers[i]) {
+            g_camera_buffers[i] = heap_caps_aligned_calloc(kPsramFrameBufferAlignment, 1, app_video_get_buf_size(), MALLOC_CAP_SPIRAM);
+        }
+        ESP_RETURN_ON_FALSE(g_camera_buffers[i] != nullptr, ESP_ERR_NO_MEM, TAG,
+                            "failed to allocate camera capture buffer[%u]", i);
+    }
+    ESP_LOGI(TAG, "using dedicated CSI capture buffers and separate LCD compose buffers");
+    ESP_RETURN_ON_ERROR(app_video_set_bufs(g_video_fd, EXAMPLE_CAM_BUF_NUM, (const void **)g_camera_buffers),
                         TAG, "failed to set video buffers");
 
     memset(&format, 0, sizeof(format));
@@ -499,9 +629,10 @@ static void spi_metadata_task(void *arg)
     (void)arg;
     uint32_t wait_loops = 0;
     uint32_t metadata_frame_count = 0;
-    ESP_LOGI(TAG, "spi task started: stack=%u parsed_metadata=%u",
+    ESP_LOGI(TAG, "spi task started: stack=%u parsed_metadata=%u stack_hwm=%u",
              static_cast<unsigned>(kSpiTaskStackSize),
-             static_cast<unsigned>(sizeof(IMX500ParsedMetadata)));
+             static_cast<unsigned>(sizeof(IMX500ParsedMetadata)),
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(NULL)));
 
     while (!g_display_first_frame_seen && wait_loops < 400) {
         if (wait_loops == 0) {
@@ -516,13 +647,15 @@ static void spi_metadata_task(void *arg)
              g_display_first_frame_seen ? 1 : 0, wait_loops);
 
     while (true) {
-        int32_t data_size = read_metadata(g_frame_buf, kMaxFrameSize);
+        int32_t data_size = read_metadata(g_frame_buf, g_frame_buf_capacity);
         if (data_size <= 0) {
             continue;
         }
 
         if (metadata_frame_count < 5 || (metadata_frame_count % 30) == 0) {
-            ESP_LOGI(TAG, "metadata frame=%" PRIu32 " payload=%ld", metadata_frame_count, static_cast<long>(data_size));
+            ESP_LOGI(TAG, "metadata frame=%" PRIu32 " payload=%ld stack_hwm=%u",
+                     metadata_frame_count, static_cast<long>(data_size),
+                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(NULL)));
             log_metadata_first_12_bytes(g_frame_buf, static_cast<uint32_t>(data_size), "metadata raw");
         }
 
@@ -606,10 +739,10 @@ static esp_err_t start_worker_tasks()
 extern "C" esp_err_t imx500_sdk_integration_test_run(void)
 {
     ESP_RETURN_ON_FALSE(bind_peripherals_api(), ESP_FAIL, TAG, "failed to bind SDK peripherals");
-    ESP_RETURN_ON_FALSE(allocate_parsed_metadata_buffer(), ESP_FAIL, TAG, "failed to prepare parsed metadata buffer");
     ESP_RETURN_ON_FALSE(allocate_spi_thumbnail_buffers(), ESP_FAIL, TAG, "failed to prepare SPI thumbnail buffers");
 
     ESP_RETURN_ON_FALSE(open_imx500_stream(), ESP_FAIL, TAG, "open() failed");
+    ESP_RETURN_ON_FALSE(allocate_parsed_metadata_buffer(), ESP_FAIL, TAG, "failed to prepare parsed metadata buffer");
     ESP_RETURN_ON_ERROR(init_mipi_display_path(), TAG, "failed to initialize MIPI display path");
     ESP_RETURN_ON_ERROR(start_worker_tasks(), TAG, "failed to start display workers");
 

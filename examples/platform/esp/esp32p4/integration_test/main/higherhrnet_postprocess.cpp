@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+
+#include "esp_heap_caps.h"
 
 namespace {
 
@@ -25,6 +28,25 @@ struct PersonAccumulator {
     uint32_t tag_count = 0;
     HigherhrnetPose pose = {};
 };
+
+PersonAccumulator *g_people_scratch = nullptr;
+
+static PersonAccumulator *get_people_scratch()
+{
+    if (!g_people_scratch) {
+        g_people_scratch = static_cast<PersonAccumulator *>(
+            heap_caps_calloc(kHigherhrnetMaxPeople, sizeof(PersonAccumulator), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        if (!g_people_scratch) {
+            g_people_scratch = static_cast<PersonAccumulator *>(calloc(kHigherhrnetMaxPeople, sizeof(PersonAccumulator)));
+        }
+    } else {
+        for (uint32_t i = 0; i < kHigherhrnetMaxPeople; ++i) {
+            g_people_scratch[i] = PersonAccumulator{};
+        }
+    }
+
+    return g_people_scratch;
+}
 
 static float read_tensor_value(const IMX500ParsedTensor &tensor, uint32_t index)
 {
@@ -90,6 +112,7 @@ static void finalize_pose(HigherhrnetPose *pose)
 bool higherhrnet_postprocess_from_metadata(const IMX500ParsedMetadata *parsed_metadata,
                                            HigherhrnetResult *result)
 {
+    static bool tensor_layout_logged = false;
     if (!parsed_metadata || !result || parsed_metadata->network_count == 0) {
         return false;
     }
@@ -104,6 +127,23 @@ bool higherhrnet_postprocess_from_metadata(const IMX500ParsedMetadata *parsed_me
     const IMX500ParsedTensor &ind_tensor = network->output_tensors[1];
     const IMX500ParsedTensor &val_tensor = network->output_tensors[2];
 
+    if (!tensor_layout_logged) {
+        std::printf("[HRNET] tensor dims: tag=(");
+        for (uint32_t i = 0; i < tag_tensor.dimension_count; ++i) {
+            std::printf("%s%u", (i == 0) ? "" : "x", tag_tensor.dimensions[i].size);
+        }
+        std::printf(") ind=(");
+        for (uint32_t i = 0; i < ind_tensor.dimension_count; ++i) {
+            std::printf("%s%u", (i == 0) ? "" : "x", ind_tensor.dimensions[i].size);
+        }
+        std::printf(") val=(");
+        for (uint32_t i = 0; i < val_tensor.dimension_count; ++i) {
+            std::printf("%s%u", (i == 0) ? "" : "x", val_tensor.dimensions[i].size);
+        }
+        std::printf(")\n");
+        tensor_layout_logged = true;
+    }
+
     uint32_t max_num_people = std::min({kHigherhrnetMaxPeople,
                                         tag_tensor.element_count / kHigherhrnetJointCount,
                                         ind_tensor.element_count / kHigherhrnetJointCount,
@@ -112,14 +152,20 @@ bool higherhrnet_postprocess_from_metadata(const IMX500ParsedMetadata *parsed_me
         return false;
     }
 
-    PersonAccumulator people[kHigherhrnetMaxPeople] = {};
+    PersonAccumulator *people = get_people_scratch();
+    if (!people) {
+        std::printf("[HRNET] no memory for people scratch, bytes=%lu\n",
+                    static_cast<unsigned long>(sizeof(PersonAccumulator) * kHigherhrnetMaxPeople));
+        return false;
+    }
     uint32_t raw_people = 0;
 
     for (uint32_t order_index = 0; order_index < kHigherhrnetJointCount; ++order_index) {
         uint32_t joint_index = kJointOrder[order_index];
 
         for (uint32_t person_slot = 0; person_slot < max_num_people; ++person_slot) {
-            uint32_t element_index = person_slot * kHigherhrnetJointCount + joint_index;
+            // The IMX500 HigherHRNet metadata stores tag/ind/val in joint-major order.
+            uint32_t element_index = joint_index * max_num_people + person_slot;
             float score = read_tensor_value(val_tensor, element_index);
             if (score <= kJointScoreThreshold) {
                 continue;
