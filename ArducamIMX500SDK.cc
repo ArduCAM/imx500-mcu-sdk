@@ -2580,6 +2580,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
 
     imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
     imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
+    imx500_res_read((IMX500_COMMAND_BASE|161), &val, 500);
     switch (mipi_format)
     {
     case MIPI_DATA_IMAGE:
