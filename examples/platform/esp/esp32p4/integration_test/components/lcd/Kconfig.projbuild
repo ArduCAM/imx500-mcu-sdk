@@ -1,21 +1,5 @@
 menu "Example LCD Configuration"
 
-    config EXAMPLE_ENABLE_LCD_DISPLAY
-        bool "Enable lcd display images"
-        default n
-
-    config EXAMPLE_ENABLE_PRINT_FPS_RATE_VALUE
-        bool "enable print fps rate value"
-        default y
-
-    config EXAMPLE_USE_MEMORY_MAPPING
-        bool "Use Memory Mapping for Buffer Allocation"
-        default n
-        help
-        Enable this option if you want to allocate memory using memory mapping.
-        This is typically useful for performance optimization or when working
-        with hardware that requires mapped memory access
-
     config EXAMPLE_CAM_BUF_COUNT
         int "Camera Buffer Count"
         default 2

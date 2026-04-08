@@ -26,13 +26,10 @@
 #include "imx500_sdk_integration_test.h"
 #include "peripherals_adapter.h"
 
-#define EXAMPLE_IMX500_ENABLE_SPI_METADATA 1
-
 static const char *TAG = "imx500_sdk_test";
 
 namespace {
 
-constexpr uint32_t kMinFrameBufferSize = CONFIG_EXAMPLE_IMX500_SDK_MAX_FRAME_SIZE;
 constexpr uint32_t kMaxFrameBufferSize = 284 * 1024;
 constexpr uint16_t kSpiThumbMaxWidth = 192;
 constexpr uint16_t kSpiThumbMaxHeight = 144;
@@ -202,9 +199,8 @@ static bool allocate_parsed_metadata_buffer()
     ESP_LOGI(TAG, "allocated parsed metadata buffer: parsed=%u frame_buf=%u",
              static_cast<unsigned>(sizeof(IMX500ParsedMetadata)),
              static_cast<unsigned>(g_frame_buf_capacity));
-    ESP_LOGI(TAG, "metadata size planning: reported=%u configured_min=%u actual_alloc=%u",
+    ESP_LOGI(TAG, "metadata size planning: reported=%u actual_alloc=%u",
              static_cast<unsigned>(reported_size),
-             static_cast<unsigned>(kMinFrameBufferSize),
              static_cast<unsigned>(g_frame_buf_capacity));
     return true;
 }
@@ -385,13 +381,11 @@ static bool decode_spi_jpeg_thumbnail_span(const uint8_t *jpeg_data, uint32_t jp
         for (uint16_t x = 0; x < scaled_width; ++x) {
             uint32_t src_x = static_cast<uint32_t>(x) * info.width / scaled_width;
             uint16_t pixel = src[src_y * info.width + src_x];
-#if CONFIG_LCD_PIXEL_FORMAT_RGB565
             pixel = swap_rgb565_bytes(pixel);
             if (!rgb565_swap_logged) {
                 ESP_LOGI(TAG, "applying RGB565 byte swap to SPI JPEG thumbnail before LCD overlay");
                 rgb565_swap_logged = true;
             }
-#endif
             dst[y * scaled_width + x] = pixel;
         }
     }
@@ -577,13 +571,8 @@ static esp_err_t init_mipi_display_path()
     g_video_fd = app_video_open((char *)EXAMPLE_CAM_DEV_PATH, APP_VIDEO_FMT);
     ESP_RETURN_ON_FALSE(g_video_fd >= 0, ESP_FAIL, TAG, "video open failed");
 
-#if EXAMPLE_LCD_BUF_NUM == 2
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 2, &g_lcd_buffers[0], &g_lcd_buffers[1]),
                         TAG, "failed to get LCD frame buffers");
-#else
-    ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 3, &g_lcd_buffers[0], &g_lcd_buffers[1], &g_lcd_buffers[2]),
-                        TAG, "failed to get LCD frame buffers");
-#endif
 
     for (uint32_t i = 0; i < EXAMPLE_CAM_BUF_NUM; ++i) {
         if (!g_camera_buffers[i]) {
@@ -616,11 +605,7 @@ static bool open_imx500_stream()
     ESP_LOGI(TAG, "opening IMX500 with preloaded module flash assets");
     return open(nullptr, 0, nullptr, 0,
                 MIPI_DATA_IMAGE,
-#if EXAMPLE_IMX500_ENABLE_SPI_METADATA
                 SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
-#else
-                SPI_METADATA_NONE,
-#endif
                 10);
 }
 
@@ -721,16 +706,12 @@ static esp_err_t start_worker_tasks()
                         TAG, "failed to start app_video stream task");
     ESP_LOGI(TAG, "display pipeline armed: callback registered and app_video stream task started");
 
-#if EXAMPLE_IMX500_ENABLE_SPI_METADATA
     if (!g_spi_task_handle) {
         BaseType_t result = xTaskCreatePinnedToCore(spi_metadata_task, "spi metadata task",
                                                     kSpiTaskStackSize, nullptr, 4,
                                                     &g_spi_task_handle, 1);
         ESP_RETURN_ON_FALSE(result == pdPASS, ESP_FAIL, TAG, "failed to create SPI task");
     }
-#else
-    ESP_LOGI(TAG, "SPI metadata task disabled while validating LCD path");
-#endif
     return ESP_OK;
 }
 
@@ -750,12 +731,6 @@ extern "C" esp_err_t imx500_sdk_integration_test_run(void)
     stream_on();
     vTaskDelay(pdMS_TO_TICKS(50));
 
-#if EXAMPLE_IMX500_ENABLE_SPI_METADATA
     ESP_LOGI(TAG, "IMX500 test running: MIPI image is displayed on LCD, SPI metadata is parsed in the background");
-#else
-    ESP_LOGI(TAG, "SPI metadata task disabled while validating LCD path");
-    ESP_LOGI(TAG, "IMX500 test running: validating MIPI image on LCD only, SPI metadata is disabled");
-    ESP_LOGI(TAG, "display path is independent from SPI metadata; if AI metadata is absent, LCD should remain active in MIPI-only mode");
-#endif
     return ESP_OK;
 }

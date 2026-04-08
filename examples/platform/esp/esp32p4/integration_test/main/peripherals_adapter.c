@@ -21,6 +21,11 @@
 #define IMX500_SPI_MAX_TRANSFER_SZ (284 * 1024)
 
 static const char *TAG = "peripherals_adapter";
+static const int s_imx500_spi_clock_hz = 5000000;
+static const int s_imx500_spi_sck_pin = 5;
+static const int s_imx500_spi_mosi_pin = 3;
+static const int s_imx500_spi_miso_pin = 2;
+static const int s_imx500_spi_cs_pin = 4;
 static i2c_master_dev_handle_t s_camera_i2c_dev_handle;
 static spi_device_handle_t s_imx500_spi_handle;
 static bool s_bound;
@@ -64,17 +69,17 @@ static esp_err_t ensure_spi_device(void)
     /* The config pins are named from the IMX500 module side:
      * host MOSI/TX must connect to module RX, and host MISO/RX must connect to module TX. */
     spi_bus_config_t buscfg = {
-        .mosi_io_num = CONFIG_EXAMPLE_IMX500_SDK_SPI_RX_PIN,
-        .miso_io_num = CONFIG_EXAMPLE_IMX500_SDK_SPI_TX_PIN,
-        .sclk_io_num = CONFIG_EXAMPLE_IMX500_SDK_SPI_SCK_PIN,
+        .mosi_io_num = s_imx500_spi_mosi_pin,
+        .miso_io_num = s_imx500_spi_miso_pin,
+        .sclk_io_num = s_imx500_spi_sck_pin,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = IMX500_SPI_MAX_TRANSFER_SZ,
     };
     spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = CONFIG_EXAMPLE_IMX500_SDK_SPI_CLOCK_HZ,
+        .clock_speed_hz = s_imx500_spi_clock_hz,
         .mode = 3,
-        .spics_io_num = CONFIG_EXAMPLE_IMX500_SDK_SPI_CS_PIN,
+        .spics_io_num = s_imx500_spi_cs_pin,
         .queue_size = 1,
     };
 
@@ -83,11 +88,11 @@ static esp_err_t ensure_spi_device(void)
 
     ESP_LOGI(TAG, "initialized IMX500 SPI host=%d sck=%d mosi(host->module_rx)=%d miso(host<-module_tx)=%d cs=%d hz=%d",
              IMX500_SPI_HOST,
-             CONFIG_EXAMPLE_IMX500_SDK_SPI_SCK_PIN,
-             CONFIG_EXAMPLE_IMX500_SDK_SPI_RX_PIN,
-             CONFIG_EXAMPLE_IMX500_SDK_SPI_TX_PIN,
-             CONFIG_EXAMPLE_IMX500_SDK_SPI_CS_PIN,
-             CONFIG_EXAMPLE_IMX500_SDK_SPI_CLOCK_HZ);
+             s_imx500_spi_sck_pin,
+             s_imx500_spi_mosi_pin,
+             s_imx500_spi_miso_pin,
+             s_imx500_spi_cs_pin,
+             s_imx500_spi_clock_hz);
     return ESP_OK;
 }
 
