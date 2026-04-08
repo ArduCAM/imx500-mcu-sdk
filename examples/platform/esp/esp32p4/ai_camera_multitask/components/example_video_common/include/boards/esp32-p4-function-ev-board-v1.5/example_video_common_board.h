@@ -1,0 +1,35 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: ESPRESSIF MIT
+ */
+
+#pragma once
+
+#include "sdkconfig.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief MIPI-CSI camera sensor configuration
+ */
+#define EXAMPLE_MIPI_CSI_SCCB_I2C_SCL_PIN               8
+#define EXAMPLE_MIPI_CSI_SCCB_I2C_SDA_PIN               7
+#define EXAMPLE_MIPI_CSI_CAM_SENSOR_RESET_PIN           -1
+#define EXAMPLE_MIPI_CSI_CAM_SENSOR_PWDN_PIN            -1
+#define EXAMPLE_MIPI_CSI_XCLK_PIN                       -1
+
+#if CONFIG_EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
+#define EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_SCL_PIN     8
+#define EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_SDA_PIN     7
+
+#define EXAMPLE_MIPI_CSI_CAM_MOTOR_RESET_PIN            -1
+#define EXAMPLE_MIPI_CSI_CAM_MOTOR_PWDN_PIN             -1
+#define EXAMPLE_MIPI_CSI_CAM_MOTOR_SIGNAL_PIN           -1
+#endif /* CONFIG_EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR */
+
+#ifdef __cplusplus
+}
+#endif

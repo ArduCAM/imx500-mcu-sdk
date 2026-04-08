@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebUSB Test Tool</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: #1e293b;
+            --text-color: #f8fafc;
+            --primary-color: #3b82f6;
+            --primary-hover: #2563eb;
+            --danger-color: #ef4444;
+            --danger-hover: #dc2626;
+            --border-color: #334155;
+            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: var(--font-family);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 800px;
+            background-color: var(--surface-color);
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.25);
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 1.8rem;
+            font-weight: 600;
+            text-align: center;
+            color: #e2e8f0;
+        }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: var(--bg-color);
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+        }
+
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: var(--danger-color);
+            transition: background-color 0.3s ease;
+        }
+
+        .indicator.connected {
+            background-color: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-family: var(--font-family);
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.danger {
+            background-color: var(--danger-color);
+        }
+
+        button.danger:hover {
+            background-color: var(--danger-hover);
+        }
+
+        .section {
+            margin-bottom: 1.5rem;
+        }
+
+        .section h2 {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+
+        textarea {
+            width: 100%;
+            height: 120px;
+            background-color: var(--bg-color);
+            color: #a7f3d0;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.9rem;
+            resize: vertical;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+
+        textarea:focus {
+            border-color: var(--primary-color);
+        }
+
+        .log-area {
+            height: 200px;
+            color: #d8b4fe;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            margin-top: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .preview-panel {
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .preview-panel.hidden {
+            display: none;
+        }
+
+        .preview-meta {
+            margin-top: 0.75rem;
+            font-size: 0.9rem;
+            color: #cbd5e1;
+            white-space: pre-wrap;
+        }
+
+        canvas,
+        .preview-image {
+            width: 100%;
+            max-height: 420px;
+            height: auto;
+            display: block;
+            border-radius: 6px;
+            background: #020617;
+            image-rendering: auto;
+        }
+
+        .instruction {
+            font-size: 0.85rem;
+            color: #94a3b8;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>WebUSB Tuning Dashboard</h1>
+    <div class="instruction">
+        Connect to your ESP32 device via WebUSB to send ISP tuning parameters and read responses. 
+        Compatible with Chromium-based browsers (Chrome, Edge, Opera).
+    </div>
+
+    <div class="status-bar">
+        <div class="status">
+            <div id="statusIndicator" class="indicator"></div>
+            <span id="statusText">Disconnected</span>
+        </div>
+        <button id="btnConnect">Connect Device</button>
+    </div>
+
+    <div class="section">
+        <h2>Data to Send (JSON)</h2>
+        <div class="controls" style="margin-bottom: 0.75rem;">
+            <button id="btnCameraInfo" disabled>Get Camera Info</button>
+            <button id="btnCaptureRaw" disabled>Capture RAW</button>
+            <button id="btnCaptureRgb" disabled>Capture RGB</button>
+        </div>
+        <textarea id="txtSend">{"exposure":{"value":10000}}</textarea>
+        <div class="controls">
+            <button id="btnSend" disabled>Send Data</button>
+            <button id="btnClearSend" style="background-color: var(--border-color);">Clear</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Device Logs & Responses</h2>
+        <textarea id="txtLog" class="log-area" readonly></textarea>
+        <div class="controls">
+            <button id="btnClearLog" style="background-color: var(--border-color);">Clear Logs</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>RAW Preview</h2>
+        <div id="rawPreviewPanel" class="preview-panel hidden">
+            <img id="rawPreviewImage" class="preview-image" alt="RAW preview">
+            <div id="rawPreviewMeta" class="preview-meta"></div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>RGB Preview</h2>
+        <div id="rgbPreviewPanel" class="preview-panel hidden">
+            <canvas id="rgbPreviewCanvas"></canvas>
+            <div id="rgbPreviewMeta" class="preview-meta"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let port;
+    let device;
+    let endpointIn = 0;
+    let endpointOut = 0;
+    let interfaceNumber = 0;
+
+    const btnConnect = document.getElementById('btnConnect');
+    const btnSend = document.getElementById('btnSend');
+    const btnClearSend = document.getElementById('btnClearSend');
+    const btnClearLog = document.getElementById('btnClearLog');
+    const btnCameraInfo = document.getElementById('btnCameraInfo');
+    const btnCaptureRaw = document.getElementById('btnCaptureRaw');
+    const btnCaptureRgb = document.getElementById('btnCaptureRgb');
+    const txtSend = document.getElementById('txtSend');
+    const txtLog = document.getElementById('txtLog');
+    const statusIndicator = document.getElementById('statusIndicator');
+    const statusText = document.getElementById('statusText');
+    const rawPreviewPanel = document.getElementById('rawPreviewPanel');
+    const rawPreviewImage = document.getElementById('rawPreviewImage');
+    const rawPreviewMeta = document.getElementById('rawPreviewMeta');
+    const rgbPreviewPanel = document.getElementById('rgbPreviewPanel');
+    const rgbPreviewCanvas = document.getElementById('rgbPreviewCanvas');
+    const rgbPreviewMeta = document.getElementById('rgbPreviewMeta');
+
+    function logMessage(msg, isError = false) {
+        const time = new Date().toLocaleTimeString();
+        const prefix = isError ? '[ERROR]' : '[INFO]';
+        txtLog.value += `\n${time} ${prefix} ${msg}`;
+        txtLog.scrollTop = txtLog.scrollHeight;
+    }
+
+    function updateUIConnected(isConnected) {
+        if (isConnected) {
+            statusIndicator.classList.add('connected');
+            statusText.innerText = `Connected: ${device.productName || 'USB Device'}`;
+            btnConnect.innerText = 'Disconnect';
+            btnConnect.classList.add('danger');
+            btnSend.disabled = false;
+            btnCameraInfo.disabled = false;
+            btnCaptureRaw.disabled = false;
+            btnCaptureRgb.disabled = false;
+        } else {
+            statusIndicator.classList.remove('connected');
+            statusText.innerText = 'Disconnected';
+            btnConnect.innerText = 'Connect Device';
+            btnConnect.classList.remove('danger');
+            btnSend.disabled = true;
+            btnCameraInfo.disabled = true;
+            btnCaptureRaw.disabled = true;
+            btnCaptureRgb.disabled = true;
+            clearRawPreview();
+            clearRgbPreview();
+            device = null;
+        }
+    }
+
+    function clearRawPreview() {
+        rawPreviewPanel.classList.add('hidden');
+        rawPreviewMeta.textContent = '';
+        rawPreviewImage.removeAttribute('src');
+    }
+
+    function clearRgbPreview() {
+        rgbPreviewPanel.classList.add('hidden');
+        rgbPreviewMeta.textContent = '';
+        const ctx = rgbPreviewCanvas.getContext('2d');
+        ctx.clearRect(0, 0, rgbPreviewCanvas.width, rgbPreviewCanvas.height);
+    }
+
+    function parseBitDepth(bayerBit) {
+        if (typeof bayerBit === 'string' && bayerBit.toLowerCase().startsWith('raw')) {
+            const parsed = Number.parseInt(bayerBit.slice(3), 10);
+            if (!Number.isNaN(parsed)) {
+                return parsed;
+            }
+        }
+        if (typeof bayerBit === 'number' && Number.isFinite(bayerBit)) {
+            return bayerBit;
+        }
+        return 16;
+    }
+
+    function decodeBase64ToBytes(base64) {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    function getRawSample(bytes, bitDepth, x, y, width) {
+        const index = y * width + x;
+        if (bitDepth <= 8) {
+            return bytes[index];
+        }
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        return view.getUint16(index * 2, true);
+    }
+
+    function renderRawPreview(messageObj) {
+        const rawInfo = messageObj?.raw_info;
+        const width = rawInfo?.resolution?.width;
+        const height = rawInfo?.resolution?.height;
+        const bufferB64 = rawInfo?.data?.buffer;
+        const bayerFmt = rawInfo?.bayer_fmt || 'n/a';
+        const bayerBit = rawInfo?.bayer_bit;
+
+        if (!width || !height || !bufferB64) {
+            logMessage('RAW preview skipped: missing width/height/data.buffer.', true);
+            clearRawPreview();
+            return;
+        }
+
+        const bitDepth = parseBitDepth(bayerBit);
+        const bytes = decodeBase64ToBytes(bufferB64);
+        const pixelCount = width * height;
+        const expectedBytesPerPixel = bitDepth <= 8 ? 1 : 2;
+        const expectedLength = pixelCount * expectedBytesPerPixel;
+
+        if (bytes.length !== expectedLength) {
+            logMessage(`RAW preview size mismatch: got ${bytes.length} bytes, expected ${expectedLength}.`, true);
+            clearRawPreview();
+            return;
+        }
+
+        const previewCanvas = document.createElement('canvas');
+        previewCanvas.width = width;
+        previewCanvas.height = height;
+        const ctx = previewCanvas.getContext('2d');
+        const imageData = ctx.createImageData(width, height);
+        const rgba = imageData.data;
+        const maxValue = bitDepth <= 8 ? 255 : ((1 << Math.min(bitDepth, 16)) - 1);
+
+        for (let y = 0; y < height; y += 1) {
+            for (let x = 0; x < width; x += 1) {
+                const sample = getRawSample(bytes, bitDepth, x, y, width);
+                const gray = Math.max(0, Math.min(255, Math.round((sample / maxValue) * 255)));
+                const offset = (y * width + x) * 4;
+                rgba[offset] = gray;
+                rgba[offset + 1] = gray;
+                rgba[offset + 2] = gray;
+                rgba[offset + 3] = 255;
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        rawPreviewImage.src = previewCanvas.toDataURL('image/png');
+        rawPreviewMeta.textContent =
+            `Resolution: ${width} x ${height}\n` +
+            `Format: ${bayerFmt} (grayscale preview)\n` +
+            `Bit depth: ${bitDepth}\n` +
+            `Raw bytes: ${bytes.length}`;
+        rawPreviewPanel.classList.remove('hidden');
+    }
+
+    function renderRgbPreview(messageObj) {
+        const rgbInfo = messageObj?.rgb_info;
+        const width = rgbInfo?.resolution?.width;
+        const height = rgbInfo?.resolution?.height;
+        const bufferB64 = rgbInfo?.data?.buffer;
+
+        if (!width || !height || !bufferB64) {
+            logMessage('RGB preview skipped: missing width/height/data.buffer.', true);
+            clearRgbPreview();
+            return;
+        }
+
+        const bytes = decodeBase64ToBytes(bufferB64);
+        const expectedLength = width * height * 3;
+        if (bytes.length !== expectedLength) {
+            logMessage(`RGB preview size mismatch: got ${bytes.length} bytes, expected ${expectedLength}.`, true);
+            clearRgbPreview();
+            return;
+        }
+
+        const ctx = rgbPreviewCanvas.getContext('2d');
+        rgbPreviewCanvas.width = width;
+        rgbPreviewCanvas.height = height;
+
+        const imageData = ctx.createImageData(width, height);
+        const rgba = imageData.data;
+        for (let i = 0, j = 0; i < bytes.length; i += 3, j += 4) {
+            const b = bytes[i];
+            const g = bytes[i + 1];
+            const r = bytes[i + 2];
+            rgba[j] = r;
+            rgba[j + 1] = g;
+            rgba[j + 2] = b;
+            rgba[j + 3] = 255;
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        rgbPreviewMeta.textContent =
+            `Resolution: ${width} x ${height}\n` +
+            `Format: RGB24 preview from device BGR888\n` +
+            `Bit depth: 8\n` +
+            `Raw bytes: ${bytes.length}`;
+        rgbPreviewPanel.classList.remove('hidden');
+    }
+
+    async function connectDevice() {
+        if (device) {
+            // Disconnect
+            try {
+                if (device.opened) {
+                    await device.releaseInterface(interfaceNumber);
+                    await device.close();
+                }
+            } catch (e) {
+                logMessage('Error while closing device: ' + e, true);
+            }
+            updateUIConnected(false);
+            logMessage('Device disconnected.');
+            return;
+        }
+
+        try {
+            logMessage('Requesting device...');
+            device = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x303a }] }); // Espressif VID, fallback to generic if omitted but this helps filtering
+        } catch (e) {
+            // Fallback to any device if Espressif filter fails or user cancelled
+            if (e.name === 'NotFoundError') {
+                try {
+                    logMessage('Trying without filters...');
+                    device = await navigator.usb.requestDevice({ filters: [] });
+                } catch(err) {
+                    logMessage('No device selected. ' + err.message, true);
+                    return;
+                }
+            } else {
+                logMessage('Failed to select device: ' + e.message, true);
+                return;
+            }
+        }
+
+        try {
+            await device.open();
+            if (device.configuration === null) {
+                await device.selectConfiguration(1);
+            }
+
+            // Find Vendor Specific Interface
+            let found = false;
+            for (const iface of device.configuration.interfaces) {
+                const alt = iface.alternate;
+                if (alt.interfaceClass === 0xFF) { // Vendor Specific
+                    interfaceNumber = iface.interfaceNumber;
+                    
+                    for (const ep of alt.endpoints) {
+                        if (ep.direction === 'out') {
+                            endpointOut = ep.endpointNumber;
+                        } else if (ep.direction === 'in') {
+                            endpointIn = ep.endpointNumber;
+                        }
+                    }
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                throw new Error("No Vendor Specific Interface found.");
+            }
+
+            await device.claimInterface(interfaceNumber);
+            logMessage(`Device opened. Interfaces claimed. (In: ${endpointIn}, Out: ${endpointOut})`);
+            updateUIConnected(true);
+
+            // Start polling for incoming data
+            pollDevice();
+
+        } catch (e) {
+            logMessage('Connection error: ' + e.message, true);
+            updateUIConnected(false);
+        }
+    }
+
+    async function sendData() {
+        if (!device || !device.opened) {
+            logMessage('Device not connected.', true);
+            return;
+        }
+
+        const dataStr = txtSend.value;
+        if (!dataStr) return;
+
+        try {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(dataStr);
+            logMessage(`Sending ${data.length} bytes...`);
+            
+            const result = await device.transferOut(endpointOut, data);
+            if (result.status === 'ok') {
+                logMessage(`Successfully sent ${result.bytesWritten} bytes.`);
+            } else {
+                logMessage(`Transfer failed with status: ${result.status}`, true);
+            }
+        } catch (e) {
+            logMessage('Failed to send data: ' + e.message, true);
+            updateUIConnected(false);
+        }
+    }
+
+    async function sendJsonObject(payload) {
+        txtSend.value = JSON.stringify(payload);
+        await sendData();
+    }
+
+    function formatRxMessage(text) {
+        const sizeKB = (text.length / 1024).toFixed(1);
+        try {
+            const obj = JSON.parse(text);
+            // Truncate long string values (e.g. base64 image buffers) for readability
+            const replacer = (key, value) => {
+                if (typeof value === 'string' && value.length > 80) {
+                    return `${value.slice(0, 80)}... (${value.length} chars)`;
+                }
+                return value;
+            };
+            if (obj && obj.raw_info) {
+                renderRawPreview(obj);
+            } else {
+                clearRawPreview();
+            }
+            if (obj && obj.rgb_info) {
+                renderRgbPreview(obj);
+            } else {
+                clearRgbPreview();
+            }
+            return `[RX] (${sizeKB} KB)\n${JSON.stringify(obj, replacer, 2)}`;
+        } catch (_) {
+            return `[RX] (${sizeKB} KB, not JSON)\n${text}`;
+        }
+    }
+
+    async function pollDevice() {
+        const decoder = new TextDecoder();
+        let rxBuffer = '';
+
+        while (device && device.opened) {
+            try {
+                const result = await device.transferIn(endpointIn, 65536); // Read up to 64KB per chunk
+
+                if (result.status === 'ok' && result.data.byteLength > 0) {
+                    rxBuffer += decoder.decode(result.data, {stream: true});
+
+                    try {
+                        // Check if the accumulated buffer forms a valid JSON object
+                        if (rxBuffer.trim().startsWith('{') && rxBuffer.trim().endsWith('}')) {
+                            JSON.parse(rxBuffer); // Will throw if incomplete/invalid
+                            logMessage(formatRxMessage(rxBuffer));
+                            rxBuffer = ''; // Clear buffer once successfully parsed
+                        }
+                    } catch (e) {
+                        // Incomplete JSON, keep accumulating chunks
+                    }
+
+                    // Failsafe: if buffer grows larger than 5MB without valid JSON, flush it to prevent OOM
+                    if (rxBuffer.length > 5 * 1024 * 1024) {
+                        logMessage(`[RX Warning] Buffer exceeded 5MB. Flushing partial data...`);
+                        rxBuffer = '';
+                    }
+                } else if (result.status === 'stall') {
+                    await device.clearHalt("in", endpointIn);
+                }
+            } catch (e) {
+                logMessage('Polling error (device disconnected?): ' + e.message, true);
+                updateUIConnected(false);
+                break;
+            }
+        }
+    }
+
+    btnConnect.addEventListener('click', connectDevice);
+    btnSend.addEventListener('click', sendData);
+    btnCameraInfo.addEventListener('click', async () => {
+        await sendJsonObject({ cmd: 'get_camera_info' });
+    });
+    btnCaptureRaw.addEventListener('click', async () => {
+        await sendJsonObject({ cmd: 'capture_raw' });
+    });
+    btnCaptureRgb.addEventListener('click', async () => {
+        await sendJsonObject({ cmd: 'capture_rgb' });
+    });
+    
+    btnClearLog.addEventListener('click', () => {
+        txtLog.value = '';
+        clearRawPreview();
+        clearRgbPreview();
+        logMessage('Log cleared.');
+    });
+
+    btnClearSend.addEventListener('click', () => {
+        txtSend.value = '';
+    });
+
+    if (!navigator.usb) {
+        logMessage('WebUSB is not supported by your browser. Please use Chrome or Edge.', true);
+        btnConnect.disabled = true;
+    } else {
+        clearRawPreview();
+        clearRgbPreview();
+        logMessage('Ready to connect.');
+    }
+</script>
+
+</body>
+</html>

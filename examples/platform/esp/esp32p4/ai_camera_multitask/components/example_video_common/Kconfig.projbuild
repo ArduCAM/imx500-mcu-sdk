@@ -1,0 +1,96 @@
+menu "Example Video Initialization Configuration"
+
+    choice EXAMPLE_SELECT_TARGET_DEVELOPMENT_BOARD
+        prompt "Select Target Development Board"
+        default EXAMPLE_SELECT_ESP32P4_FUNCTION_EV_BOARD_V1_5
+        depends on IDF_TARGET_ESP32P4
+        help
+            Select your target development board for automatic pin configuration.
+
+        config EXAMPLE_SELECT_ESP32P4_FUNCTION_EV_BOARD_V1_4
+            bool "ESP32-P4-Function-EV-Board V1.4"
+            depends on IDF_TARGET_ESP32P4
+            help
+                Official Espressif ESP32-P4 Function Evaluation Board Version 1.4.
+                Includes predefined GPIO configurations for camera and display interfaces.
+
+        config EXAMPLE_SELECT_ESP32P4_FUNCTION_EV_BOARD_V1_5
+            bool "ESP32-P4-Function-EV-Board V1.5"
+            depends on IDF_TARGET_ESP32P4
+            help
+                Official Espressif ESP32-P4 Function Evaluation Board Version 1.5.
+                Includes predefined GPIO configurations for camera and display interfaces.
+    endchoice
+
+    menu "MIPI RAW Sensor Configuration"
+        config EXAMPLE_MIPI_CSI_SCCB_I2C_PORT
+            int "SCCB(I2C) Port Number"
+            default 0
+            range 0 2 if IDF_TARGET_ESP32P4
+            depends on ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
+            help
+                I2C port number for camera sensor control communication.
+
+                SCCB (Serial Camera Control Bus) is an I2C-compatible
+                protocol used for camera sensor configuration.
+
+        config EXAMPLE_MIPI_CSI_SCCB_I2C_FREQ
+            int "SCCB(I2C) Frequency (100K-400K Hz)"
+            default 100000
+            range 100000 400000
+            depends on ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
+            help
+                I2C clock frequency for camera sensor communication.
+
+                Recommended values:
+                - 100000 Hz (100kHz): Standard speed, most compatible
+                - 400000 Hz (400kHz): Fast mode, reduces initialization time
+
+                Higher frequencies reduce sensor initialization time but may
+                cause issues with some sensors or longer cable connections.
+
+        config EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
+            bool "Enable Motor Control"
+            default y
+            depends on ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
+            help
+                Enable Voice Coil Motor (VCM) control for autofocus functionality.
+
+                This feature is required for camera modules with autofocus
+                capabilities. Disable if using fixed-focus lenses.
+
+        if EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
+            config EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_PORT
+                int "Motor SCCB(I2C) Port Number"
+                default 0
+                range 0 2 if IDF_TARGET_ESP32P4
+                help
+                    I2C port number for autofocus motor control communication.
+
+                    SCCB (Serial Camera Control Bus) is an I2C-compatible
+                    protocol used for camera sensor configuration.
+
+                    Can be the same as camera sensor port if sharing the bus.
+
+            config EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_FREQ
+                int "Motor SCCB(I2C) Frequency (100K-400K Hz)"
+                default 100000
+                range 100000 400000
+                help
+                    I2C clock frequency for camera motor communication.
+
+                    Recommended values:
+                    - 100000 Hz (100kHz): Standard speed, most compatible
+                    - 400000 Hz (400kHz): Fast mode, reduces initialization time
+        endif
+
+        config EXAMPLE_MIPI_CSI_VIDEO_DEVICE_DONT_INIT_LDO
+            bool "MIPI-CSI Video Device Don't Initialize LDO"
+            default n
+            depends on ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
+            help
+                If selected, the application must initialize the LDO
+                required by the MIPI-CSI video device.
+    endmenu
+
+endmenu
