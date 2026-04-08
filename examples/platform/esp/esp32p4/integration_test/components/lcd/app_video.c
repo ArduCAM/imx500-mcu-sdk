@@ -24,7 +24,7 @@ static const char *TAG = "app_video";
 
 #define MAX_BUFFER_COUNT                (3)
 #define MIN_BUFFER_COUNT                (2)
-#define VIDEO_TASK_STACK_SIZE           (4 * 1024)
+#define VIDEO_TASK_STACK_SIZE           (8 * 1024)
 #define VIDEO_TASK_PRIORITY             (4)
 
 typedef struct {
@@ -360,13 +360,14 @@ static void video_stream_task(void *arg)
 {
     int video_fd = app_camera_video.video_fd;
     uint32_t frame_count = 0;
-    ESP_LOGI(TAG, "video stream task started: fd=%d core=%d mem_mode=%d size=%" PRIu32 " x %" PRIu32 " buf_size=%u",
+    ESP_LOGI(TAG, "video stream task started: fd=%d core=%d mem_mode=%d size=%" PRIu32 " x %" PRIu32 " buf_size=%u stack_hwm=%u",
              video_fd,
              xPortGetCoreID(),
              app_camera_video.camera_mem_mode,
              app_camera_video.camera_buf_hes,
              app_camera_video.camera_buf_ves,
-             (unsigned)app_camera_video.camera_buf_size);
+             (unsigned)app_camera_video.camera_buf_size,
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
     while (1) {
         esp_err_t ret = video_receive_video_frame(video_fd);
@@ -377,10 +378,11 @@ static void video_stream_task(void *arg)
 
         video_operation_video_frame(video_fd);
         if (frame_count < 5 || (frame_count % 60) == 0) {
-            ESP_LOGI(TAG, "video stream task frame=%" PRIu32 " index=%u bytes=%u",
+            ESP_LOGI(TAG, "video stream task frame=%" PRIu32 " index=%u bytes=%u stack_hwm=%u",
                      frame_count,
                      (unsigned)app_camera_video.v4l2_buf.index,
-                     (unsigned)app_camera_video.v4l2_buf.bytesused);
+                     (unsigned)app_camera_video.v4l2_buf.bytesused,
+                     (unsigned)uxTaskGetStackHighWaterMark(NULL));
         }
         frame_count++;
 

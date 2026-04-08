@@ -34,6 +34,12 @@ struct pivariety_cam {
 #define PIVARIETY_ENABLE_OUT_XCLK(pin,clk)
 #define PIVARIETY_DISABLE_OUT_XCLK(pin)
 
+#define EXPOSURE_V4L2_UNIT_US                   100
+#define EXPOSURE_V4L2_TO_PIVARIETY(v, sf)          \
+    ((uint32_t)(((double)v) * (sf)->fps * (sf)->isp_info->isp_v1_info.vts / (1000000 / EXPOSURE_V4L2_UNIT_US) + 0.5))
+#define EXPOSURE_PIVARIETY_TO_V4L2(v, sf)          \
+    ((int32_t)(((double)v) * 1000000 / (sf)->fps / (sf)->isp_info->isp_v1_info.vts / EXPOSURE_V4L2_UNIT_US + 0.5))
+
 #ifndef portTICK_RATE_MS
 #define portTICK_RATE_MS portTICK_PERIOD_MS
 #endif
@@ -56,6 +62,24 @@ static esp_err_t pivariety_read(esp_sccb_io_handle_t sccb_handle, uint16_t reg, 
 static esp_err_t pivariety_write(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint32_t data)
 {
     return esp_sccb_transmit_reg_a16v32(sccb_handle, reg, data);
+}
+
+
+static esp_err_t pivariety_wait_for_free(esp_sccb_io_handle_t sccb_handle,  int interval)
+{
+    uint32_t value;
+    uint32_t count = 0;
+    esp_err_t ret = ESP_OK;
+    while (count++ < (1000 / interval)) {
+        ret = pivariety_read(sccb_handle, PIVARIETY_REG_SYSTEM_IDLE, &value);
+        ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "read system idle failed");
+        if (!value) {
+            break;
+        }
+        delay_ms(interval);
+    }
+
+    return ret;
 }
 
 /* write a array of registers  */
@@ -120,6 +144,8 @@ static esp_err_t pivariety_set_exp_val(esp_cam_sensor_device_t *dev, uint32_t u3
                           PIVARIETY_REG_CTRL_ID,
                           V4L2_CID_EXPOSURE);
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "ctrl id reg  write failed");
+    ret = pivariety_wait_for_free(dev->sccb_handle, 5);
+    ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "pivariety_wait_for_free error");
     ret = pivariety_write(dev->sccb_handle,
                           PIVARIETY_REG_CTRL_VALUE,
                           value_buf);
@@ -135,20 +161,26 @@ static esp_err_t pivariety_set_gain_val(esp_cam_sensor_device_t *dev, uint32_t u
     esp_err_t ret;
     struct pivariety_cam *cam_pivariety = (struct pivariety_cam *)dev->priv;
     // Limit gain index to valid range
-    if (u32_val >= cam_pivariety->pivariety_para.limited_gain_index) {
-        if (cam_pivariety->pivariety_para.limited_gain_index > 0) {
-            u32_val = cam_pivariety->pivariety_para.limited_gain_index - 1;
-        } else {
-            u32_val = 0;  // Fallback to minimum gain if limit is 0
-        }
+
+    if (cam_pivariety->pivariety_para.limited_gain_index == 0 || pivariety_gain_map == NULL) {
+        ESP_LOGE(TAG, "gain map is empty or not initialized");
+        return ESP_ERR_INVALID_STATE;
     }
-    ESP_LOGD(TAG, "set gain index %" PRIu32 ", gain=0x%04X",
+
+    // Limit gain index to valid range
+    if (u32_val >= cam_pivariety->pivariety_para.limited_gain_index) {
+        u32_val = cam_pivariety->pivariety_para.limited_gain_index - 1;
+    }
+
+    ESP_LOGD(TAG, "set gain index %" PRIu32 ", gain=0x%04" PRIx32,
              u32_val, pivariety_gain_map[u32_val]);
 
     ret = pivariety_write(dev->sccb_handle,
                           PIVARIETY_REG_CTRL_ID,
                           V4L2_CID_ANALOGUE_GAIN);
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "ctrl id reg  write failed");
+    ret = pivariety_wait_for_free(dev->sccb_handle, 5);
+    ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "pivariety_wait_for_free error");
     ret = pivariety_write(dev->sccb_handle,
                           PIVARIETY_REG_CTRL_VALUE,
                           pivariety_gain_map[u32_val]);
@@ -199,6 +231,13 @@ static esp_err_t pivariety_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam
         qdesc->number.maximum = dev->cur_format->isp_info->isp_v1_info.vts - 6;
         qdesc->number.step = 1;
         qdesc->default_value = dev->cur_format->isp_info->isp_v1_info.exp_def;
+        break;
+    case ESP_CAM_SENSOR_EXPOSURE_US:
+        qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_NUMBER;
+        qdesc->number.minimum = EXPOSURE_PIVARIETY_TO_V4L2(2, dev->cur_format);
+        qdesc->number.maximum = EXPOSURE_PIVARIETY_TO_V4L2((dev->cur_format->isp_info->isp_v1_info.vts - 6), dev->cur_format); // max = VTS-6 = height+vblank-6, so when update vblank, exposure_max must be updated
+        qdesc->number.step = MAX(EXPOSURE_PIVARIETY_TO_V4L2(0x01, dev->cur_format), 1);
+        qdesc->default_value = EXPOSURE_PIVARIETY_TO_V4L2((dev->cur_format->isp_info->isp_v1_info.exp_def), dev->cur_format);
         break;
     case ESP_CAM_SENSOR_GAIN:
         qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_ENUMERATION;
@@ -254,6 +293,13 @@ static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t
         ret = pivariety_set_exp_val(dev, u32_val);
         break;
     }
+    case ESP_CAM_SENSOR_EXPOSURE_US: {
+        uint32_t u32_val = *(uint32_t *)arg;
+        uint32_t ori_exp = EXPOSURE_V4L2_TO_PIVARIETY(u32_val, dev->cur_format);
+        ret = pivariety_set_exp_val(dev, ori_exp);
+        break;
+    }
+
     case ESP_CAM_SENSOR_GAIN: {
         uint32_t u32_val = *(uint32_t *)arg;
         ret = pivariety_set_gain_val(dev, u32_val);
@@ -325,6 +371,7 @@ static esp_err_t pivariety_get_length_of_set(esp_cam_sensor_device_t *dev, uint1
         index++;
         /* guard to avoid infinite loop */
         if (index > 10000) {
+            pivariety_write(dev->sccb_handle, reg, val);
             ESP_LOGE(TAG, "too many entries when getting length of set");
             return ESP_ERR_INVALID_SIZE;
         }
@@ -486,6 +533,8 @@ static esp_err_t pivariety_update_ctrl(esp_cam_sensor_device_t *dev, uint32_t v4
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "ctrl val read failed");
     ret = pivariety_write_ctrl(dev, v4l2_cid, *value, PIVARIETY_CTRL_VALUE);
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "ctrl val write failed");
+    ret = pivariety_wait_for_free(dev->sccb_handle, 5);
+    ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "pivariety_wait_for_free error");
     ret = pivariety_read_ctrl(dev, v4l2_cid, value, ctrl_type);
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "ctrl val read failed");
     return ret;
@@ -637,7 +686,7 @@ static esp_err_t pivariety_enum_format(esp_cam_sensor_device_t *dev)
             size_t regs_count = 3;
             pivariety_reginfo_t *regs = calloc(regs_count, sizeof(pivariety_reginfo_t));
             if (regs == NULL) {
-                ESP_LOGE(TAG, "No memory for regs for index %u", index);
+                ESP_LOGE(TAG, "No memory for regs for index %" PRIu32, index);
                 return ESP_ERR_NO_MEM;
             }
             regs[0].reg = PIVARIETY_REG_PIXFORMAT_INDEX;  regs[0].val = format_index;
@@ -652,7 +701,13 @@ static esp_err_t pivariety_enum_format(esp_cam_sensor_device_t *dev)
             isp_info.isp_v1_info.vts += height;
             isp_info.isp_v1_info.tline_ns = (uint32_t)(isp_info.isp_v1_info.hts / (isp_info.isp_v1_info.pclk / 1000000.0) * 1000);
             ret = pivariety_map_format(format_type, &format_info);
-            ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "map format error");
+            if (ret != ESP_OK) {
+                free(regs);
+                format_info.regs = NULL;
+                format_info.regs_size = 0;
+                ESP_LOGE(TAG, "map format error");
+                return ret;
+            }
 
             memcpy(&pivariety_isp_info[index], &isp_info, sizeof(esp_cam_sensor_isp_info_t));
             memcpy(&pivariety_format_info[index], &format_info, sizeof(esp_cam_sensor_format_t));
@@ -708,11 +763,6 @@ static esp_err_t pivariety_set_format(esp_cam_sensor_device_t *dev, const esp_ca
     ret = pivariety_write_array(dev->sccb_handle, (pivariety_reginfo_t *)format->regs, format->regs_size);
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "pivariety write array failed");
     delay_ms(500);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Set format regs fail");
-        return ESP_CAM_SENSOR_ERR_FAILED_SET_FORMAT;
-    }
 
     dev->cur_format = format;
     // init para
@@ -788,7 +838,7 @@ static esp_err_t pivariety_power_on(esp_cam_sensor_device_t *dev)
         gpio_config_t conf = { 0 };
         conf.pin_bit_mask = 1LL << dev->pwdn_pin;
         conf.mode = GPIO_MODE_OUTPUT;
-        gpio_config(&conf);
+        ESP_RETURN_ON_FALSE(gpio_config(&conf) == ESP_OK, ESP_ERR_INVALID_STATE, TAG, "pwdn pin gpio config failed");
 
         // carefully, logic is inverted compared to reset pin
         gpio_set_level(dev->pwdn_pin, 1);
@@ -801,7 +851,7 @@ static esp_err_t pivariety_power_on(esp_cam_sensor_device_t *dev)
         gpio_config_t conf = { 0 };
         conf.pin_bit_mask = 1LL << dev->reset_pin;
         conf.mode = GPIO_MODE_OUTPUT;
-        gpio_config(&conf);
+        ESP_RETURN_ON_FALSE(gpio_config(&conf) == ESP_OK, ESP_ERR_INVALID_STATE, TAG, "reset pin gpio config failed");
 
         gpio_set_level(dev->reset_pin, 0);
         delay_ms(10);

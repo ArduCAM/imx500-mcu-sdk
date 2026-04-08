@@ -60,6 +60,8 @@ uint8_t *g_spi_thumb_buffer = nullptr;
 uint8_t *g_spi_thumb_staging = nullptr;
 uint8_t *g_spi_jpeg_full_buffer = nullptr;
 jpeg_decoder_handle_t g_jpeg_decoder = nullptr;
+HigherhrnetResult *g_overlay_pose_snapshot = nullptr;
+HigherhrnetResult *g_spi_hrnet_result = nullptr;
 
 struct SharedOverlayState {
     bool thumbnail_ready = false;
@@ -177,6 +179,23 @@ static bool allocate_spi_thumbnail_buffers()
         return false;
     }
 
+    if (!g_overlay_pose_snapshot) {
+        g_overlay_pose_snapshot = static_cast<HigherhrnetResult *>(heap_caps_calloc(1, sizeof(HigherhrnetResult), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_overlay_pose_snapshot) {
+        g_overlay_pose_snapshot = static_cast<HigherhrnetResult *>(calloc(1, sizeof(HigherhrnetResult)));
+    }
+    if (!g_spi_hrnet_result) {
+        g_spi_hrnet_result = static_cast<HigherhrnetResult *>(heap_caps_calloc(1, sizeof(HigherhrnetResult), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_spi_hrnet_result) {
+        g_spi_hrnet_result = static_cast<HigherhrnetResult *>(calloc(1, sizeof(HigherhrnetResult)));
+    }
+    if (!g_overlay_pose_snapshot || !g_spi_hrnet_result) {
+        ESP_LOGE(TAG, "failed to allocate HRNet pose buffers");
+        return false;
+    }
+
     if (!g_jpeg_decoder) {
         jpeg_decode_engine_cfg_t cfg = {
             .intr_priority = 0,
@@ -188,8 +207,9 @@ static bool allocate_spi_thumbnail_buffers()
         }
     }
 
-    ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u",
-             kSpiThumbMaxWidth, kSpiThumbMaxHeight, kThumbDecodeBufferBytes);
+    ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u hrnet=%u",
+             kSpiThumbMaxWidth, kSpiThumbMaxHeight, kThumbDecodeBufferBytes,
+             static_cast<unsigned>(sizeof(HigherhrnetResult)));
     return true;
 }
 
@@ -312,14 +332,13 @@ static float clamp_coord(float value, float max_value)
 
 static void blit_spi_thumbnail_with_pose(uint16_t *frame, uint32_t frame_w, uint32_t frame_h)
 {
-    if (!frame || !g_overlay_mutex) {
+    if (!frame || !g_overlay_mutex || !g_overlay_pose_snapshot) {
         return;
     }
 
     uint16_t local_thumb_w = 0;
     uint16_t local_thumb_h = 0;
     uint64_t local_pose_updated_us = 0;
-    HigherhrnetResult local_result = {};
 
     if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
         return;
@@ -333,7 +352,7 @@ static void blit_spi_thumbnail_with_pose(uint16_t *frame, uint32_t frame_w, uint
         }
     }
 
-    local_result = g_overlay_state.hrnet;
+    memcpy(g_overlay_pose_snapshot, &g_overlay_state.hrnet, sizeof(*g_overlay_pose_snapshot));
     local_pose_updated_us = g_overlay_state.hrnet_updated_us;
     xSemaphoreGive(g_overlay_mutex);
 
@@ -343,11 +362,11 @@ static void blit_spi_thumbnail_with_pose(uint16_t *frame, uint32_t frame_w, uint
 
     float max_x = 0.0f;
     float max_y = 0.0f;
-    for (uint32_t i = 0; i < local_result.pose_count; ++i) {
+    for (uint32_t i = 0; i < g_overlay_pose_snapshot->pose_count; ++i) {
         for (uint32_t j = 0; j < kHigherhrnetJointCount; ++j) {
-            if (local_result.poses[i].keypoints[j].score > 0.05f) {
-                max_x = std::max(max_x, local_result.poses[i].keypoints[j].x);
-                max_y = std::max(max_y, local_result.poses[i].keypoints[j].y);
+            if (g_overlay_pose_snapshot->poses[i].keypoints[j].score > 0.05f) {
+                max_x = std::max(max_x, g_overlay_pose_snapshot->poses[i].keypoints[j].x);
+                max_y = std::max(max_y, g_overlay_pose_snapshot->poses[i].keypoints[j].y);
             }
         }
     }
@@ -357,12 +376,12 @@ static void blit_spi_thumbnail_with_pose(uint16_t *frame, uint32_t frame_w, uint
     static uint32_t mapping_log_count = 0;
     if (mapping_log_count < 5 || (mapping_log_count % 60) == 0) {
         ESP_LOGI(TAG, "pose overlay mapping: thumb=%ux%u max_pose=%.1fx%.1f src=%.0fx%.0f people=%" PRIu32,
-                 local_thumb_w, local_thumb_h, max_x, max_y, src_w, src_h, local_result.pose_count);
+                 local_thumb_w, local_thumb_h, max_x, max_y, src_w, src_h, g_overlay_pose_snapshot->pose_count);
     }
     mapping_log_count++;
 
-    for (uint32_t i = 0; i < local_result.pose_count; ++i) {
-        const HigherhrnetPose &pose = local_result.poses[i];
+    for (uint32_t i = 0; i < g_overlay_pose_snapshot->pose_count; ++i) {
+        const HigherhrnetPose &pose = g_overlay_pose_snapshot->poses[i];
         int x1 = static_cast<int>(clamp_coord(pose.x1 * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
         int y1 = static_cast<int>(clamp_coord(pose.y1 * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
         int x2 = static_cast<int>(clamp_coord(pose.x2 * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
@@ -402,8 +421,9 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
     (void)user_data;
 
     if (!callback_logged) {
-        ESP_LOGI(TAG, "display callback started: fd=%d camera=%" PRIu32 "x%" PRIu32 " len=%u",
-                 g_video_fd, camera_buf_hes, camera_buf_ves, static_cast<unsigned>(camera_buf_len));
+        ESP_LOGI(TAG, "display callback started: fd=%d camera=%" PRIu32 "x%" PRIu32 " len=%u stack_hwm=%u",
+                 g_video_fd, camera_buf_hes, camera_buf_ves, static_cast<unsigned>(camera_buf_len),
+                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(NULL)));
         ESP_LOGI(TAG, "MIPI main image resolution: %" PRIu32 "x%" PRIu32, camera_buf_hes, camera_buf_ves);
         callback_logged = true;
         g_display_first_frame_seen = true;
@@ -538,15 +558,20 @@ static void spi_metadata_task(void *arg)
         }
         update_spi_thumbnail_from_metadata(*g_parsed_metadata);
 
-        HigherhrnetResult hrnet = {};
-        if (higherhrnet_postprocess_from_metadata(g_parsed_metadata, &hrnet)) {
+        if (g_spi_hrnet_result == nullptr) {
+            ESP_LOGW(TAG, "hrnet result buffer is not ready");
+            metadata_frame_count++;
+            continue;
+        }
+        memset(g_spi_hrnet_result, 0, sizeof(*g_spi_hrnet_result));
+        if (higherhrnet_postprocess_from_metadata(g_parsed_metadata, g_spi_hrnet_result)) {
             if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-                g_overlay_state.hrnet = hrnet;
+                memcpy(&g_overlay_state.hrnet, g_spi_hrnet_result, sizeof(*g_spi_hrnet_result));
                 g_overlay_state.hrnet_updated_us = now_us();
                 xSemaphoreGive(g_overlay_mutex);
             }
             ESP_LOGI(TAG, "higherhrnet poses=%" PRIu32 " spi_thumb=%s %ux%u",
-                     hrnet.pose_count,
+                     g_spi_hrnet_result->pose_count,
                      g_overlay_state.thumbnail_ready ? "ready" : "not-ready",
                      g_overlay_state.thumb_width,
                      g_overlay_state.thumb_height);

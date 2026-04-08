@@ -2511,6 +2511,9 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
 }
 
 bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
+    uint32_t val;
+    imx500_res_read(IMX500_COMMAND_RESET, &val, 20);
+    g_i2c_driver.slp_ms(2000);
     uint32_t imx500_boot_status = 0;
     const uint32_t boot_timeout_ms = 10000;
     const uint32_t boot_poll_ms = 100;
@@ -2575,7 +2578,6 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         }
     }
 
-    uint32_t val;
     imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
     imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
     switch (mipi_format)
