@@ -2733,7 +2733,8 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
 
     imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
     imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
-    imx500_res_read((IMX500_COMMAND_BASE|161), &val, 500);
+    imx500_res_read(SENSOR_MIPI_1024x600_2LANES, &val, 500);
+    imx500_res_write(IMX500_COMMAND_SET_FRAMERATE, &fps, 500);
     switch (mipi_format)
     {
     case MIPI_DATA_IMAGE:
