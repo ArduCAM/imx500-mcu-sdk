@@ -31,10 +31,10 @@
 #include "imx500_multitask_model_registry.h"
 #include "imx500_multitask_postprocess.h"
 #include "imx500_multitask_ui.h"
-#include "imx500_sdk_integration_test.h"
+#include "ai_camera_multitask.h"
 #include "peripherals_adapter.h"
 
-static const char *TAG = "imx500_sdk_test";
+static const char *TAG = "ai_camera_multitask";
 
 namespace {
 
@@ -998,7 +998,7 @@ static esp_err_t init_mipi_display_path()
     return ESP_OK;
 }
 
-#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
+#if AI_CAMERA_MULTITASK_BOOT_MODE == AI_CAMERA_MULTITASK_BOOT_MODE_FLASH
 static void dump_spi_flash_status(const char *label)
 {
     spi_flash_status_t status = {};
@@ -1043,9 +1043,9 @@ static bool program_flash_assets()
 
 static const char *get_boot_mode_name()
 {
-#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
+#if AI_CAMERA_MULTITASK_BOOT_MODE == AI_CAMERA_MULTITASK_BOOT_MODE_DIRECT
     return "DIRECT BOOT";
-#elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
+#elif AI_CAMERA_MULTITASK_BOOT_MODE == AI_CAMERA_MULTITASK_BOOT_MODE_FLASH
     return "FLASH BOOT";
 #else
     return "UNKNOWN BOOT";
@@ -1067,7 +1067,7 @@ static bool open_imx500_stream()
         return false;
     }
 
-#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
+#if AI_CAMERA_MULTITASK_BOOT_MODE == AI_CAMERA_MULTITASK_BOOT_MODE_DIRECT
     ESP_LOGI(TAG,
              "opening IMX500 with embedded model directly: fw=%u bytes nn_info=%u bytes",
              static_cast<unsigned>(g_active_model->firmware.size),
@@ -1079,7 +1079,7 @@ static bool open_imx500_stream()
                 MIPI_DATA_IMAGE,
                 SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
                 10);
-#elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
+#elif AI_CAMERA_MULTITASK_BOOT_MODE == AI_CAMERA_MULTITASK_BOOT_MODE_FLASH
     if (!program_flash_assets()) {
         return false;
     }
@@ -1090,7 +1090,7 @@ static bool open_imx500_stream()
                 SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
                 10);
 #else
-#error "Unsupported INTEGRATION_TEST_BOOT_MODE"
+#error "Unsupported AI_CAMERA_MULTITASK_BOOT_MODE"
 #endif
 }
 
@@ -1330,7 +1330,7 @@ static esp_err_t start_worker_tasks()
 
 } // namespace
 
-extern "C" esp_err_t imx500_sdk_integration_test_run(void)
+extern "C" esp_err_t ai_camera_multitask_run(void)
 {
     select_active_model();
     ESP_RETURN_ON_FALSE(g_active_model != nullptr, ESP_FAIL, TAG, "no embedded model selected");

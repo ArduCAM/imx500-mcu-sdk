@@ -9,9 +9,9 @@
 #include "nvs_flash.h"
 
 #include "example_video_common.h"
-#include "imx500_sdk_integration_test.h"
+#include "ai_camera_multitask.h"
 
-static const char *TAG = "imx500_app";
+static const char *TAG = "ai_camera_multitask";
 
 void app_main(void)
 {
@@ -21,9 +21,9 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
-    ESP_LOGI(TAG, "preparing camera control for the fixed IMX500 integration flow");
+    ESP_LOGI(TAG, "preparing camera control for ai_camera_multitask");
     ESP_ERROR_CHECK(example_video_prepare_camera_control());
 
-    ESP_LOGI(TAG, "starting IMX500 SDK integration flow");
-    ESP_ERROR_CHECK(imx500_sdk_integration_test_run());
+    ESP_LOGI(TAG, "starting ai_camera_multitask");
+    ESP_ERROR_CHECK(ai_camera_multitask_run());
 }

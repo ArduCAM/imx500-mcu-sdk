@@ -1,8 +1,13 @@
 get_filename_component(IMX500_SDK_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../../.." ABSOLUTE)
 set(IMX500_FIRMWARE_CPP_DIR "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware")
 set(IMX500_FILE2CPP_SCRIPT "${IMX500_SDK_DIR}/tools/file2cpp.py")
-set(INTEGRATION_TEST_BOOT_MODE "DIRECT" CACHE STRING "ai_camera_multitask boot mode: FLASH or DIRECT")
-set_property(CACHE INTEGRATION_TEST_BOOT_MODE PROPERTY STRINGS FLASH DIRECT)
+if(DEFINED INTEGRATION_TEST_BOOT_MODE AND NOT DEFINED AI_CAMERA_MULTITASK_BOOT_MODE)
+    set(AI_CAMERA_MULTITASK_BOOT_MODE "${INTEGRATION_TEST_BOOT_MODE}" CACHE STRING
+        "ai_camera_multitask boot mode: FLASH or DIRECT")
+else()
+    set(AI_CAMERA_MULTITASK_BOOT_MODE "DIRECT" CACHE STRING "ai_camera_multitask boot mode: FLASH or DIRECT")
+endif()
+set_property(CACHE AI_CAMERA_MULTITASK_BOOT_MODE PROPERTY STRINGS FLASH DIRECT)
 set(IMX500_GENERATED_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_imx500_models")
 
 set(IMX500_MOBILENET_V2_FPK "${IMX500_SDK_DIR}/tools/assets/models/mobilenet_v2/imx500_network_mobilenet_v2.fpk")
@@ -64,8 +69,8 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
 endif()
 
 set(srcs
-    "imx500_sdk_integration_test_main.c"
-    "imx500_sdk_integration_test.cpp"
+    "ai_camera_multitask_main.c"
+    "ai_camera_multitask.cpp"
     "imx500_multitask_model_registry.cpp"
     "imx500_multitask_postprocess.cpp"
     "imx500_multitask_ui.cpp"
@@ -75,8 +80,8 @@ set(srcs
     "${IMX500_SDK_DIR}/ai_driver.c"
     ${IMX500_GENERATED_ASSET_SRCS})
 
-set(imx500_sdk_test_srcs
-    "imx500_sdk_integration_test.cpp"
+set(ai_camera_multitask_srcs
+    "ai_camera_multitask.cpp"
     "imx500_multitask_model_registry.cpp"
     "imx500_multitask_postprocess.cpp"
     "imx500_multitask_ui.cpp"
@@ -91,17 +96,17 @@ idf_component_register(SRCS ${srcs}
                        "${IMX500_SDK_DIR}/imx500_firmware_cpp"
                        "${IMX500_SDK_DIR}/third_party/flatbuffers/include")
 
-if(INTEGRATION_TEST_BOOT_MODE STREQUAL "DIRECT")
+if(AI_CAMERA_MULTITASK_BOOT_MODE STREQUAL "DIRECT")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_DIRECT)
-elseif(INTEGRATION_TEST_BOOT_MODE STREQUAL "FLASH")
+        AI_CAMERA_MULTITASK_BOOT_MODE=AI_CAMERA_MULTITASK_BOOT_MODE_DIRECT)
+elseif(AI_CAMERA_MULTITASK_BOOT_MODE STREQUAL "FLASH")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_FLASH)
+        AI_CAMERA_MULTITASK_BOOT_MODE=AI_CAMERA_MULTITASK_BOOT_MODE_FLASH)
 else()
-    message(FATAL_ERROR "Unsupported INTEGRATION_TEST_BOOT_MODE=${INTEGRATION_TEST_BOOT_MODE}, expected FLASH or DIRECT")
+    message(FATAL_ERROR "Unsupported AI_CAMERA_MULTITASK_BOOT_MODE=${AI_CAMERA_MULTITASK_BOOT_MODE}, expected FLASH or DIRECT")
 endif()
 
 if(NOT CMAKE_SCRIPT_MODE_FILE)
-    set_source_files_properties(${imx500_sdk_test_srcs}
+    set_source_files_properties(${ai_camera_multitask_srcs}
         PROPERTIES COMPILE_DEFINITIONS "open=imx500_sdk_open")
 endif()
