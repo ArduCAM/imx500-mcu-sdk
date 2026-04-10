@@ -2,7 +2,7 @@ menu "Example LCD Configuration"
 
     config EXAMPLE_CAM_BUF_COUNT
         int "Camera Buffer Count"
-        default 2
+        default 3
         range 2 3
 
     choice

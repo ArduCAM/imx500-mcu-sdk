@@ -12,9 +12,11 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs.h"
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_lcd_mipi_dsi.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -100,6 +102,12 @@ int g_video_fd = -1;
 esp_lcd_panel_handle_t g_display_panel = nullptr;
 void *g_lcd_buffers[EXAMPLE_LCD_BUF_NUM] = {};
 void *g_camera_buffers[EXAMPLE_LCD_BUF_NUM] = {};
+uint8_t g_lcd_next_compose_index = 0;
+int g_lcd_last_presented_index = -1;
+volatile uint32_t g_lcd_refresh_count = 0;
+bool g_lcd_refresh_callback_attempted = false;
+bool g_lcd_refresh_callback_registered = false;
+uint32_t g_lcd_buffer_busy_until[EXAMPLE_LCD_BUF_NUM] = {};
 
 uint8_t *g_spi_thumb_buffer = nullptr;
 uint8_t *g_spi_thumb_staging = nullptr;
@@ -165,6 +173,15 @@ volatile bool g_display_first_frame_seen = false;
 static uint64_t now_us()
 {
     return static_cast<uint64_t>(esp_timer_get_time());
+}
+
+static bool IRAM_ATTR lcd_refresh_done_cb(esp_lcd_panel_handle_t panel, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
+{
+    (void)panel;
+    (void)edata;
+    (void)user_ctx;
+    g_lcd_refresh_count = g_lcd_refresh_count + 1u;
+    return false;
 }
 
 static uint32_t align_up_u32(uint32_t value, uint32_t base)
@@ -327,13 +344,78 @@ static bool ensure_lcd_ready()
             return false;
         }
     }
-    if (g_lcd_buffers[0] == nullptr || g_lcd_buffers[1] == nullptr) {
+    if (!g_lcd_refresh_callback_attempted) {
+        esp_lcd_dpi_panel_event_callbacks_t callbacks = {};
+        callbacks.on_refresh_done = lcd_refresh_done_cb;
+        const esp_err_t err = esp_lcd_dpi_panel_register_event_callbacks(g_display_panel, &callbacks, nullptr);
+        g_lcd_refresh_callback_registered = (err == ESP_OK);
+        g_lcd_refresh_callback_attempted = true;
+        if (!g_lcd_refresh_callback_registered) {
+            ESP_LOGW(TAG, "failed to register LCD refresh callback, using framebuffer ring fallback: %s", esp_err_to_name(err));
+        }
+    }
+    bool need_lcd_buffers = false;
+    for (uint8_t i = 0; i < EXAMPLE_LCD_BUF_NUM; ++i) {
+        need_lcd_buffers = need_lcd_buffers || (g_lcd_buffers[i] == nullptr);
+    }
+    if (need_lcd_buffers) {
+#if EXAMPLE_LCD_BUF_NUM >= 3
+        if (esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 3, &g_lcd_buffers[0], &g_lcd_buffers[1],
+                                               &g_lcd_buffers[2]) != ESP_OK) {
+#else
         if (esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 2, &g_lcd_buffers[0], &g_lcd_buffers[1]) != ESP_OK) {
+#endif
             ESP_LOGE(TAG, "failed to get LCD frame buffers");
             return false;
         }
+        for (uint8_t i = 0; i < EXAMPLE_LCD_BUF_NUM; ++i) {
+            if (g_lcd_buffers[i] == nullptr) {
+                ESP_LOGE(TAG, "LCD frame buffer %u is null", static_cast<unsigned>(i));
+                return false;
+            }
+        }
+        if (g_lcd_last_presented_index < 0) {
+            g_lcd_last_presented_index = 0;
+            g_lcd_next_compose_index = 1 % EXAMPLE_LCD_BUF_NUM;
+        }
     }
     return true;
+}
+
+static bool lcd_buffer_ready(uint8_t index)
+{
+    return index < EXAMPLE_LCD_BUF_NUM && g_lcd_buffers[index] != nullptr;
+}
+
+static bool lcd_buffer_available_for_compose(uint8_t index)
+{
+    if (!lcd_buffer_ready(index)) {
+        return false;
+    }
+    if (!g_lcd_refresh_callback_registered) {
+        return static_cast<int>(index) != g_lcd_last_presented_index;
+    }
+    return static_cast<int32_t>(g_lcd_refresh_count - g_lcd_buffer_busy_until[index]) >= 0;
+}
+
+static uint8_t select_lcd_compose_buffer_index(uint8_t camera_buf_index)
+{
+    for (uint8_t attempt = 0; attempt < EXAMPLE_LCD_BUF_NUM; ++attempt) {
+        const uint8_t candidate = g_lcd_next_compose_index;
+        g_lcd_next_compose_index = (g_lcd_next_compose_index + 1u) % EXAMPLE_LCD_BUF_NUM;
+        if (lcd_buffer_available_for_compose(candidate)) {
+            return candidate;
+        }
+    }
+    for (uint8_t i = 0; i < EXAMPLE_LCD_BUF_NUM; ++i) {
+        if (lcd_buffer_ready(i) && static_cast<int>(i) != g_lcd_last_presented_index) {
+            return i;
+        }
+    }
+    if (lcd_buffer_ready(camera_buf_index)) {
+        return camera_buf_index;
+    }
+    return 0;
 }
 
 static bool load_selected_model_index(size_t *index_out)
@@ -922,13 +1004,15 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
         first_frame_us = now_us();
     }
 
+    const uint8_t display_buf_index = select_lcd_compose_buffer_index(camera_buf_index);
     uint8_t *display_buf = camera_buf;
-    if (camera_buf_index < EXAMPLE_LCD_BUF_NUM && g_lcd_buffers[camera_buf_index] != nullptr) {
-        display_buf = reinterpret_cast<uint8_t *>(g_lcd_buffers[camera_buf_index]);
+    if (lcd_buffer_ready(display_buf_index)) {
+        display_buf = reinterpret_cast<uint8_t *>(g_lcd_buffers[display_buf_index]);
         memcpy(display_buf, camera_buf, camera_buf_len);
         if (!compose_mode_logged) {
-            ESP_LOGI(TAG, "display composition uses dedicated LCD buffer index=%u; SPI thumbnail is overlaid after the main frame leaves the capture pipeline",
-                     camera_buf_index);
+            ESP_LOGI(TAG, "display composition uses LCD framebuffer ring: cam=%u compose=%u buffers=%u; overlays are completed off-screen before scanout",
+                     static_cast<unsigned>(camera_buf_index), static_cast<unsigned>(display_buf_index),
+                     static_cast<unsigned>(EXAMPLE_LCD_BUF_NUM));
             compose_mode_logged = true;
         }
     }
@@ -954,7 +1038,13 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
         .line_2 = snapshot.modal_line_2,
     };
     imx500_render_modal(frame, camera_buf_hes, camera_buf_ves, modal);
+    if (display_buf != camera_buf && g_lcd_refresh_callback_registered) {
+        g_lcd_buffer_busy_until[display_buf_index] = g_lcd_refresh_count + 2u;
+    }
     ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(g_display_panel, 0, 0, camera_buf_hes, camera_buf_ves, display_buf));
+    if (display_buf != camera_buf) {
+        g_lcd_last_presented_index = display_buf_index;
+    }
 
     uint64_t now = now_us();
     float fps = 0.0f;
@@ -962,8 +1052,9 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
         fps = static_cast<float>(frame_count) * 1000000.0f / static_cast<float>(now - first_frame_us);
     }
     if (frame_count < 5 || (frame_count % 60) == 0) {
-        ESP_LOGI(TAG, "display frame=%" PRIu32 " buf=%u size=%" PRIu32 "x%" PRIu32 " bytes=%u fps=%.2f",
-                 frame_count, camera_buf_index, camera_buf_hes, camera_buf_ves, static_cast<unsigned>(camera_buf_len), fps);
+        ESP_LOGI(TAG, "display frame=%" PRIu32 " cam_buf=%u lcd_buf=%u size=%" PRIu32 "x%" PRIu32 " bytes=%u fps=%.2f",
+                 frame_count, static_cast<unsigned>(camera_buf_index), static_cast<unsigned>(display_buf_index),
+                 camera_buf_hes, camera_buf_ves, static_cast<unsigned>(camera_buf_len), fps);
     }
     frame_count++;
 }

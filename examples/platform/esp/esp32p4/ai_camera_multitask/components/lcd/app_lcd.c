@@ -62,7 +62,7 @@ esp_err_t app_lcd_init(esp_lcd_panel_handle_t *panel_handle)
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_ek79007(mipi_dbi_io, &panel_config, &display_handle));
 #if SOC_DMA2D_SUPPORTED
-    ESP_ERROR_CHECK(esp_lcd_dpi_panel_enable_dma2d(display_handle));
+    ESP_LOGI(TAG, "DMA2D draw hook disabled; full frames use DPI framebuffer swaps to avoid overlay tearing");
 #endif
     ESP_ERROR_CHECK(esp_lcd_panel_reset(display_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(display_handle));
