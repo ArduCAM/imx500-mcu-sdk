@@ -27,6 +27,18 @@ constexpr uint32_t kBenchmarkFrameCountPostInject = 30;
 constexpr uint32_t kInjectionDataBytes = 640 * 480 * 3;
 constexpr uint32_t kHexSampleBytes = 12;
 
+#if INTEGRATION_TEST_SPI_METADATA_FORMAT == INTEGRATION_TEST_SPI_METADATA_FORMAT_OUTPUT_TENSOR
+constexpr spi_data_format_t kTestSpiMetadataFormat = SPI_METADATA_OUTPUT_TENSOR;
+constexpr spi_data_forwarding_mode_t kTestMetadataForwardMode = SPI_SLAVE_FROM_IMX500_MSPI;
+constexpr bool kTestPayloadHasApParams = false;
+#elif INTEGRATION_TEST_SPI_METADATA_FORMAT == INTEGRATION_TEST_SPI_METADATA_FORMAT_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
+constexpr spi_data_format_t kTestSpiMetadataFormat = SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR;
+constexpr spi_data_forwarding_mode_t kTestMetadataForwardMode = SPI_SLAVE_FROM_IMX500_SSPI;
+constexpr bool kTestPayloadHasApParams = true;
+#else
+#error "Unsupported INTEGRATION_TEST_SPI_METADATA_FORMAT"
+#endif
+
 uint8_t *g_frame_buf = nullptr;
 IMX500ParsedMetadata *g_parsed_metadata = nullptr;
 HigherhrnetResult *g_higherhrnet_result = nullptr;
@@ -76,6 +88,17 @@ static void print_hex_sample(const uint8_t *buf, uint32_t len)
     for (uint32_t i = 0; i < sample_len; ++i) {
         std::printf("%02X%s", buf[i], (i + 1 < sample_len) ? " " : "");
     }
+}
+
+static const char *get_spi_metadata_format_name()
+{
+#if INTEGRATION_TEST_SPI_METADATA_FORMAT == INTEGRATION_TEST_SPI_METADATA_FORMAT_OUTPUT_TENSOR
+    return "SPI_METADATA_OUTPUT_TENSOR";
+#elif INTEGRATION_TEST_SPI_METADATA_FORMAT == INTEGRATION_TEST_SPI_METADATA_FORMAT_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
+    return "SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR";
+#else
+    return "UNKNOWN_SPI_METADATA_FORMAT";
+#endif
 }
 
 static void *alloc_zeroed_bytes(size_t bytes)
@@ -176,6 +199,7 @@ static const char *get_boot_mode_name()
 static bool open_with_selected_boot_mode()
 {
     std::printf("Boot mode: %s\n", get_boot_mode_name());
+    std::printf("SPI metadata format: %s\n", get_spi_metadata_format_name());
 
 #if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
     return open(higherhrnet_fpk_data,
@@ -183,7 +207,7 @@ static bool open_with_selected_boot_mode()
                 higherhrnet_network_info_data,
                 static_cast<uint32_t>(higherhrnet_network_info_size),
                 MIPI_DATA_IMAGE,
-                SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                kTestSpiMetadataFormat,
                 10);
 #elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
     if (!program_flash_assets()) {
@@ -192,7 +216,7 @@ static bool open_with_selected_boot_mode()
     }
     return open(nullptr, 0, nullptr, 0,
                 MIPI_DATA_IMAGE,
-                SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                kTestSpiMetadataFormat,
                 10);
 #else
 #error "Unsupported INTEGRATION_TEST_BOOT_MODE"
@@ -234,6 +258,11 @@ static FrameBenchmarkResult benchmark_read_frame(uint32_t count, bool print_fram
             std::printf("metadata first12: ");
             print_hex_sample(g_frame_buf, static_cast<uint32_t>(bytes_read));
             std::printf("\n");
+        }
+
+        if (!kTestPayloadHasApParams) {
+            std::printf("Raw output tensor frame: len=%ld\n", static_cast<long>(bytes_read));
+            continue;
         }
 
         std::memset(g_parsed_metadata, 0, sizeof(*g_parsed_metadata));
@@ -294,6 +323,8 @@ static void print_benchmark_table(uint64_t open_cost_us,
     std::snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(open_cost_us));
     print_benchmark_row("open() duration", value);
 
+    print_benchmark_row("SPI metadata format", get_spi_metadata_format_name());
+
     std::snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(stream_on_cost_us));
     print_benchmark_row("stream_on() duration", value);
 
@@ -314,18 +345,20 @@ static void print_benchmark_table(uint64_t open_cost_us,
     std::snprintf(value, sizeof(value), "%.2f bytes", pre_inject->avg_bytes_per_frame);
     print_benchmark_row("avg metadata bytes/frame (before)", value);
 
-    std::snprintf(value, sizeof(value), "%lu/%lu",
-                  static_cast<unsigned long>(pre_inject->parse_success_frames),
-                  static_cast<unsigned long>(pre_inject->success_frames));
-    print_benchmark_row("parsed metadata frames (before)", value);
+    if (kTestPayloadHasApParams) {
+        std::snprintf(value, sizeof(value), "%lu/%lu",
+                      static_cast<unsigned long>(pre_inject->parse_success_frames),
+                      static_cast<unsigned long>(pre_inject->success_frames));
+        print_benchmark_row("parsed metadata frames (before)", value);
 
-    std::snprintf(value, sizeof(value), "%lu/%lu",
-                  static_cast<unsigned long>(pre_inject->hrnet_success_frames),
-                  static_cast<unsigned long>(pre_inject->parse_success_frames));
-    print_benchmark_row("higherhrnet frames (before)", value);
+        std::snprintf(value, sizeof(value), "%lu/%lu",
+                      static_cast<unsigned long>(pre_inject->hrnet_success_frames),
+                      static_cast<unsigned long>(pre_inject->parse_success_frames));
+        print_benchmark_row("higherhrnet frames (before)", value);
 
-    std::snprintf(value, sizeof(value), "%.2f", pre_inject->avg_pose_count);
-    print_benchmark_row("avg poses/frame (before)", value);
+        std::snprintf(value, sizeof(value), "%.2f", pre_inject->avg_pose_count);
+        print_benchmark_row("avg poses/frame (before)", value);
+    }
 
     std::snprintf(value, sizeof(value), "%lu/%lu",
                   static_cast<unsigned long>(post_inject->success_frames),
@@ -338,18 +371,20 @@ static void print_benchmark_table(uint64_t open_cost_us,
     std::snprintf(value, sizeof(value), "%.2f bytes", post_inject->avg_bytes_per_frame);
     print_benchmark_row("avg metadata bytes/frame (after)", value);
 
-    std::snprintf(value, sizeof(value), "%lu/%lu",
-                  static_cast<unsigned long>(post_inject->parse_success_frames),
-                  static_cast<unsigned long>(post_inject->success_frames));
-    print_benchmark_row("parsed metadata frames (after)", value);
+    if (kTestPayloadHasApParams) {
+        std::snprintf(value, sizeof(value), "%lu/%lu",
+                      static_cast<unsigned long>(post_inject->parse_success_frames),
+                      static_cast<unsigned long>(post_inject->success_frames));
+        print_benchmark_row("parsed metadata frames (after)", value);
 
-    std::snprintf(value, sizeof(value), "%lu/%lu",
-                  static_cast<unsigned long>(post_inject->hrnet_success_frames),
-                  static_cast<unsigned long>(post_inject->parse_success_frames));
-    print_benchmark_row("higherhrnet frames (after)", value);
+        std::snprintf(value, sizeof(value), "%lu/%lu",
+                      static_cast<unsigned long>(post_inject->hrnet_success_frames),
+                      static_cast<unsigned long>(post_inject->parse_success_frames));
+        print_benchmark_row("higherhrnet frames (after)", value);
 
-    std::snprintf(value, sizeof(value), "%.2f", post_inject->avg_pose_count);
-    print_benchmark_row("avg poses/frame (after)", value);
+        std::snprintf(value, sizeof(value), "%.2f", post_inject->avg_pose_count);
+        print_benchmark_row("avg poses/frame (after)", value);
+    }
 
     std::printf("+-----------------------------------------+-------------------------+\n");
 }
@@ -397,7 +432,7 @@ extern "C" esp_err_t imx500_sdk_integration_test_run(void)
                         "failed to switch SPI forwarding to injection mode");
     do_data_injection_stream(provider_fill_0x55, kInjectionDataBytes, true);
     stop_data_injection();
-    ESP_RETURN_ON_FALSE(switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_SSPI), ESP_FAIL, TAG,
+    ESP_RETURN_ON_FALSE(switch_spi_data_forward_mode(kTestMetadataForwardMode), ESP_FAIL, TAG,
                         "failed to restore SPI metadata forwarding mode");
 
     FrameBenchmarkResult post_inject = benchmark_read_frame(kBenchmarkFrameCountPostInject, false);
