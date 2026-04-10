@@ -1,6 +1,5 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
+# 16MB flash layout: the factory app partition fills the rest of flash.
 nvs,      data, nvs,     ,        0x6000,
 phy_init, data, phy,     ,        0x1000,
 factory,  app,  factory, ,        0xFF0000,
-#factory,  app,  factory, ,        1500K,

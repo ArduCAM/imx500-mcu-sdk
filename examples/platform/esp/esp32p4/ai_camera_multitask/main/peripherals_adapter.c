@@ -100,6 +100,14 @@ static esp_err_t ensure_i2c_device(void)
     return ESP_OK;
 }
 
+static void recover_i2c_bus_after_error(void)
+{
+    i2c_master_bus_handle_t bus_handle = example_video_get_i2c_bus_handle();
+    if (bus_handle != NULL) {
+        (void)i2c_master_bus_reset(bus_handle);
+    }
+}
+
 static esp_err_t imx500_i2c_transmit_with_retry(const uint8_t *buffer, size_t buffer_size)
 {
     esp_err_t ret = ESP_FAIL;
@@ -109,6 +117,7 @@ static esp_err_t imx500_i2c_transmit_with_retry(const uint8_t *buffer, size_t bu
             return ret;
         }
         ESP_LOGW(TAG, "i2c transmit retry %d/%d ret=%s", attempt + 1, IMX500_I2C_RETRY_COUNT, esp_err_to_name(ret));
+        recover_i2c_bus_after_error();
         vTaskDelay(pdMS_TO_TICKS(IMX500_I2C_RETRY_DELAY_MS));
     }
     return ret;
@@ -126,6 +135,7 @@ static esp_err_t imx500_i2c_transmit_receive_with_retry(const uint8_t *tx_buffer
             return ret;
         }
         ESP_LOGW(TAG, "i2c transmit_receive retry %d/%d ret=%s", attempt + 1, IMX500_I2C_RETRY_COUNT, esp_err_to_name(ret));
+        recover_i2c_bus_after_error();
         vTaskDelay(pdMS_TO_TICKS(IMX500_I2C_RETRY_DELAY_MS));
     }
     return ret;
@@ -289,6 +299,7 @@ int32_t i2c0_r(const uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
 {
     uint8_t reg_buf[2];
     uint8_t buf[4] = {0};
+    uint32_t value = 0;
     int32_t ret;
 
     if (data == NULL) {
@@ -301,15 +312,15 @@ int32_t i2c0_r(const uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
     switch (mode) {
     case 1:
         ret = i2c0_r_blocking(addr, reg_buf, 2, buf, 1);
-        *data = (uint32_t)buf[0];
+        value = (uint32_t)buf[0];
         break;
     case 2:
         ret = i2c0_r_blocking(addr, reg_buf, 2, buf, 2);
-        *data = ((uint32_t)buf[0] << 8) | (uint32_t)buf[1];
+        value = ((uint32_t)buf[0] << 8) | (uint32_t)buf[1];
         break;
     case 4:
         ret = i2c0_r_blocking(addr, reg_buf, 2, buf, 4);
-        *data = ((uint32_t)buf[0] << 24) |
+        value = ((uint32_t)buf[0] << 24) |
                 ((uint32_t)buf[1] << 16) |
                 ((uint32_t)buf[2] << 8) |
                 (uint32_t)buf[3];
@@ -320,6 +331,9 @@ int32_t i2c0_r(const uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
         break;
     }
 
+    if (ret >= 0) {
+        *data = value;
+    }
     return ret;
 }
 

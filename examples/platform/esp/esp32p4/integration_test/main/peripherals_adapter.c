@@ -19,6 +19,9 @@
 #define PIVARIETY_ADDR 0x0C
 #define IMX500_SPI_HOST SPI2_HOST
 #define IMX500_SPI_MAX_TRANSFER_SZ (284 * 1024)
+#define IMX500_SPI_DMA_HW_MAX_BITS 0x0003FFFFU
+#define IMX500_SPI_DMA_SAFE_CHUNK_MAX_BYTES (IMX500_SPI_DMA_HW_MAX_BITS / 8U)
+#define IMX500_I2C_SCL_WAIT_US (200 * 1000)
 
 static const char *TAG = "peripherals_adapter";
 static const int s_imx500_spi_clock_hz = 5000000;
@@ -29,6 +32,10 @@ static const int s_imx500_spi_cs_pin = 4;
 static i2c_master_dev_handle_t s_camera_i2c_dev_handle;
 static spi_device_handle_t s_imx500_spi_handle;
 static bool s_bound;
+static uint8_t *s_imx500_spi_dma_tx_zero;
+static uint8_t *s_imx500_spi_dma_rx_chunk;
+static size_t s_imx500_spi_dma_chunk_size;
+static size_t s_imx500_spi_max_read_chunk_len;
 
 static void sleep_ms_adapter(uint32_t ms)
 {
@@ -53,11 +60,20 @@ static esp_err_t ensure_i2c_device(void)
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = PIVARIETY_ADDR,
         .scl_speed_hz = EXAMPLE_MIPI_CSI_SCCB_I2C_FREQ,
+        .scl_wait_us = IMX500_I2C_SCL_WAIT_US,
     };
 
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus_handle, &dev_cfg, &s_camera_i2c_dev_handle),
                         TAG, "failed to add imx500 i2c device");
     return ESP_OK;
+}
+
+static void recover_i2c_bus_after_error(void)
+{
+    i2c_master_bus_handle_t bus_handle = example_video_get_i2c_bus_handle();
+    if (bus_handle != NULL) {
+        (void)i2c_master_bus_reset(bus_handle);
+    }
 }
 
 static esp_err_t ensure_spi_device(void)
@@ -86,13 +102,54 @@ static esp_err_t ensure_spi_device(void)
     ESP_RETURN_ON_ERROR(spi_bus_initialize(IMX500_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO), TAG, "failed to init spi bus");
     ESP_RETURN_ON_ERROR(spi_bus_add_device(IMX500_SPI_HOST, &devcfg, &s_imx500_spi_handle), TAG, "failed to add spi device");
 
-    ESP_LOGI(TAG, "initialized IMX500 SPI host=%d sck=%d mosi(host->module_rx)=%d miso(host<-module_tx)=%d cs=%d hz=%d",
+    size_t queried_max_read_chunk_len = 0;
+    ESP_RETURN_ON_ERROR(spi_bus_get_max_transaction_len(IMX500_SPI_HOST, &queried_max_read_chunk_len),
+                        TAG, "failed to query spi max transaction len");
+    s_imx500_spi_max_read_chunk_len = queried_max_read_chunk_len;
+    if (s_imx500_spi_max_read_chunk_len > IMX500_SPI_DMA_SAFE_CHUNK_MAX_BYTES) {
+        ESP_LOGW(TAG, "spi max transaction len=%u exceeds P4 safe DMA chunk=%u, clamping",
+                 (unsigned)s_imx500_spi_max_read_chunk_len,
+                 (unsigned)IMX500_SPI_DMA_SAFE_CHUNK_MAX_BYTES);
+        s_imx500_spi_max_read_chunk_len = IMX500_SPI_DMA_SAFE_CHUNK_MAX_BYTES;
+    }
+    ESP_RETURN_ON_FALSE(s_imx500_spi_max_read_chunk_len > 0, ESP_ERR_INVALID_STATE, TAG,
+                        "invalid spi max transaction len");
+
+    ESP_LOGI(TAG, "initialized IMX500 SPI host=%d sck=%d mosi(host->module_rx)=%d miso(host<-module_tx)=%d cs=%d hz=%d max_chunk=%u",
              IMX500_SPI_HOST,
              s_imx500_spi_sck_pin,
              s_imx500_spi_mosi_pin,
              s_imx500_spi_miso_pin,
              s_imx500_spi_cs_pin,
-             s_imx500_spi_clock_hz);
+             s_imx500_spi_clock_hz,
+             (unsigned)s_imx500_spi_max_read_chunk_len);
+    return ESP_OK;
+}
+
+static esp_err_t ensure_spi_dma_chunk_buffers(void)
+{
+    if (s_imx500_spi_max_read_chunk_len == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_imx500_spi_dma_chunk_size == s_imx500_spi_max_read_chunk_len &&
+        s_imx500_spi_dma_tx_zero != NULL && s_imx500_spi_dma_rx_chunk != NULL) {
+        return ESP_OK;
+    }
+
+    free(s_imx500_spi_dma_tx_zero);
+    free(s_imx500_spi_dma_rx_chunk);
+    s_imx500_spi_dma_tx_zero = heap_caps_calloc(s_imx500_spi_max_read_chunk_len, 1, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    s_imx500_spi_dma_rx_chunk = heap_caps_malloc(s_imx500_spi_max_read_chunk_len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (s_imx500_spi_dma_tx_zero == NULL || s_imx500_spi_dma_rx_chunk == NULL) {
+        free(s_imx500_spi_dma_tx_zero);
+        free(s_imx500_spi_dma_rx_chunk);
+        s_imx500_spi_dma_tx_zero = NULL;
+        s_imx500_spi_dma_rx_chunk = NULL;
+        s_imx500_spi_dma_chunk_size = 0;
+        return ESP_ERR_NO_MEM;
+    }
+    s_imx500_spi_dma_chunk_size = s_imx500_spi_max_read_chunk_len;
     return ESP_OK;
 }
 
@@ -120,6 +177,9 @@ int32_t i2c0_w_blocking(const uint8_t addr, uint8_t *reg, const uint8_t reg_num,
 
     esp_err_t ret = i2c_master_transmit(s_camera_i2c_dev_handle, msg, (size_t)reg_num + (size_t)nbytes, -1);
     free(msg);
+    if (ret != ESP_OK) {
+        recover_i2c_bus_after_error();
+    }
     return (ret == ESP_OK) ? nbytes : -1;
 }
 
@@ -144,6 +204,9 @@ int32_t i2c0_r_blocking(const uint8_t addr, uint8_t *reg, const uint8_t reg_num,
 
     esp_err_t ret = i2c_master_transmit_receive(s_camera_i2c_dev_handle, reg_buf, reg_num, buf, nbytes, -1);
     free(reg_buf);
+    if (ret != ESP_OK) {
+        recover_i2c_bus_after_error();
+    }
     return (ret == ESP_OK) ? nbytes : -1;
 }
 
@@ -177,6 +240,7 @@ int32_t i2c0_r(const uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
 {
     uint8_t reg_buf[2];
     uint8_t buf[4] = {0};
+    uint32_t value = 0;
     int32_t ret;
 
     if (data == NULL) {
@@ -189,15 +253,15 @@ int32_t i2c0_r(const uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
     switch (mode) {
     case 1:
         ret = i2c0_r_blocking(addr, reg_buf, 2, buf, 1);
-        *data = (uint32_t)buf[0];
+        value = (uint32_t)buf[0];
         break;
     case 2:
         ret = i2c0_r_blocking(addr, reg_buf, 2, buf, 2);
-        *data = ((uint32_t)buf[0] << 8) | (uint32_t)buf[1];
+        value = ((uint32_t)buf[0] << 8) | (uint32_t)buf[1];
         break;
     case 4:
         ret = i2c0_r_blocking(addr, reg_buf, 2, buf, 4);
-        *data = ((uint32_t)buf[0] << 24) |
+        value = ((uint32_t)buf[0] << 24) |
                 ((uint32_t)buf[1] << 16) |
                 ((uint32_t)buf[2] << 8) |
                 (uint32_t)buf[3];
@@ -208,6 +272,9 @@ int32_t i2c0_r(const uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
         break;
     }
 
+    if (ret >= 0) {
+        *data = value;
+    }
     return ret;
 }
 
@@ -253,29 +320,52 @@ static int pivariety_spi_bridge_read(uint8_t *data, uint32_t len)
     if (ensure_spi_device() != ESP_OK) {
         return -1;
     }
-
-    uint8_t *dma_tx = heap_caps_calloc(len, 1, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    uint8_t *dma_rx = heap_caps_malloc(len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    if (dma_tx == NULL || dma_rx == NULL) {
-        free(dma_tx);
-        free(dma_rx);
+    if (ensure_spi_dma_chunk_buffers() != ESP_OK) {
+        ESP_LOGE(TAG, "failed to allocate SPI DMA chunk buffers");
         return -1;
     }
 
-    spi_transaction_t trans = {
-        .length = len * 8U,
-        .rxlength = len * 8U,
-        .tx_buffer = dma_tx,
-        .rx_buffer = dma_rx,
-    };
-    esp_err_t ret = spi_device_polling_transmit(s_imx500_spi_handle, &trans);
-    if (ret == ESP_OK) {
-        memcpy(data, dma_rx, len);
+    esp_err_t ret = spi_device_acquire_bus(s_imx500_spi_handle, portMAX_DELAY);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "failed to acquire SPI bus for metadata read: %s", esp_err_to_name(ret));
+        return -1;
     }
 
-    free(dma_tx);
-    free(dma_rx);
-    return (ret == ESP_OK) ? (int)len : -1;
+    int result = -1;
+    uint32_t offset = 0;
+    while (offset < len) {
+        const uint32_t chunk_len = (len - offset > s_imx500_spi_max_read_chunk_len)
+                                       ? (uint32_t)s_imx500_spi_max_read_chunk_len
+                                       : (len - offset);
+        spi_transaction_t trans = {
+            .flags = ((offset + chunk_len) < len) ? SPI_TRANS_CS_KEEP_ACTIVE : 0,
+            .length = chunk_len * 8U,
+            .rxlength = chunk_len * 8U,
+            .tx_buffer = s_imx500_spi_dma_tx_zero,
+            .rx_buffer = s_imx500_spi_dma_rx_chunk,
+        };
+
+        ret = spi_device_polling_transmit(s_imx500_spi_handle, &trans);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "SPI metadata chunk read failed off=%" PRIu32 " len=%" PRIu32 " err=%s",
+                     offset, chunk_len, esp_err_to_name(ret));
+            goto done;
+        }
+        if ((trans.flags & SPI_TRANS_DMA_RX_FAIL) != 0 || (trans.flags & SPI_TRANS_DMA_TX_FAIL) != 0) {
+            ESP_LOGE(TAG, "SPI metadata DMA failure off=%" PRIu32 " len=%" PRIu32 " flags=0x%08" PRIx32,
+                     offset, chunk_len, trans.flags);
+            goto done;
+        }
+
+        memcpy(data + offset, s_imx500_spi_dma_rx_chunk, chunk_len);
+        offset += chunk_len;
+    }
+
+    result = (int)len;
+
+done:
+    spi_device_release_bus(s_imx500_spi_handle);
+    return result;
 }
 
 bool bind_peripherals_api(void)
