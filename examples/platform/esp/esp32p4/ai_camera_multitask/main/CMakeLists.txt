@@ -5,6 +5,8 @@ set(IMX500_MODEL_DIR "${IMX500_SDK_DIR}/tools/assets/models/higherhrnet" CACHE P
 set(IMX500_MODEL_FPK "${IMX500_MODEL_DIR}/network.fpk")
 set(IMX500_MODEL_INFO "${IMX500_MODEL_DIR}/network_info.txt")
 set(IMX500_FILE2CPP_SCRIPT "${IMX500_SDK_DIR}/tools/file2cpp.py")
+set(INTEGRATION_TEST_BOOT_MODE "DIRECT" CACHE STRING "ai_camera_multitask boot mode: FLASH or DIRECT")
+set_property(CACHE INTEGRATION_TEST_BOOT_MODE PROPERTY STRINGS FLASH DIRECT)
 set(IMX500_GENERATED_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_imx500_models")
 set(IMX500_GENERATED_MODEL_FPK_H "${IMX500_GENERATED_MODEL_DIR}/network.h")
 set(IMX500_GENERATED_MODEL_FPK_CPP "${IMX500_GENERATED_MODEL_DIR}/network.cpp")
@@ -73,6 +75,16 @@ idf_component_register(SRCS ${srcs}
                        "${CMAKE_CURRENT_BINARY_DIR}"
                        "${IMX500_SDK_DIR}/imx500_firmware_cpp"
                        "${IMX500_SDK_DIR}/third_party/flatbuffers/include")
+
+if(INTEGRATION_TEST_BOOT_MODE STREQUAL "DIRECT")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_DIRECT)
+elseif(INTEGRATION_TEST_BOOT_MODE STREQUAL "FLASH")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_FLASH)
+else()
+    message(FATAL_ERROR "Unsupported INTEGRATION_TEST_BOOT_MODE=${INTEGRATION_TEST_BOOT_MODE}, expected FLASH or DIRECT")
+endif()
 
 if(NOT CMAKE_SCRIPT_MODE_FILE)
     set_source_files_properties(${imx500_sdk_test_srcs}

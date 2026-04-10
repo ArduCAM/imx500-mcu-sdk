@@ -600,6 +600,53 @@ static esp_err_t init_mipi_display_path()
     return ESP_OK;
 }
 
+static void dump_spi_flash_status(const char *label)
+{
+    spi_flash_status_t status = {};
+    if (!get_spi_flash_status(&status)) {
+        ESP_LOGW(TAG, "%s: failed to read SPI flash status", label);
+        return;
+    }
+    ESP_LOGI(TAG,
+             "%s: status=%" PRIu32 " result=%" PRIu32 " bytes=%" PRIu32 "/%" PRIu32,
+             label,
+             status.status,
+             status.result,
+             status.bytes_done,
+             status.bytes_total);
+}
+
+static bool program_flash_assets()
+{
+    ESP_LOGI(TAG,
+             "programming IMX500 flash with embedded higherhrnet assets: fw=%u bytes nn_info=%u bytes",
+             static_cast<unsigned>(NN_FW_SIZE),
+             static_cast<unsigned>(NN_NETWORK_INFO_SIZE));
+    if (!spi_slave_write_model_to_flash(NN_FW_DATA, static_cast<uint32_t>(NN_FW_SIZE))) {
+        dump_spi_flash_status("model flash failed");
+        return false;
+    }
+
+    if (!spi_slave_write_nn_info_to_flash(NN_NETWORK_INFO_DATA, static_cast<uint32_t>(NN_NETWORK_INFO_SIZE))) {
+        dump_spi_flash_status("network_info flash failed");
+        return false;
+    }
+
+    dump_spi_flash_status("flash programming complete");
+    return true;
+}
+
+static const char *get_boot_mode_name()
+{
+#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
+    return "DIRECT_BOOT";
+#elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
+    return "FLASH_BOOT";
+#else
+    return "UNKNOWN_BOOT_MODE";
+#endif
+}
+
 static bool open_imx500_stream()
 {
     uint32_t module_fw_ver = 0;
@@ -608,43 +655,33 @@ static bool open_imx500_stream()
     get_pid(&module_pid);
     ESP_LOGI(TAG, "module fw version: 0x%" PRIx32, module_fw_ver);
     ESP_LOGI(TAG, "module pid: 0x%" PRIx32, module_pid);
+    ESP_LOGI(TAG, "selected IMX500 boot mode: %s", get_boot_mode_name());
 
-    auto dump_spi_flash_status_once = [](const char *label) {
-        spi_flash_status_t status = {};
-        if (!get_spi_flash_status(&status)) {
-            ESP_LOGW(TAG, "%s: failed to read SPI flash status", label);
-            return;
-        }
-        ESP_LOGI(TAG,
-                 "%s: status=%" PRIu32 " result=%" PRIu32 " bytes=%" PRIu32 "/%" PRIu32,
-                 label,
-                 status.status,
-                 status.result,
-                 status.bytes_done,
-                 status.bytes_total);
-    };
-
+#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
     ESP_LOGI(TAG,
-             "programming IMX500 flash with embedded model assets: fw=%u bytes nn_info=%u bytes",
+             "opening IMX500 with embedded higherhrnet assets directly: fw=%u bytes nn_info=%u bytes",
              static_cast<unsigned>(NN_FW_SIZE),
              static_cast<unsigned>(NN_NETWORK_INFO_SIZE));
-    if (!spi_slave_write_model_to_flash(NN_FW_DATA, static_cast<uint32_t>(NN_FW_SIZE))) {
-        dump_spi_flash_status_once("model flash failed");
+    return open(NN_FW_DATA,
+                static_cast<uint32_t>(NN_FW_SIZE),
+                NN_NETWORK_INFO_DATA,
+                static_cast<uint32_t>(NN_NETWORK_INFO_SIZE),
+                MIPI_DATA_IMAGE,
+                SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                10);
+#elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
+    if (!program_flash_assets()) {
         return false;
     }
-
-    if (!spi_slave_write_nn_info_to_flash(NN_NETWORK_INFO_DATA, static_cast<uint32_t>(NN_NETWORK_INFO_SIZE))) {
-        dump_spi_flash_status_once("network_info flash failed");
-        return false;
-    }
-
-    dump_spi_flash_status_once("flash programming complete");
 
     ESP_LOGI(TAG, "opening IMX500 from module flash");
     return open(nullptr, 0, nullptr, 0,
                 MIPI_DATA_IMAGE,
                 SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
                 10);
+#else
+#error "Unsupported INTEGRATION_TEST_BOOT_MODE"
+#endif
 }
 
 static void spi_metadata_task(void *arg)
