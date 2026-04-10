@@ -2682,7 +2682,11 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
         return false;
     }
 
-    g_spi_driver.read(rx_buf, data_size);
+    ret = g_spi_driver.read(rx_buf, data_size);
+    if (ret < 0 || (uint32_t)ret != data_size) {
+        printf("Error: SPI metadata read failed ret=%d expected=%" PRIu32 "\n", ret, data_size);
+        return 0;
+    }
     return data_size;
 }
 

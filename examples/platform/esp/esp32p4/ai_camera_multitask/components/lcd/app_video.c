@@ -85,11 +85,6 @@ int app_video_open(char *dev, video_fmt_t init_fmt)
     struct v4l2_capability capability;
     const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-#if CONFIG_EXAMPLE_ENABLE_CAM_SENSOR_PIC_VFLIP || CONFIG_EXAMPLE_ENABLE_CAM_SENSOR_PIC_HFLIP
-    struct v4l2_ext_controls controls;
-    struct v4l2_ext_control control[1];
-#endif
-
     int fd = open(dev, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
         ESP_LOGE(TAG, "Open video failed");
@@ -135,25 +130,11 @@ int app_video_open(char *dev, video_fmt_t init_fmt)
     }
 
 #if CONFIG_EXAMPLE_ENABLE_CAM_SENSOR_PIC_VFLIP
-    controls.ctrl_class = V4L2_CTRL_CLASS_USER;
-    controls.count      = 1;
-    controls.controls   = control;
-    control[0].id       = V4L2_CID_VFLIP;
-    control[0].value    = 1;
-    if (ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
-        ESP_LOGW(TAG, "failed to mirror the frame horizontally and skip this step");
-    }
+    ESP_LOGI(TAG, "skip VFLIP control: current IMX500 video path does not expose V4L2 flip controls");
 #endif
 
 #if CONFIG_EXAMPLE_ENABLE_CAM_SENSOR_PIC_HFLIP
-    controls.ctrl_class = V4L2_CTRL_CLASS_USER;
-    controls.count      = 1;
-    controls.controls   = control;
-    control[0].id       = V4L2_CID_HFLIP;
-    control[0].value    = 1;
-    if (ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
-        ESP_LOGW(TAG, "failed to mirror the frame horizontally and skip this step");
-    }
+    ESP_LOGI(TAG, "skip HFLIP control: current IMX500 video path does not expose V4L2 flip controls");
 #endif
 
     return fd;

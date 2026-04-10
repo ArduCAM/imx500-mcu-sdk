@@ -3,63 +3,98 @@
 #include <cstdio>
 #include <cstring>
 #include <inttypes.h>
+#include <string>
+#include <vector>
 #include <sys/ioctl.h>
 
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "sdkconfig.h"
+#include "nvs.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "linux/videodev2.h"
 #include "driver/jpeg_decode.h"
+#include "sdkconfig.h"
 
 #include "ArducamIMX500SDK.h"
 #include "app_drawing_utils.h"
 #include "app_lcd.h"
 #include "app_video.h"
 #include "example_video_common.h"
-#include "generated_imx500_models/network.h"
-#include "generated_imx500_models/network_info.h"
 #include "higherhrnet_postprocess.h"
+#include "imx500_multitask_model_registry.h"
+#include "imx500_multitask_postprocess.h"
+#include "imx500_multitask_ui.h"
 #include "imx500_sdk_integration_test.h"
 #include "peripherals_adapter.h"
 
 static const char *TAG = "imx500_sdk_test";
 
-#define NN_FW_DATA           network_data
-#define NN_FW_SIZE           network_size
-#define NN_NETWORK_INFO_DATA network_info_data
-#define NN_NETWORK_INFO_SIZE network_info_size
-
 namespace {
 
-constexpr uint32_t kMaxFrameBufferSize = 284 * 1024;
+constexpr uint32_t kMaxFrameBufferSize = 384 * 1024;
 constexpr uint16_t kSpiThumbMaxWidth = 192;
 constexpr uint16_t kSpiThumbMaxHeight = 144;
-constexpr uint32_t kSpiTaskStackSize = 8 * 1024;
+constexpr uint32_t kSpiTaskStackSize = 10 * 1024;
+constexpr uint32_t kBootButtonTaskStackSize = 4 * 1024;
 constexpr uint32_t kMetadataDisableThreshold = 3;
-constexpr uint32_t kPoseExpiryUs = 1000000;
+constexpr uint32_t kAiResultExpiryUs = 1000000;
 constexpr uint32_t kThumbDecodeMaxWidth = 384;
 constexpr uint32_t kThumbDecodeMaxHeight = 288;
 constexpr uint32_t kThumbDecodeBufferBytes = kThumbDecodeMaxWidth * kThumbDecodeMaxHeight * 2;
 constexpr size_t kPsramFrameBufferAlignment = 64;
 constexpr uint32_t kJpegAlignment = 1024;
 constexpr uint32_t kJpegMinBlockBytes = 4 * 1024;
+constexpr uint32_t kOverlayTextLen = 96;
+constexpr uint32_t kHudHeight = 74;
+constexpr uint32_t kBootButtonPollMs = 20;
+constexpr uint32_t kBootButtonDebounceMs = 80;
+constexpr uint32_t kModelSwitchNoticeMs = 1200;
+constexpr gpio_num_t kBootButtonGpio = GPIO_NUM_35;
+constexpr char kNvsNamespace[] = "imx500";
+constexpr char kNvsModelIndexKey[] = "model_idx";
+constexpr uint8_t kSegmentationAlpha = 110;
 constexpr uint32_t kSkeleton[][2] = {
     {0, 1}, {0, 2}, {1, 3}, {2, 4},
     {5, 6}, {5, 11}, {11, 12}, {12, 6},
     {5, 7}, {7, 9}, {6, 8}, {8, 10},
     {11, 13}, {13, 15}, {12, 14}, {14, 16},
 };
+constexpr uint8_t kSegmentationColours[][3] = {
+    {0, 0, 0},
+    {128, 0, 0},
+    {0, 128, 0},
+    {128, 128, 0},
+    {0, 0, 128},
+    {128, 0, 128},
+    {0, 128, 128},
+    {128, 128, 128},
+    {64, 0, 0},
+    {192, 0, 0},
+    {64, 128, 0},
+    {192, 128, 0},
+    {64, 0, 128},
+    {192, 0, 128},
+    {64, 128, 128},
+    {192, 128, 128},
+    {0, 64, 0},
+    {128, 64, 0},
+    {0, 192, 0},
+    {128, 192, 0},
+    {0, 64, 128},
+};
 
 uint8_t *g_frame_buf = nullptr;
 uint32_t g_frame_buf_capacity = 0;
 IMX500ParsedMetadata *g_parsed_metadata = nullptr;
 TaskHandle_t g_spi_task_handle = nullptr;
+TaskHandle_t g_boot_button_task_handle = nullptr;
 SemaphoreHandle_t g_overlay_mutex = nullptr;
 int g_video_fd = -1;
 esp_lcd_panel_handle_t g_display_panel = nullptr;
@@ -68,6 +103,7 @@ void *g_camera_buffers[EXAMPLE_LCD_BUF_NUM] = {};
 
 uint8_t *g_spi_thumb_buffer = nullptr;
 uint8_t *g_spi_thumb_staging = nullptr;
+uint8_t *g_spi_thumb_snapshot = nullptr;
 uint8_t *g_spi_jpeg_input_buffer = nullptr;
 size_t g_spi_jpeg_input_buffer_size = 0;
 uint8_t *g_spi_jpeg_full_buffer = nullptr;
@@ -75,6 +111,14 @@ size_t g_spi_jpeg_full_buffer_size = 0;
 jpeg_decoder_handle_t g_jpeg_decoder = nullptr;
 HigherhrnetResult *g_overlay_pose_snapshot = nullptr;
 HigherhrnetResult *g_spi_hrnet_result = nullptr;
+uint8_t *g_segmentation_mask = nullptr;
+uint8_t *g_segmentation_mask_snapshot = nullptr;
+
+const Imx500EmbeddedModelDescriptor *g_active_model = nullptr;
+size_t g_active_model_index = 0;
+size_t g_model_count = 0;
+std::vector<std::string> g_active_labels;
+bool g_switching_model = false;
 
 struct SharedOverlayState {
     bool thumbnail_ready = false;
@@ -84,11 +128,38 @@ struct SharedOverlayState {
     bool ai_overlay_enabled = true;
     bool spi_metadata_enabled = true;
     uint32_t zero_header_failures = 0;
+    Imx500ClassificationOverlayState classification = {};
+    Imx500DetectionOverlayState detection = {};
     HigherhrnetResult hrnet = {};
-    uint64_t hrnet_updated_us = 0;
+    Imx500SegmentationOverlayState segmentation = {};
+    uint64_t result_updated_us = 0;
+    bool modal_active = false;
+    char summary_line_1[kOverlayTextLen] = {};
+    char summary_line_2[kOverlayTextLen] = {};
+    char modal_line_1[kOverlayTextLen] = {};
+    char modal_line_2[kOverlayTextLen] = {};
+};
+
+struct LocalOverlaySnapshot {
+    bool thumbnail_ready = false;
+    uint16_t thumb_width = 0;
+    uint16_t thumb_height = 0;
+    uint64_t result_updated_us = 0;
+    bool ai_overlay_enabled = true;
+    bool spi_metadata_enabled = true;
+    bool modal_active = false;
+    Imx500ClassificationOverlayState classification = {};
+    Imx500DetectionOverlayState detection = {};
+    HigherhrnetResult hrnet = {};
+    Imx500SegmentationOverlayState segmentation = {};
+    char summary_line_1[kOverlayTextLen] = {};
+    char summary_line_2[kOverlayTextLen] = {};
+    char modal_line_1[kOverlayTextLen] = {};
+    char modal_line_2[kOverlayTextLen] = {};
 };
 
 SharedOverlayState g_overlay_state = {};
+LocalOverlaySnapshot g_display_overlay_snapshot = {};
 volatile bool g_display_first_frame_seen = false;
 
 static uint64_t now_us()
@@ -104,6 +175,31 @@ static uint32_t align_up_u32(uint32_t value, uint32_t base)
 static uint32_t calculate_jpeg_aligned_size(uint32_t jpeg_size)
 {
     return std::max(kJpegMinBlockBytes, align_up_u32(jpeg_size + 3, kJpegAlignment));
+}
+
+static bool compute_spi_thumbnail_size(uint32_t src_width, uint32_t src_height,
+                                       uint16_t *scaled_width, uint16_t *scaled_height)
+{
+    if (src_width == 0 || src_height == 0 || scaled_width == nullptr || scaled_height == nullptr) {
+        return false;
+    }
+
+    uint32_t fit_width = src_width;
+    uint32_t fit_height = src_height;
+    if (fit_width > kSpiThumbMaxWidth || fit_height > kSpiThumbMaxHeight) {
+        const uint64_t width_limited_height = (static_cast<uint64_t>(src_height) * kSpiThumbMaxWidth) / src_width;
+        if (width_limited_height > 0 && width_limited_height <= kSpiThumbMaxHeight) {
+            fit_width = kSpiThumbMaxWidth;
+            fit_height = static_cast<uint32_t>(width_limited_height);
+        } else {
+            fit_height = kSpiThumbMaxHeight;
+            fit_width = static_cast<uint32_t>((static_cast<uint64_t>(src_width) * kSpiThumbMaxHeight) / src_height);
+        }
+    }
+
+    *scaled_width = static_cast<uint16_t>(std::max<uint32_t>(1, fit_width));
+    *scaled_height = static_cast<uint16_t>(std::max<uint32_t>(1, fit_height));
+    return true;
 }
 
 static inline uint16_t swap_rgb565_bytes(uint16_t pixel)
@@ -160,14 +256,141 @@ static bool is_zero_header_payload(const uint8_t *data, uint32_t len)
     return true;
 }
 
+static void copy_text(char *dst, size_t dst_size, const std::string &src)
+{
+    if (dst == nullptr || dst_size == 0) {
+        return;
+    }
+    std::snprintf(dst, dst_size, "%s", src.c_str());
+}
+
+static std::string lcd_model_name()
+{
+    if (g_active_model == nullptr) {
+        return "NO MODEL";
+    }
+    return imx500_sanitize_for_lcd(g_active_model->display_name, 28);
+}
+
+static std::string lcd_task_name()
+{
+    if (g_active_model == nullptr) {
+        return "UNKNOWN";
+    }
+    return imx500_sanitize_for_lcd(g_active_model->task_name, 20);
+}
+
+static void clear_overlay_results_locked()
+{
+    g_overlay_state.classification = {};
+    g_overlay_state.detection = {};
+    memset(&g_overlay_state.hrnet, 0, sizeof(g_overlay_state.hrnet));
+    g_overlay_state.segmentation = {};
+    g_overlay_state.result_updated_us = 0;
+}
+
+static void set_overlay_summary_locked(const std::string &line1, const std::string &line2)
+{
+    copy_text(g_overlay_state.summary_line_1, sizeof(g_overlay_state.summary_line_1), imx500_sanitize_for_lcd(line1, 46));
+    copy_text(g_overlay_state.summary_line_2, sizeof(g_overlay_state.summary_line_2), imx500_sanitize_for_lcd(line2, 46));
+}
+
+static void set_overlay_modal_locked(bool active, const std::string &line1, const std::string &line2)
+{
+    g_overlay_state.modal_active = active;
+    copy_text(g_overlay_state.modal_line_1, sizeof(g_overlay_state.modal_line_1), imx500_sanitize_for_lcd(line1, 32));
+    copy_text(g_overlay_state.modal_line_2, sizeof(g_overlay_state.modal_line_2), imx500_sanitize_for_lcd(line2, 32));
+}
+
 static void clear_overlay_state_locked()
 {
     g_overlay_state.thumbnail_ready = false;
     g_overlay_state.thumb_width = 0;
     g_overlay_state.thumb_height = 0;
     g_overlay_state.thumb_updated_us = 0;
-    memset(&g_overlay_state.hrnet, 0, sizeof(g_overlay_state.hrnet));
-    g_overlay_state.hrnet_updated_us = 0;
+    g_overlay_state.zero_header_failures = 0;
+    g_overlay_state.ai_overlay_enabled = true;
+    g_overlay_state.spi_metadata_enabled = true;
+    g_overlay_state.modal_active = false;
+    g_overlay_state.summary_line_1[0] = '\0';
+    g_overlay_state.summary_line_2[0] = '\0';
+    g_overlay_state.modal_line_1[0] = '\0';
+    g_overlay_state.modal_line_2[0] = '\0';
+    clear_overlay_results_locked();
+}
+
+static bool ensure_lcd_ready()
+{
+    if (g_display_panel == nullptr) {
+        if (app_lcd_init(&g_display_panel) != ESP_OK) {
+            ESP_LOGE(TAG, "failed to init LCD");
+            return false;
+        }
+    }
+    if (g_lcd_buffers[0] == nullptr || g_lcd_buffers[1] == nullptr) {
+        if (esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 2, &g_lcd_buffers[0], &g_lcd_buffers[1]) != ESP_OK) {
+            ESP_LOGE(TAG, "failed to get LCD frame buffers");
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool load_selected_model_index(size_t *index_out)
+{
+    if (index_out == nullptr) {
+        return false;
+    }
+
+    nvs_handle_t handle = 0;
+    if (nvs_open(kNvsNamespace, NVS_READONLY, &handle) != ESP_OK) {
+        *index_out = imx500_get_default_embedded_model_index();
+        return false;
+    }
+
+    uint8_t stored = 0;
+    const esp_err_t err = nvs_get_u8(handle, kNvsModelIndexKey, &stored);
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        *index_out = imx500_get_default_embedded_model_index();
+        return false;
+    }
+
+    *index_out = stored;
+    return true;
+}
+
+static bool save_selected_model_index(size_t index)
+{
+    nvs_handle_t handle = 0;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed");
+        return false;
+    }
+    esp_err_t err = nvs_set_u8(handle, kNvsModelIndexKey, static_cast<uint8_t>(index));
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to save model index err=%d", static_cast<int>(err));
+        return false;
+    }
+    return true;
+}
+
+static void select_active_model()
+{
+    imx500_get_embedded_models(&g_model_count);
+    size_t selected_index = imx500_get_default_embedded_model_index();
+    load_selected_model_index(&selected_index);
+    if (selected_index >= g_model_count) {
+        selected_index = imx500_get_default_embedded_model_index();
+    }
+
+    g_active_model_index = selected_index;
+    g_active_model = imx500_get_embedded_model(selected_index);
+    g_active_labels = (g_active_model != nullptr) ? imx500_parse_embedded_labels(g_active_model->labels) : std::vector<std::string>{};
 }
 
 static bool allocate_parsed_metadata_buffer()
@@ -224,7 +447,18 @@ static bool allocate_spi_thumbnail_buffers()
 
     if (!g_spi_thumb_buffer) {
         g_spi_thumb_buffer = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_spi_thumb_staging) {
         g_spi_thumb_staging = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_spi_thumb_snapshot) {
+        g_spi_thumb_snapshot = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_segmentation_mask) {
+        g_segmentation_mask = static_cast<uint8_t *>(heap_caps_calloc(1, kSpiThumbMaxWidth * kSpiThumbMaxHeight, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+    }
+    if (!g_segmentation_mask_snapshot) {
+        g_segmentation_mask_snapshot = static_cast<uint8_t *>(heap_caps_calloc(1, kSpiThumbMaxWidth * kSpiThumbMaxHeight, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
     }
     if (!g_spi_jpeg_full_buffer) {
         jpeg_decode_memory_alloc_cfg_t out_mem_cfg = {
@@ -233,7 +467,8 @@ static bool allocate_spi_thumbnail_buffers()
         g_spi_jpeg_full_buffer = static_cast<uint8_t *>(
             jpeg_alloc_decoder_mem(kThumbDecodeBufferBytes, &out_mem_cfg, &g_spi_jpeg_full_buffer_size));
     }
-    if (!g_spi_thumb_buffer || !g_spi_thumb_staging || !g_spi_jpeg_full_buffer) {
+    if (!g_spi_thumb_buffer || !g_spi_thumb_staging || !g_spi_thumb_snapshot || !g_spi_jpeg_full_buffer ||
+        !g_segmentation_mask || !g_segmentation_mask_snapshot) {
         ESP_LOGE(TAG, "failed to allocate SPI thumbnail buffers");
         return false;
     }
@@ -266,10 +501,17 @@ static bool allocate_spi_thumbnail_buffers()
         }
     }
 
-    ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u alloc=%u hrnet=%u",
+    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        clear_overlay_state_locked();
+        set_overlay_summary_locked("WAITING FOR AI RESULT", "PRESS BOOT TO SWITCH MODEL");
+        xSemaphoreGive(g_overlay_mutex);
+    }
+
+    ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u alloc=%u hrnet=%u seg=%u",
              kSpiThumbMaxWidth, kSpiThumbMaxHeight, kThumbDecodeBufferBytes,
              static_cast<unsigned>(g_spi_jpeg_full_buffer_size),
-             static_cast<unsigned>(sizeof(HigherhrnetResult)));
+             static_cast<unsigned>(sizeof(HigherhrnetResult)),
+             static_cast<unsigned>(kSpiThumbMaxWidth * kSpiThumbMaxHeight));
     return true;
 }
 
@@ -356,11 +598,18 @@ static bool decode_spi_jpeg_thumbnail_span(const uint8_t *jpeg_data, uint32_t jp
         return false;
     }
 
-    uint16_t scaled_width = static_cast<uint16_t>(std::max<uint32_t>(1, info.width / 2));
-    uint16_t scaled_height = static_cast<uint16_t>(std::max<uint32_t>(1, info.height / 2));
-    if (scaled_width > kSpiThumbMaxWidth || scaled_height > kSpiThumbMaxHeight) {
-        ESP_LOGW(TAG, "SPI JPEG thumbnail too large after scaling: raw=%" PRIu32 "x%" PRIu32 " scaled=%ux%u limit=%ux%u",
-                 info.width, info.height, scaled_width, scaled_height, kSpiThumbMaxWidth, kSpiThumbMaxHeight);
+    uint16_t scaled_width = 0;
+    uint16_t scaled_height = 0;
+    if (!compute_spi_thumbnail_size(info.width, info.height, &scaled_width, &scaled_height)) {
+        ESP_LOGW(TAG, "invalid SPI JPEG thumbnail size raw=%" PRIu32 "x%" PRIu32, info.width, info.height);
+        return false;
+    }
+
+    const uint64_t decoded_bytes_needed = static_cast<uint64_t>(info.width) * info.height * 2u;
+    if (decoded_bytes_needed > g_spi_jpeg_full_buffer_size) {
+        ESP_LOGW(TAG, "SPI JPEG decode buffer too small: raw=%" PRIu32 "x%" PRIu32 " need=%" PRIu64 " have=%u",
+                 info.width, info.height, decoded_bytes_needed,
+                 static_cast<unsigned>(g_spi_jpeg_full_buffer_size));
         return false;
     }
 
@@ -440,72 +689,166 @@ static float clamp_coord(float value, float max_value)
     return value;
 }
 
-static void blit_spi_thumbnail_with_pose(uint16_t *frame, uint32_t frame_w, uint32_t frame_h)
+static int thumbnail_origin_x(uint32_t frame_w, const LocalOverlaySnapshot &snapshot)
 {
-    if (!frame || !g_overlay_mutex || !g_overlay_pose_snapshot) {
+    (void)frame_w;
+    (void)snapshot;
+    return 0;
+}
+
+static int thumbnail_origin_y(uint32_t frame_h, const LocalOverlaySnapshot &snapshot)
+{
+    if (frame_h <= snapshot.thumb_height) {
+        return 0;
+    }
+    return static_cast<int>(frame_h - snapshot.thumb_height);
+}
+
+static void snapshot_overlay_state(LocalOverlaySnapshot *snapshot)
+{
+    if (!snapshot || !g_overlay_mutex) {
         return;
     }
 
-    uint16_t local_thumb_w = 0;
-    uint16_t local_thumb_h = 0;
-    uint64_t local_pose_updated_us = 0;
+    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        snapshot->thumbnail_ready = g_overlay_state.thumbnail_ready;
+        snapshot->thumb_width = g_overlay_state.thumb_width;
+        snapshot->thumb_height = g_overlay_state.thumb_height;
+        snapshot->result_updated_us = g_overlay_state.result_updated_us;
+        snapshot->ai_overlay_enabled = g_overlay_state.ai_overlay_enabled;
+        snapshot->spi_metadata_enabled = g_overlay_state.spi_metadata_enabled;
+        snapshot->modal_active = g_overlay_state.modal_active;
+        snapshot->classification = g_overlay_state.classification;
+        snapshot->detection = g_overlay_state.detection;
+        snapshot->segmentation = g_overlay_state.segmentation;
+        memcpy(&snapshot->hrnet, &g_overlay_state.hrnet, sizeof(snapshot->hrnet));
+        memcpy(snapshot->summary_line_1, g_overlay_state.summary_line_1, sizeof(snapshot->summary_line_1));
+        memcpy(snapshot->summary_line_2, g_overlay_state.summary_line_2, sizeof(snapshot->summary_line_2));
+        memcpy(snapshot->modal_line_1, g_overlay_state.modal_line_1, sizeof(snapshot->modal_line_1));
+        memcpy(snapshot->modal_line_2, g_overlay_state.modal_line_2, sizeof(snapshot->modal_line_2));
+        if (snapshot->thumbnail_ready && g_spi_thumb_buffer && g_spi_thumb_snapshot) {
+            memcpy(g_spi_thumb_snapshot, g_spi_thumb_buffer,
+                   static_cast<size_t>(snapshot->thumb_width) * snapshot->thumb_height * 2u);
+        }
+        if (snapshot->segmentation.ready && g_segmentation_mask && g_segmentation_mask_snapshot) {
+            memcpy(g_segmentation_mask_snapshot, g_segmentation_mask,
+                   static_cast<size_t>(snapshot->segmentation.width) * snapshot->segmentation.height);
+        }
+        xSemaphoreGive(g_overlay_mutex);
+    }
+}
 
-    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+static void render_classification_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                          const LocalOverlaySnapshot &snapshot)
+{
+    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
+    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
+    const int panel_height = static_cast<int>(snapshot.classification.count) * 18 + 10;
+    const int panel_top = std::max(origin_y, origin_y + static_cast<int>(snapshot.thumb_height) - panel_height);
+    imx500_fill_rectangle_rgb565(frame, frame_w, frame_h, origin_x, panel_top,
+                                 origin_x + static_cast<int>(snapshot.thumb_width) - 1,
+                                 origin_y + static_cast<int>(snapshot.thumb_height) - 1, 0, 0, 0);
+
+    int y = panel_top + 4;
+    for (uint32_t i = 0; i < snapshot.classification.count; ++i) {
+        char line[64] = {};
+        const std::string label = imx500_label_for_class_id(g_active_labels, snapshot.classification.class_ids[i]);
+        std::snprintf(line, sizeof(line), "TOP%u %s %.0f%%",
+                      static_cast<unsigned>(i + 1), label.c_str(),
+                      imx500_score_to_percent(snapshot.classification.scores[i]));
+        imx500_draw_text_rgb565(frame, frame_w, frame_h, origin_x + 4, y, line, 255, 255, 255, 2);
+        y += 18;
+    }
+}
+
+static void render_detection_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                     const LocalOverlaySnapshot &snapshot)
+{
+    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
+    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
+    const uint16_t src_w = std::max<uint16_t>(1, snapshot.detection.source_width);
+    const uint16_t src_h = std::max<uint16_t>(1, snapshot.detection.source_height);
+    for (uint32_t i = 0; i < snapshot.detection.count; ++i) {
+        const Imx500DetectionOverlayItem &item = snapshot.detection.items[i];
+        const int x1 = origin_x + static_cast<int>(item.x1 * snapshot.thumb_width / src_w);
+        const int y1 = origin_y + static_cast<int>(item.y1 * snapshot.thumb_height / src_h);
+        const int x2 = origin_x + static_cast<int>(item.x2 * snapshot.thumb_width / src_w);
+        const int y2 = origin_y + static_cast<int>(item.y2 * snapshot.thumb_height / src_h);
+        draw_rectangle_rgb(frame, frame_w, frame_h, x1, y1, x2, y2, 0, 0, 255, 210, 0, 2, false);
+
+        char caption[64] = {};
+        const std::string label = imx500_label_for_class_id(g_active_labels, item.class_id);
+        std::snprintf(caption, sizeof(caption), "%s %.0f%%", label.c_str(), imx500_score_to_percent(item.score));
+        const int text_y = std::max(origin_y, y1 - 16);
+        imx500_fill_rectangle_rgb565(frame, frame_w, frame_h, x1, text_y,
+                                     std::min<int>(x1 + imx500_measure_text_width(caption, 1) + 6,
+                                                   origin_x + static_cast<int>(snapshot.thumb_width) - 1),
+                                     std::min<int>(text_y + 14,
+                                                   origin_y + static_cast<int>(snapshot.thumb_height) - 1), 0, 0, 0);
+        imx500_draw_text_rgb565(frame, frame_w, frame_h, x1 + 2, text_y + 2, caption, 255, 255, 255, 1);
+    }
+}
+
+static void render_segmentation_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                        const LocalOverlaySnapshot &snapshot)
+{
+    if (!snapshot.segmentation.ready || !g_segmentation_mask_snapshot) {
         return;
     }
-
-    if (g_overlay_state.thumbnail_ready) {
-        local_thumb_w = g_overlay_state.thumb_width;
-        local_thumb_h = g_overlay_state.thumb_height;
-        for (uint16_t y = 0; y < local_thumb_h && y < frame_h; ++y) {
-            memcpy(frame + y * frame_w, g_spi_thumb_buffer + y * local_thumb_w * 2, local_thumb_w * 2);
+    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
+    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
+    for (uint32_t y = 0; y < snapshot.segmentation.height; ++y) {
+        for (uint32_t x = 0; x < snapshot.segmentation.width; ++x) {
+            const uint8_t class_id = g_segmentation_mask_snapshot[y * snapshot.segmentation.width + x];
+            if (class_id == 0) {
+                continue;
+            }
+            const uint8_t *colour = kSegmentationColours[class_id % (sizeof(kSegmentationColours) / sizeof(kSegmentationColours[0]))];
+            uint16_t &pixel = frame[(origin_y + static_cast<int>(y)) * frame_w + (origin_x + static_cast<int>(x))];
+            pixel = imx500_blend_rgb565(pixel, colour[0], colour[1], colour[2], kSegmentationAlpha);
         }
     }
+}
 
-    memcpy(g_overlay_pose_snapshot, &g_overlay_state.hrnet, sizeof(*g_overlay_pose_snapshot));
-    local_pose_updated_us = g_overlay_state.hrnet_updated_us;
-    xSemaphoreGive(g_overlay_mutex);
-
-    if (local_thumb_w == 0 || local_thumb_h == 0 || now_us() - local_pose_updated_us > kPoseExpiryUs) {
-        return;
-    }
-
+static void render_pose_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                const LocalOverlaySnapshot &snapshot)
+{
+    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
+    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
     float max_x = 0.0f;
     float max_y = 0.0f;
-    for (uint32_t i = 0; i < g_overlay_pose_snapshot->pose_count; ++i) {
+    for (uint32_t i = 0; i < snapshot.hrnet.pose_count; ++i) {
         for (uint32_t j = 0; j < kHigherhrnetJointCount; ++j) {
-            if (g_overlay_pose_snapshot->poses[i].keypoints[j].score > 0.05f) {
-                max_x = std::max(max_x, g_overlay_pose_snapshot->poses[i].keypoints[j].x);
-                max_y = std::max(max_y, g_overlay_pose_snapshot->poses[i].keypoints[j].y);
+            if (snapshot.hrnet.poses[i].keypoints[j].score > 0.05f) {
+                max_x = std::max(max_x, snapshot.hrnet.poses[i].keypoints[j].x);
+                max_y = std::max(max_y, snapshot.hrnet.poses[i].keypoints[j].y);
             }
         }
     }
 
-    float src_w = (max_x <= local_thumb_w * 1.5f && max_y <= local_thumb_h * 1.5f) ? static_cast<float>(local_thumb_w) : 384.0f;
-    float src_h = (max_x <= local_thumb_w * 1.5f && max_y <= local_thumb_h * 1.5f) ? static_cast<float>(local_thumb_h) : 288.0f;
-    static uint32_t mapping_log_count = 0;
-    if (mapping_log_count < 5 || (mapping_log_count % 60) == 0) {
-        ESP_LOGI(TAG, "pose overlay mapping: thumb=%ux%u max_pose=%.1fx%.1f src=%.0fx%.0f people=%" PRIu32,
-                 local_thumb_w, local_thumb_h, max_x, max_y, src_w, src_h, g_overlay_pose_snapshot->pose_count);
-    }
-    mapping_log_count++;
+    const float src_w = (max_x <= snapshot.thumb_width * 1.5f && max_y <= snapshot.thumb_height * 1.5f)
+                            ? static_cast<float>(snapshot.thumb_width)
+                            : 384.0f;
+    const float src_h = (max_x <= snapshot.thumb_width * 1.5f && max_y <= snapshot.thumb_height * 1.5f)
+                            ? static_cast<float>(snapshot.thumb_height)
+                            : 288.0f;
 
-    for (uint32_t i = 0; i < g_overlay_pose_snapshot->pose_count; ++i) {
-        const HigherhrnetPose &pose = g_overlay_pose_snapshot->poses[i];
-        int x1 = static_cast<int>(clamp_coord(pose.x1 * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
-        int y1 = static_cast<int>(clamp_coord(pose.y1 * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
-        int x2 = static_cast<int>(clamp_coord(pose.x2 * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
-        int y2 = static_cast<int>(clamp_coord(pose.y2 * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+    for (uint32_t i = 0; i < snapshot.hrnet.pose_count; ++i) {
+        const HigherhrnetPose &pose = snapshot.hrnet.poses[i];
+        int x1 = origin_x + static_cast<int>(clamp_coord(pose.x1 * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
+        int y1 = origin_y + static_cast<int>(clamp_coord(pose.y1 * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
+        int x2 = origin_x + static_cast<int>(clamp_coord(pose.x2 * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
+        int y2 = origin_y + static_cast<int>(clamp_coord(pose.y2 * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
         draw_rectangle_rgb(frame, frame_w, frame_h, x1, y1, x2, y2, 0, 0, 0, 255, 0, 2, false);
 
         for (const auto &joint : kSkeleton) {
             const HigherhrnetKeypoint &a = pose.keypoints[joint[0]];
             const HigherhrnetKeypoint &b = pose.keypoints[joint[1]];
             if (a.score > 0.05f && b.score > 0.05f) {
-                int ax = static_cast<int>(clamp_coord(a.x * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
-                int ay = static_cast<int>(clamp_coord(a.y * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
-                int bx = static_cast<int>(clamp_coord(b.x * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
-                int by = static_cast<int>(clamp_coord(b.y * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+                int ax = origin_x + static_cast<int>(clamp_coord(a.x * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
+                int ay = origin_y + static_cast<int>(clamp_coord(a.y * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
+                int bx = origin_x + static_cast<int>(clamp_coord(b.x * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
+                int by = origin_y + static_cast<int>(clamp_coord(b.y * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
                 draw_line_rgb(frame, frame_w, frame_h, ax, ay, bx, by, 0, 0, 255, 255, 255, 2, false);
             }
         }
@@ -515,10 +858,48 @@ static void blit_spi_thumbnail_with_pose(uint16_t *frame, uint32_t frame_w, uint
             if (keypoint.score <= 0.05f) {
                 continue;
             }
-            int x = static_cast<int>(clamp_coord(keypoint.x * local_thumb_w / src_w, static_cast<float>(local_thumb_w - 1)));
-            int y = static_cast<int>(clamp_coord(keypoint.y * local_thumb_h / src_h, static_cast<float>(local_thumb_h - 1)));
+            int x = origin_x + static_cast<int>(clamp_coord(keypoint.x * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
+            int y = origin_y + static_cast<int>(clamp_coord(keypoint.y * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
             draw_point_rgb(frame, frame_w, frame_h, x, y, 0, 0, 255, 0, 0, 3, false);
         }
+    }
+}
+
+static void blit_spi_thumbnail_with_ai_overlay(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                               const LocalOverlaySnapshot &snapshot)
+{
+    if (!frame || !g_overlay_mutex) {
+        return;
+    }
+    if (!snapshot.thumbnail_ready || snapshot.thumb_width == 0 || snapshot.thumb_height == 0) {
+        return;
+    }
+
+    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
+    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
+    for (uint16_t y = 0; y < snapshot.thumb_height && (origin_y + static_cast<int>(y)) < static_cast<int>(frame_h); ++y) {
+        memcpy(frame + (origin_y + static_cast<int>(y)) * frame_w + origin_x,
+               g_spi_thumb_snapshot + y * snapshot.thumb_width * 2,
+               snapshot.thumb_width * 2);
+    }
+
+    if (!snapshot.ai_overlay_enabled || now_us() - snapshot.result_updated_us > kAiResultExpiryUs) {
+        return;
+    }
+
+    switch (g_active_model ? g_active_model->task_type : Imx500ModelTaskType::kPoseEstimation) {
+    case Imx500ModelTaskType::kClassification:
+        render_classification_preview(frame, frame_w, frame_h, snapshot);
+        break;
+    case Imx500ModelTaskType::kObjectDetection:
+        render_detection_preview(frame, frame_w, frame_h, snapshot);
+        break;
+    case Imx500ModelTaskType::kPoseEstimation:
+        render_pose_preview(frame, frame_w, frame_h, snapshot);
+        break;
+    case Imx500ModelTaskType::kSegmentation:
+        render_segmentation_preview(frame, frame_w, frame_h, snapshot);
+        break;
     }
 }
 
@@ -552,7 +933,27 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
         }
     }
 
-    blit_spi_thumbnail_with_pose(reinterpret_cast<uint16_t *>(display_buf), camera_buf_hes, camera_buf_ves);
+    snapshot_overlay_state(&g_display_overlay_snapshot);
+    const LocalOverlaySnapshot &snapshot = g_display_overlay_snapshot;
+
+    uint16_t *frame = reinterpret_cast<uint16_t *>(display_buf);
+    blit_spi_thumbnail_with_ai_overlay(frame, camera_buf_hes, camera_buf_ves, snapshot);
+    const std::string model_name = lcd_model_name();
+    const std::string task_name = lcd_task_name();
+    Imx500HudInfo hud = {
+        .model_name = model_name.c_str(),
+        .task_name = task_name.c_str(),
+        .summary_line_1 = snapshot.summary_line_1[0] ? snapshot.summary_line_1 : "WAITING FOR AI RESULT",
+        .summary_line_2 = snapshot.summary_line_2[0] ? snapshot.summary_line_2 : "PRESS BOOT TO SWITCH MODEL",
+        .spi_metadata_enabled = snapshot.spi_metadata_enabled,
+    };
+    imx500_render_hud(frame, camera_buf_hes, camera_buf_ves, hud);
+    Imx500ModalInfo modal = {
+        .active = snapshot.modal_active,
+        .line_1 = snapshot.modal_line_1,
+        .line_2 = snapshot.modal_line_2,
+    };
+    imx500_render_modal(frame, camera_buf_hes, camera_buf_ves, modal);
     ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(g_display_panel, 0, 0, camera_buf_hes, camera_buf_ves, display_buf));
 
     uint64_t now = now_us();
@@ -572,14 +973,11 @@ static esp_err_t init_mipi_display_path()
     struct v4l2_format format = {};
 
     ESP_LOGI(TAG, "initializing MIPI display path without reconfiguring the sensor");
-    ESP_RETURN_ON_ERROR(app_lcd_init(&g_display_panel), TAG, "failed to init LCD");
+    ESP_RETURN_ON_FALSE(ensure_lcd_ready(), ESP_FAIL, TAG, "failed to prepare LCD");
     ESP_RETURN_ON_ERROR(example_video_init_preserving_sensor_state(), TAG, "failed to initialize video pipeline");
 
     g_video_fd = app_video_open((char *)EXAMPLE_CAM_DEV_PATH, APP_VIDEO_FMT);
     ESP_RETURN_ON_FALSE(g_video_fd >= 0, ESP_FAIL, TAG, "video open failed");
-
-    ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(g_display_panel, 2, &g_lcd_buffers[0], &g_lcd_buffers[1]),
-                        TAG, "failed to get LCD frame buffers");
 
     for (uint32_t i = 0; i < EXAMPLE_CAM_BUF_NUM; ++i) {
         if (!g_camera_buffers[i]) {
@@ -600,6 +998,7 @@ static esp_err_t init_mipi_display_path()
     return ESP_OK;
 }
 
+#if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
 static void dump_spi_flash_status(const char *label)
 {
     spi_flash_status_t status = {};
@@ -618,16 +1017,21 @@ static void dump_spi_flash_status(const char *label)
 
 static bool program_flash_assets()
 {
+    if (!g_active_model) {
+        return false;
+    }
+
     ESP_LOGI(TAG,
-             "programming IMX500 flash with embedded higherhrnet assets: fw=%u bytes nn_info=%u bytes",
-             static_cast<unsigned>(NN_FW_SIZE),
-             static_cast<unsigned>(NN_NETWORK_INFO_SIZE));
-    if (!spi_slave_write_model_to_flash(NN_FW_DATA, static_cast<uint32_t>(NN_FW_SIZE))) {
+             "programming IMX500 flash with embedded model=%s fw=%u bytes nn_info=%u bytes",
+             g_active_model->key,
+             static_cast<unsigned>(g_active_model->firmware.size),
+             static_cast<unsigned>(g_active_model->network_info.size));
+    if (!spi_slave_write_model_to_flash(g_active_model->firmware.data, static_cast<uint32_t>(g_active_model->firmware.size))) {
         dump_spi_flash_status("model flash failed");
         return false;
     }
 
-    if (!spi_slave_write_nn_info_to_flash(NN_NETWORK_INFO_DATA, static_cast<uint32_t>(NN_NETWORK_INFO_SIZE))) {
+    if (!spi_slave_write_nn_info_to_flash(g_active_model->network_info.data, static_cast<uint32_t>(g_active_model->network_info.size))) {
         dump_spi_flash_status("network_info flash failed");
         return false;
     }
@@ -635,15 +1039,16 @@ static bool program_flash_assets()
     dump_spi_flash_status("flash programming complete");
     return true;
 }
+#endif
 
 static const char *get_boot_mode_name()
 {
 #if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
-    return "DIRECT_BOOT";
+    return "DIRECT BOOT";
 #elif INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_FLASH
-    return "FLASH_BOOT";
+    return "FLASH BOOT";
 #else
-    return "UNKNOWN_BOOT_MODE";
+    return "UNKNOWN BOOT";
 #endif
 }
 
@@ -656,16 +1061,21 @@ static bool open_imx500_stream()
     ESP_LOGI(TAG, "module fw version: 0x%" PRIx32, module_fw_ver);
     ESP_LOGI(TAG, "module pid: 0x%" PRIx32, module_pid);
     ESP_LOGI(TAG, "selected IMX500 boot mode: %s", get_boot_mode_name());
+    ESP_LOGI(TAG, "selected embedded model: %s", g_active_model ? g_active_model->key : "null");
+
+    if (!g_active_model) {
+        return false;
+    }
 
 #if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
     ESP_LOGI(TAG,
-             "opening IMX500 with embedded higherhrnet assets directly: fw=%u bytes nn_info=%u bytes",
-             static_cast<unsigned>(NN_FW_SIZE),
-             static_cast<unsigned>(NN_NETWORK_INFO_SIZE));
-    return open(NN_FW_DATA,
-                static_cast<uint32_t>(NN_FW_SIZE),
-                NN_NETWORK_INFO_DATA,
-                static_cast<uint32_t>(NN_NETWORK_INFO_SIZE),
+             "opening IMX500 with embedded model directly: fw=%u bytes nn_info=%u bytes",
+             static_cast<unsigned>(g_active_model->firmware.size),
+             static_cast<unsigned>(g_active_model->network_info.size));
+    return open(g_active_model->firmware.data,
+                static_cast<uint32_t>(g_active_model->firmware.size),
+                g_active_model->network_info.data,
+                static_cast<uint32_t>(g_active_model->network_info.size),
                 MIPI_DATA_IMAGE,
                 SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
                 10);
@@ -719,57 +1129,179 @@ static void spi_metadata_task(void *arg)
             log_metadata_first_12_bytes(g_frame_buf, static_cast<uint32_t>(data_size), "metadata raw");
         }
 
-        if (!g_overlay_state.spi_metadata_enabled) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-
         if (!parse_output_tensor_data_with_metadata(g_frame_buf, static_cast<uint32_t>(data_size), g_parsed_metadata)) {
-            ESP_LOGW(TAG, "failed to parse metadata frame=%u payload=%ld", 0u, static_cast<long>(data_size));
+            ESP_LOGW(TAG, "failed to parse metadata payload=%ld", static_cast<long>(data_size));
             if (is_zero_header_payload(g_frame_buf, static_cast<uint32_t>(data_size))) {
-                g_overlay_state.zero_header_failures++;
-                if (g_overlay_state.zero_header_failures >= kMetadataDisableThreshold) {
-                    ESP_LOGW(TAG, "metadata appears disabled in firmware; disabling SPI metadata/AI overlay after %u consecutive zero-header frames",
-                             g_overlay_state.zero_header_failures);
-                    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    g_overlay_state.zero_header_failures++;
+                    if (g_overlay_state.zero_header_failures >= kMetadataDisableThreshold) {
+                        ESP_LOGW(TAG, "metadata parse failed for %u consecutive zero-header frames; entering recovery mode and waiting for valid SPI metadata",
+                                 g_overlay_state.zero_header_failures);
                         g_overlay_state.spi_metadata_enabled = false;
                         g_overlay_state.ai_overlay_enabled = false;
-                        clear_overlay_state_locked();
-                        xSemaphoreGive(g_overlay_mutex);
+                        clear_overlay_results_locked();
+                        set_overlay_summary_locked("SPI METADATA ERROR", "WAITING FOR RECOVERY");
                     }
+                    xSemaphoreGive(g_overlay_mutex);
                 }
-            } else {
-                g_overlay_state.zero_header_failures = 0;
             }
             metadata_frame_count++;
             continue;
         }
 
-        g_overlay_state.zero_header_failures = 0;
+        bool metadata_recovered = false;
+        if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            metadata_recovered = !g_overlay_state.spi_metadata_enabled || !g_overlay_state.ai_overlay_enabled;
+            g_overlay_state.zero_header_failures = 0;
+            g_overlay_state.spi_metadata_enabled = true;
+            g_overlay_state.ai_overlay_enabled = true;
+            xSemaphoreGive(g_overlay_mutex);
+        }
+        if (metadata_recovered) {
+            ESP_LOGI(TAG, "SPI metadata recovered after transient parse errors");
+        }
         if (metadata_frame_count < 5 || (metadata_frame_count % 30) == 0) {
             log_parsed_metadata_basic_info(*g_parsed_metadata, static_cast<uint32_t>(data_size));
         }
         update_spi_thumbnail_from_metadata(*g_parsed_metadata);
 
-        if (g_spi_hrnet_result == nullptr) {
-            ESP_LOGW(TAG, "hrnet result buffer is not ready");
-            metadata_frame_count++;
-            continue;
+        switch (g_active_model ? g_active_model->task_type : Imx500ModelTaskType::kPoseEstimation) {
+        case Imx500ModelTaskType::kClassification: {
+            Imx500ClassificationOverlayState classification = {};
+            std::string line1;
+            std::string line2;
+            if (imx500_postprocess_classification(*g_parsed_metadata, g_active_labels, &classification, &line1, &line2)) {
+                if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    g_overlay_state.classification = classification;
+                    g_overlay_state.result_updated_us = now_us();
+                    set_overlay_summary_locked(line1, line2);
+                    xSemaphoreGive(g_overlay_mutex);
+                }
+            }
+            break;
         }
-        memset(g_spi_hrnet_result, 0, sizeof(*g_spi_hrnet_result));
-        if (higherhrnet_postprocess_from_metadata(g_parsed_metadata, g_spi_hrnet_result)) {
+        case Imx500ModelTaskType::kObjectDetection: {
+            Imx500DetectionOverlayState detection = {};
+            std::string line1;
+            std::string line2;
+            if (imx500_postprocess_detection(*g_parsed_metadata, g_active_labels, &detection, &line1, &line2)) {
+                if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    g_overlay_state.detection = detection;
+                    g_overlay_state.result_updated_us = now_us();
+                    set_overlay_summary_locked(line1, line2);
+                    xSemaphoreGive(g_overlay_mutex);
+                }
+            }
+            break;
+        }
+        case Imx500ModelTaskType::kPoseEstimation: {
+            if (!g_spi_hrnet_result) {
+                ESP_LOGW(TAG, "hrnet result buffer is not ready");
+                break;
+            }
+            memset(g_spi_hrnet_result, 0, sizeof(*g_spi_hrnet_result));
+            if (higherhrnet_postprocess_from_metadata(g_parsed_metadata, g_spi_hrnet_result)) {
+                char line1[64] = {};
+                char line2[64] = {};
+                std::snprintf(line1, sizeof(line1), "PEOPLE %u", static_cast<unsigned>(g_spi_hrnet_result->pose_count));
+                std::snprintf(line2, sizeof(line2), "POSE OVERLAY READY");
+                if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    memcpy(&g_overlay_state.hrnet, g_spi_hrnet_result, sizeof(*g_spi_hrnet_result));
+                    g_overlay_state.result_updated_us = now_us();
+                    set_overlay_summary_locked(line1, line2);
+                    xSemaphoreGive(g_overlay_mutex);
+                }
+            }
+            break;
+        }
+        case Imx500ModelTaskType::kSegmentation: {
+            uint16_t thumb_w = 0;
+            uint16_t thumb_h = 0;
             if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-                memcpy(&g_overlay_state.hrnet, g_spi_hrnet_result, sizeof(*g_spi_hrnet_result));
-                g_overlay_state.hrnet_updated_us = now_us();
+                thumb_w = g_overlay_state.thumb_width;
+                thumb_h = g_overlay_state.thumb_height;
                 xSemaphoreGive(g_overlay_mutex);
             }
-            ESP_LOGI(TAG, "higherhrnet poses=%" PRIu32 " spi_thumb=%s %ux%u",
-                     g_spi_hrnet_result->pose_count,
-                     g_overlay_state.thumbnail_ready ? "ready" : "not-ready",
-                     g_overlay_state.thumb_width,
-                     g_overlay_state.thumb_height);
+
+            Imx500SegmentationOverlayState segmentation = {};
+            std::string line1;
+            std::string line2;
+            if (imx500_postprocess_segmentation(*g_parsed_metadata, g_active_labels, thumb_w, thumb_h,
+                                               g_segmentation_mask, &segmentation, &line1, &line2)) {
+                if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    g_overlay_state.segmentation = segmentation;
+                    g_overlay_state.result_updated_us = now_us();
+                    set_overlay_summary_locked(line1, line2);
+                    xSemaphoreGive(g_overlay_mutex);
+                }
+            }
+            break;
+        }
         }
         metadata_frame_count++;
+    }
+}
+
+static void switch_to_next_model_and_restart()
+{
+    if (g_switching_model || g_model_count == 0) {
+        return;
+    }
+    g_switching_model = true;
+
+    const size_t next_index = (g_active_model_index + 1) % g_model_count;
+    const Imx500EmbeddedModelDescriptor *next_model = imx500_get_embedded_model(next_index);
+    const std::string next_name = next_model ? next_model->display_name : "UNKNOWN";
+
+    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        set_overlay_modal_locked(true, "SWITCHING MODEL", next_name);
+        set_overlay_summary_locked("SAVING SELECTION", next_name);
+        xSemaphoreGive(g_overlay_mutex);
+    }
+
+    if (!save_selected_model_index(next_index)) {
+        if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            set_overlay_modal_locked(true, "MODEL SWITCH FAILED", "NVS SAVE ERROR");
+            xSemaphoreGive(g_overlay_mutex);
+        }
+        imx500_present_status_screen(g_display_panel, g_lcd_buffers, EXAMPLE_LCD_BUF_NUM,
+                                     "MODEL SWITCH FAILED", "NVS SAVE ERROR", "RESTART DEVICE");
+        g_switching_model = false;
+        return;
+    }
+
+    imx500_present_status_screen(g_display_panel, g_lcd_buffers, EXAMPLE_LCD_BUF_NUM,
+                                 "SWITCHING MODEL", next_name, "RESTARTING");
+    vTaskDelay(pdMS_TO_TICKS(kModelSwitchNoticeMs));
+    esp_restart();
+}
+
+static void boot_button_task(void *arg)
+{
+    (void)arg;
+
+    gpio_config_t config = {};
+    config.pin_bit_mask = 1ULL << kBootButtonGpio;
+    config.mode = GPIO_MODE_INPUT;
+    config.pull_up_en = GPIO_PULLUP_ENABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    config.intr_type = GPIO_INTR_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&config));
+
+    bool was_pressed = false;
+    TickType_t pressed_tick = 0;
+    while (true) {
+        const bool pressed = gpio_get_level(kBootButtonGpio) == 0;
+        if (pressed && !was_pressed) {
+            pressed_tick = xTaskGetTickCount();
+        } else if (!pressed && was_pressed) {
+            const TickType_t held = xTaskGetTickCount() - pressed_tick;
+            if (held >= pdMS_TO_TICKS(kBootButtonDebounceMs)) {
+                switch_to_next_model_and_restart();
+            }
+        }
+        was_pressed = pressed;
+        vTaskDelay(pdMS_TO_TICKS(kBootButtonPollMs));
     }
 }
 
@@ -787,6 +1319,12 @@ static esp_err_t start_worker_tasks()
                                                     &g_spi_task_handle, 1);
         ESP_RETURN_ON_FALSE(result == pdPASS, ESP_FAIL, TAG, "failed to create SPI task");
     }
+    if (!g_boot_button_task_handle) {
+        BaseType_t result = xTaskCreatePinnedToCore(boot_button_task, "boot button task",
+                                                    kBootButtonTaskStackSize, nullptr, 3,
+                                                    &g_boot_button_task_handle, 1);
+        ESP_RETURN_ON_FALSE(result == pdPASS, ESP_FAIL, TAG, "failed to create BOOT task");
+    }
     return ESP_OK;
 }
 
@@ -794,18 +1332,30 @@ static esp_err_t start_worker_tasks()
 
 extern "C" esp_err_t imx500_sdk_integration_test_run(void)
 {
+    select_active_model();
+    ESP_RETURN_ON_FALSE(g_active_model != nullptr, ESP_FAIL, TAG, "no embedded model selected");
     ESP_RETURN_ON_FALSE(bind_peripherals_api(), ESP_FAIL, TAG, "failed to bind SDK peripherals");
     ESP_RETURN_ON_FALSE(allocate_spi_thumbnail_buffers(), ESP_FAIL, TAG, "failed to prepare SPI thumbnail buffers");
+    ESP_RETURN_ON_FALSE(ensure_lcd_ready(), ESP_FAIL, TAG, "failed to prepare LCD");
+    imx500_present_status_screen(g_display_panel, g_lcd_buffers, EXAMPLE_LCD_BUF_NUM,
+                                 "LOADING MODEL", g_active_model->display_name, get_boot_mode_name());
 
     ESP_RETURN_ON_FALSE(open_imx500_stream(), ESP_FAIL, TAG, "open() failed");
     ESP_RETURN_ON_FALSE(allocate_parsed_metadata_buffer(), ESP_FAIL, TAG, "failed to prepare parsed metadata buffer");
     ESP_RETURN_ON_ERROR(init_mipi_display_path(), TAG, "failed to initialize MIPI display path");
     ESP_RETURN_ON_ERROR(start_worker_tasks(), TAG, "failed to start display workers");
 
+    if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        set_overlay_summary_locked("WAITING FOR AI RESULT", "PRESS BOOT TO SWITCH MODEL");
+        set_overlay_modal_locked(false, "", "");
+        xSemaphoreGive(g_overlay_mutex);
+    }
+
     ESP_LOGI(TAG, "starting IMX500 stream after arming display workers");
     stream_on();
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    ESP_LOGI(TAG, "IMX500 test running: MIPI image is displayed on LCD, SPI metadata is parsed in the background");
+    ESP_LOGI(TAG, "IMX500 multitask demo running: model=%s task=%s",
+             g_active_model->key, g_active_model->task_name);
     return ESP_OK;
 }
