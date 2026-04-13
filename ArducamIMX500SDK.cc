@@ -1,8 +1,10 @@
 #include "ArducamIMX500SDK.h"
 #include "ArducamIMX500SDK.h"
 #include <algorithm>
+#include <inttypes.h>
 #include <vector>
 #include <string>
+#include "flatbuffers/flatbuffers.h"
 #include "stdio.h"
 #include "string.h"
 
@@ -31,6 +33,10 @@ static const uint32_t SPI_FLASH_WAIT_IDLE_TIMEOUT_MS = 5000;
 static const uint32_t SPI_FLASH_TRANSFER_BASE_TIMEOUT_MS = 10000;
 static const uint32_t SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS = 4;
 static const uint32_t SPI_FLASH_FINALIZE_TIMEOUT_MS = 30000;
+static const uint32_t SPI_FLASH_STALE_OP_SETTLE_TIMEOUT_MS = 15000;
+static const uint32_t SPI_FLASH_STATUS_READ_RETRIES = 5;
+static const uint32_t SPI_FLASH_STATUS_RETRY_DELAY_MS = 20;
+static const uint32_t SPI_FLASH_POST_CHUNK_SETTLE_MS = 40;
 static const uint32_t SPI_BLOB_HEADER_MAGIC = 0x424C4253u;
 static const uint32_t SPI_FLASH_CHUNK_LEN = 4096;
 static const uint32_t SPI_FLASH_HEADER_GAP_MS = 10;
@@ -166,7 +172,7 @@ static std::vector<uint8_t> byteswap_u32_words(const uint8_t *src, uint32_t size
     return out;
 }
 
-static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uint32_t size) {
+[[maybe_unused]] static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uint32_t size) {
     std::vector<uint8_t> out;
     if (!src || size == 0) {
         return out;
@@ -181,7 +187,7 @@ static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uin
     return out;
 }
 
-static bool sdk_i2c_write_reg(uint16_t addr, uint32_t val) {
+[[maybe_unused]] static bool sdk_i2c_write_reg(uint16_t addr, uint32_t val) {
     if (!g_i2c_driver.write) {
         return false;
     }
@@ -298,17 +304,355 @@ void imx500_print_header(const IMX500OutputHeader *h)
     printf("}\n");
 }
 
-void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header) {
-    const IMX500OutputHeader *data_ = (const IMX500OutputHeader *)data;
-    memcpy(header, data_, sizeof(IMX500OutputHeader));
-    // imx500_print_header(header); // for debug
+extern "C" void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header) {
+    if (!data || !header) {
+        return;
+    }
+
+    header->valid_flag = data[0];
+    header->frame_count = data[1];
+    header->max_length_of_line = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+    header->size_of_ap_parameter = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+    header->network_ordinal = (uint16_t)data[6] | ((uint16_t)data[7] << 8);
+    header->indicator = data[8];
+}
+
+static uint32_t imx500_align_up_u32(uint32_t value, uint32_t base)
+{
+    return (value + base - 1u) / base * base;
+}
+
+static uint32_t imx500_calculate_jpeg_aligned_size(uint32_t jpeg_size)
+{
+    return MAX(4096u, imx500_align_up_u32(jpeg_size + 3u, 1024u));
+}
+
+static void imx500_copy_fb_string(char *dst, size_t dst_size, const flatbuffers::String *src)
+{
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!src) {
+        return;
+    }
+    size_t copy_len = std::min<size_t>(dst_size - 1, static_cast<size_t>(src->size()));
+    memcpy(dst, src->c_str(), copy_len);
+    dst[copy_len] = '\0';
+}
+
+static bool imx500_parse_header_at_impl(const uint8_t *data, uint32_t data_len, uint32_t offset,
+                                        bool require_valid_flag, IMX500OutputHeader *header)
+{
+    if (!data || !header) {
+        return false;
+    }
+    if (offset + IMX500_HEADER_LEN > data_len) {
+        return false;
+    }
+
+    unpack_imx500_output_header(data + offset, header);
+    if (require_valid_flag && header->valid_flag != 1) {
+        return false;
+    }
+    if (header->size_of_ap_parameter > data_len) {
+        return false;
+    }
+    if (offset + IMX500_HEADER_LEN + header->size_of_ap_parameter > data_len) {
+        return false;
+    }
+    return true;
+}
+
+static bool imx500_tensor_parse_dimensions(IMX500ParsedTensor *dst, const flatbuffers::Vector<flatbuffers::Offset<apParams::fb::FBDimension>> *dims)
+{
+    if (!dst || !dims) {
+        return false;
+    }
+
+    dst->dimension_count = (uint8_t)std::min<size_t>(IMX500_MAX_TENSOR_DIMS, static_cast<size_t>(dims->size()));
+    dst->element_count = 1;
+    for (uint8_t i = 0; i < dst->dimension_count; ++i) {
+        const auto *dim = dims->Get(i);
+        if (!dim || dim->size() == 0) {
+            return false;
+        }
+        dst->dimensions[i].id = (uint16_t)dim->id();
+        dst->dimensions[i].size = (uint16_t)dim->size();
+        dst->dimensions[i].serialization_index = (uint16_t)dim->serializationIndex();
+        dst->dimensions[i].padding = (uint16_t)dim->padding();
+        if (dst->element_count > UINT32_MAX / (uint32_t)dst->dimensions[i].size) {
+            return false;
+        }
+        dst->element_count *= (uint32_t)dst->dimensions[i].size;
+    }
+    return true;
+}
+
+static bool imx500_parse_tensor_common(IMX500ParsedTensor *dst,
+                                       uint32_t id,
+                                       const flatbuffers::String *name,
+                                       int32_t shift,
+                                       float scale,
+                                       uint8_t format,
+                                       uint8_t bits_per_element,
+                                       const flatbuffers::Vector<flatbuffers::Offset<apParams::fb::FBDimension>> *dims)
+{
+    if (!dst) {
+        return false;
+    }
+    memset(dst, 0, sizeof(*dst));
+    dst->id = id;
+    imx500_copy_fb_string(dst->name, sizeof(dst->name), name);
+    dst->zero_point = shift;
+    dst->scale = scale;
+    dst->format = format;
+    dst->bits_per_element = bits_per_element;
+
+    if (!imx500_tensor_parse_dimensions(dst, dims)) {
+        return false;
+    }
+
+    uint32_t bytes_per_element = MAX(1u, ((uint32_t)bits_per_element + 7u) / 8u);
+    if (dst->element_count > UINT32_MAX / bytes_per_element) {
+        return false;
+    }
+    dst->data_bytes = dst->element_count * bytes_per_element;
+    dst->aligned_data_bytes = imx500_align_up_u32(dst->data_bytes, 4u);
+    return true;
+}
+
+static bool imx500_parse_networks_from_ap_params(const uint8_t *ap_buf, uint32_t ap_len, IMX500ParsedMetadata *parsed_metadata)
+{
+    if (!ap_buf || !parsed_metadata) {
+        return false;
+    }
+
+    flatbuffers::Verifier verifier(ap_buf, ap_len);
+    if (!apParams::fb::VerifyFBApParamsBuffer(verifier)) {
+        return false;
+    }
+
+    const auto *ap_parameter = apParams::fb::GetFBApParams(ap_buf);
+    if (!ap_parameter) {
+        return false;
+    }
+
+    const auto *networks = ap_parameter->networks();
+    if (!networks || networks->size() == 0) {
+        return false;
+    }
+
+    parsed_metadata->network_count = (uint8_t)std::min<size_t>(IMX500_MAX_NETWORKS, static_cast<size_t>(networks->size()));
+    parsed_metadata->selected_network_index = 0;
+    for (uint8_t network_index = 0; network_index < parsed_metadata->network_count; ++network_index) {
+        auto *dst_network = &parsed_metadata->networks[network_index];
+        const auto *src_network = networks->Get(network_index);
+        if (!src_network) {
+            return false;
+        }
+
+        memset(dst_network, 0, sizeof(*dst_network));
+        dst_network->id = src_network->id();
+        imx500_copy_fb_string(dst_network->name, sizeof(dst_network->name), src_network->name());
+        imx500_copy_fb_string(dst_network->type, sizeof(dst_network->type), src_network->type());
+
+        const auto *input_tensors = src_network->inputTensors();
+        const auto *output_tensors = src_network->outputTensors();
+
+        if (input_tensors) {
+            dst_network->input_tensor_count = (uint8_t)std::min<size_t>(IMX500_MAX_INPUT_TENSORS, static_cast<size_t>(input_tensors->size()));
+            for (uint8_t i = 0; i < dst_network->input_tensor_count; ++i) {
+                const auto *src_tensor = input_tensors->Get(i);
+                if (!src_tensor) {
+                    return false;
+                }
+                if (!imx500_parse_tensor_common(&dst_network->input_tensors[i],
+                                                src_tensor->id(),
+                                                src_tensor->name(),
+                                                src_tensor->shift(),
+                                                src_tensor->scale(),
+                                                src_tensor->format(),
+                                                8,
+                                                src_tensor->dimensions())) {
+                    return false;
+                }
+            }
+        }
+
+        if (output_tensors) {
+            dst_network->output_tensor_count = (uint8_t)std::min<size_t>(IMX500_MAX_OUTPUT_TENSORS, static_cast<size_t>(output_tensors->size()));
+            for (uint8_t i = 0; i < dst_network->output_tensor_count; ++i) {
+                const auto *src_tensor = output_tensors->Get(i);
+                if (!src_tensor) {
+                    return false;
+                }
+                if (!imx500_parse_tensor_common(&dst_network->output_tensors[i],
+                                                src_tensor->id(),
+                                                src_tensor->name(),
+                                                src_tensor->shift(),
+                                                src_tensor->scale(),
+                                                src_tensor->format(),
+                                                src_tensor->bitsPerElement(),
+                                                src_tensor->dimensions())) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+static uint32_t imx500_estimate_output_payload_bytes(const IMX500ParsedMetadata *parsed_metadata)
+{
+    uint32_t total = 0;
+    if (!parsed_metadata) {
+        return 0;
+    }
+
+    for (uint8_t network_index = 0; network_index < parsed_metadata->network_count; ++network_index) {
+        const IMX500ParsedNetwork *network = &parsed_metadata->networks[network_index];
+        for (uint8_t tensor_index = 0; tensor_index < network->output_tensor_count; ++tensor_index) {
+            if (UINT32_MAX - total < network->output_tensors[tensor_index].aligned_data_bytes) {
+                return 0;
+            }
+            total += network->output_tensors[tensor_index].aligned_data_bytes;
+        }
+    }
+    return total;
+}
+
+static void imx500_bind_output_tensor_payload(IMX500ParsedMetadata *parsed_metadata, const uint8_t *payload)
+{
+    if (!parsed_metadata || !payload) {
+        return;
+    }
+
+    uint32_t offset = 0;
+    for (uint8_t network_index = 0; network_index < parsed_metadata->network_count; ++network_index) {
+        IMX500ParsedNetwork *network = &parsed_metadata->networks[network_index];
+        for (uint8_t tensor_index = 0; tensor_index < network->output_tensor_count; ++tensor_index) {
+            IMX500ParsedTensor *tensor = &network->output_tensors[tensor_index];
+            tensor->data = payload + offset;
+            offset += tensor->aligned_data_bytes;
+        }
+    }
+}
+
+extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata)
+{
+    IMX500OutputHeader primary_header = {};
+    IMX500OutputHeader output_header = {};
+
+    if (!data || !parsed_metadata) {
+        printf("parse_output_tensor_data: null input\n");
+        return false;
+    }
+    memset(parsed_metadata, 0, sizeof(*parsed_metadata));
+
+    if (!imx500_parse_header_at_impl(data, data_len, 0, false, &primary_header)) {
+        IMX500OutputHeader unpacked = {};
+        if (data_len >= IMX500_HEADER_LEN) {
+            unpack_imx500_output_header(data, &unpacked);
+        }
+        printf("parse_output_tensor_data: failed to parse primary metadata header "
+               "(valid=%u frame=%u line=%u ap=%u ord=%u ind=%u bytes=%02X %02X %02X %02X %02X %02X %02X %02X %02X)\n",
+               unpacked.valid_flag,
+               unpacked.frame_count,
+               unpacked.max_length_of_line,
+               unpacked.size_of_ap_parameter,
+               unpacked.network_ordinal,
+               unpacked.indicator,
+               data_len > 0 ? data[0] : 0,
+               data_len > 1 ? data[1] : 0,
+               data_len > 2 ? data[2] : 0,
+               data_len > 3 ? data[3] : 0,
+               data_len > 4 ? data[4] : 0,
+               data_len > 5 ? data[5] : 0,
+               data_len > 6 ? data[6] : 0,
+               data_len > 7 ? data[7] : 0,
+               data_len > 8 ? data[8] : 0);
+        return false;
+    }
+
+    parsed_metadata->has_primary_header = true;
+    parsed_metadata->primary_header = primary_header;
+    parsed_metadata->ap_param_offset = IMX500_HEADER_LEN;
+    parsed_metadata->ap_param_size = primary_header.size_of_ap_parameter;
+    parsed_metadata->ap_param_end_offset = parsed_metadata->ap_param_offset + parsed_metadata->ap_param_size;
+
+    if (!imx500_parse_networks_from_ap_params(data + parsed_metadata->ap_param_offset,
+                                              parsed_metadata->ap_param_size,
+                                              parsed_metadata)) {
+        printf("parse_output_tensor_data: failed to parse ApParams block\n");
+        return false;
+    }
+
+    uint32_t output_payload_offset = parsed_metadata->ap_param_end_offset;
+    if (parsed_metadata->ap_param_end_offset + 4 <= data_len) {
+        uint32_t jpeg_size = ((uint32_t)data[parsed_metadata->ap_param_end_offset]) |
+                             ((uint32_t)data[parsed_metadata->ap_param_end_offset + 1] << 8) |
+                             ((uint32_t)data[parsed_metadata->ap_param_end_offset + 2] << 16) |
+                             ((uint32_t)data[parsed_metadata->ap_param_end_offset + 3] << 24);
+        uint32_t jpeg_block_offset = parsed_metadata->ap_param_end_offset + 4;
+        uint32_t jpeg_block_size = imx500_calculate_jpeg_aligned_size(jpeg_size);
+        uint32_t jpeg_block_end = jpeg_block_offset;
+        if (jpeg_block_offset <= data_len && jpeg_block_size >= 4 && jpeg_block_offset + jpeg_block_size - 4 <= data_len) {
+            jpeg_block_end = jpeg_block_offset + jpeg_block_size - 4;
+            const uint8_t *jpeg_block = data + jpeg_block_offset;
+            uint32_t soi = UINT32_MAX;
+            uint32_t eoi = UINT32_MAX;
+            for (uint32_t i = 0; i + 1 < jpeg_block_end - jpeg_block_offset; ++i) {
+                if (jpeg_block[i] == 0xFF && jpeg_block[i + 1] == 0xD8) {
+                    soi = i;
+                    break;
+                }
+            }
+            for (uint32_t i = (jpeg_block_end - jpeg_block_offset > 1) ? (jpeg_block_end - jpeg_block_offset - 2) : 0; i > 0; --i) {
+                if (jpeg_block[i] == 0xFF && jpeg_block[i + 1] == 0xD9) {
+                    eoi = i + 2;
+                    break;
+                }
+            }
+            if (soi != UINT32_MAX && eoi != UINT32_MAX && eoi > soi) {
+                parsed_metadata->jpeg_size = jpeg_size;
+                parsed_metadata->jpeg_block_offset = jpeg_block_offset;
+                parsed_metadata->jpeg_block_end_offset = jpeg_block_end;
+                parsed_metadata->jpeg_data_offset = jpeg_block_offset + soi;
+                parsed_metadata->jpeg_data_len = eoi - soi;
+                parsed_metadata->jpeg_data = data + parsed_metadata->jpeg_data_offset;
+                output_payload_offset = jpeg_block_end;
+            }
+        }
+    }
+
+    if (imx500_parse_header_at_impl(data, data_len, output_payload_offset, false, &output_header)) {
+        parsed_metadata->has_output_header = true;
+        parsed_metadata->output_header = output_header;
+        parsed_metadata->output_header_offset = output_payload_offset;
+        output_payload_offset += IMX500_HEADER_LEN + output_header.size_of_ap_parameter;
+    }
+
+    uint32_t expected_output_bytes = imx500_estimate_output_payload_bytes(parsed_metadata);
+    if (expected_output_bytes == 0 || output_payload_offset > data_len || data_len - output_payload_offset < expected_output_bytes) {
+        printf("parse_output_tensor_data: output payload too short: off=%lu remain=%lu need=%lu\n",
+               (unsigned long)output_payload_offset,
+               (unsigned long)(output_payload_offset <= data_len ? (data_len - output_payload_offset) : 0),
+               (unsigned long)expected_output_bytes);
+        return false;
+    }
+
+    parsed_metadata->output_payload_offset = output_payload_offset;
+    parsed_metadata->output_payload_length = data_len - output_payload_offset;
+    imx500_bind_output_tensor_payload(parsed_metadata, data + output_payload_offset);
+    if (primary_header.network_ordinal < parsed_metadata->network_count) {
+        parsed_metadata->selected_network_index = (uint8_t)primary_header.network_ordinal;
+    }
+    return true;
 }
 
 extern "C" {
-#include <algorithm>
-#include <vector>
-#include <cstdio>
-#include "flatbuffers/flatbuffers.h"
 
 sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
 static uint32_t s_dnn_nw_id = 0;
@@ -696,7 +1040,7 @@ int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len) {
         return -1;
     }
     if (dnnHeaderSize > MAX_DNN_HEADER_SIZE) {
-        printf("[NW_INFO] Invalid DNN Header Size %u\n", dnnHeaderSize);
+        printf("[NW_INFO] Invalid DNN Header Size %d\n", dnnHeaderSize);
         return -1;
     }
     if (s_num_of_networks == 0 || s_num_of_networks > MAX_NUM_OF_NETWORKS) {
@@ -1095,7 +1439,7 @@ int imx500_apply_white_balance_config(void) {
     return status;
 }
 
-static int init_input_tensor_preprocess_config(void) {
+[[maybe_unused]] static int init_input_tensor_preprocess_config(void) {
     if (s_num_of_networks == 0) {
         return 0;
     }
@@ -1386,8 +1730,6 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
     const auto* bbox_tensor = output_tensors->Get(0);
     const auto* score_tensor = output_tensors->Get(1);
     const auto* class_tensor = output_tensors->Get(2);
-    const auto* detect_num_tensor = output_tensors->Get(3);
-
     const auto* bbox_data = reinterpret_cast<const int16_t*>(output_tensor_ptrs[0]);
     const auto* score_data = reinterpret_cast<const uint8_t*>(output_tensor_ptrs[1]);
     const auto* class_data = reinterpret_cast<const int16_t*>(output_tensor_ptrs[2]);
@@ -1606,7 +1948,7 @@ void imx500_dump_basic_info()
 
     for (size_t i = 0; i < sizeof(cmd_list) / sizeof(cmd_list[0]); i++) {
         int ret = imx500_res_read(cmd_list[i].cmd, &val, 10);
-        printf("%-22s : 0x%08X (%u) ec: %d\n", cmd_list[i].name, val, val, ret);
+        printf("%-22s : 0x%08" PRIX32 " (%" PRIu32 ") ec: %d\n", cmd_list[i].name, val, val, ret);
     }
     uint32_t dev_id[4];
     imx500_res_read(IMX500_COMMAND_GET_SENSOR_DEVICE_ID_1, &dev_id[0], 10);
@@ -1618,10 +1960,10 @@ void imx500_dump_basic_info()
         uint32_t v = dev_id[i];
 
         printf("%02X%02X%02X%02X",
-               (v >> 24) & 0xFF,
-               (v >> 16) & 0xFF,
-               (v >>  8) & 0xFF,
-               (v >>  0) & 0xFF);
+               (unsigned int)((v >> 24) & 0xFFu),
+               (unsigned int)((v >> 16) & 0xFFu),
+               (unsigned int)((v >>  8) & 0xFFu),
+               (unsigned int)((v >>  0) & 0xFFu));
 
         if (i != 3) {
             printf("-");
@@ -1642,7 +1984,7 @@ bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m) {
         return false;
     }
     while (elapsed < timeout_ms) {
-        printf("wait for imx500 module spi data forward mode switching %d ... \n", m);
+        printf("wait for imx500 module spi data forward mode switching %" PRIu32 " ... \n", t_m);
         g_i2c_driver.slp_ms(poll_interval_ms);
         elapsed += poll_interval_ms;
         ret = g_i2c_driver.read(METADATA_SPI_FORWARD_MODE_REG, &c_m, 4);
@@ -1653,11 +1995,33 @@ bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m) {
         if (c_m == t_m) break;
     }
     if (c_m != t_m) {
-        printf("switch spi data forward mode timeout: target=%u current=%u\n",
-               (unsigned)t_m, (unsigned)c_m);
+        printf("switch spi data forward mode timeout: target=%" PRIu32 " current=%" PRIu32 "\n",
+               t_m, c_m);
         return false;
     }
-    printf("wait for imx500 module spi data forward mode: %d switch completed\n", c_m);
+    printf("wait for imx500 module spi data forward mode: %" PRIu32 " switch completed\n", c_m);
+    return true;
+}
+
+static bool is_spi_flash_terminal_status(uint32_t status) {
+    return status == SPI_FLASH_OP_IDLE ||
+           status == SPI_FLASH_OP_SUCCESS ||
+           status == SPI_FLASH_OP_FAILED;
+}
+
+static bool is_spi_flash_status_sane(const spi_flash_status_t *status) {
+    if (!status) {
+        return false;
+    }
+    if (status->status > SPI_FLASH_OP_FAILED) {
+        return false;
+    }
+    if (status->result > SPI_FLASH_RESULT_FLASH_BLOB_MISSING) {
+        return false;
+    }
+    if (status->bytes_total > 0 && status->bytes_done > status->bytes_total) {
+        return false;
+    }
     return true;
 }
 
@@ -1666,10 +2030,21 @@ bool get_spi_flash_status(spi_flash_status_t *status) {
         return false;
     }
     memset(status, 0, sizeof(*status));
-    return sdk_i2c_read_reg(SPI_FLASH_OP_STATUS_REG, &status->status) &&
-           sdk_i2c_read_reg(SPI_FLASH_OP_RESULT_REG, &status->result) &&
-           sdk_i2c_read_reg(SPI_FLASH_BYTES_DONE_REG, &status->bytes_done) &&
-           sdk_i2c_read_reg(SPI_FLASH_BYTES_TOTAL_REG, &status->bytes_total);
+    for (uint32_t attempt = 0; attempt < SPI_FLASH_STATUS_READ_RETRIES; ++attempt) {
+        spi_flash_status_t local_status = {};
+        if (sdk_i2c_read_reg(SPI_FLASH_OP_STATUS_REG, &local_status.status) &&
+            sdk_i2c_read_reg(SPI_FLASH_OP_RESULT_REG, &local_status.result) &&
+            sdk_i2c_read_reg(SPI_FLASH_BYTES_DONE_REG, &local_status.bytes_done) &&
+            sdk_i2c_read_reg(SPI_FLASH_BYTES_TOTAL_REG, &local_status.bytes_total) &&
+            is_spi_flash_status_sane(&local_status)) {
+            *status = local_status;
+            return true;
+        }
+        if (attempt + 1u < SPI_FLASH_STATUS_READ_RETRIES && g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_STATUS_RETRY_DELAY_MS);
+        }
+    }
+    return false;
 }
 
 static bool wait_for_spi_data_forward_mode(spi_data_forwarding_mode_t mode,
@@ -1698,7 +2073,11 @@ static bool wait_for_spi_flash_status(uint32_t expected_status,
     uint32_t elapsed_ms = 0;
     while (elapsed_ms < timeout_ms) {
         if (!get_spi_flash_status(&status)) {
-            return false;
+            if (g_i2c_driver.slp_ms) {
+                g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+            }
+            elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+            continue;
         }
         if (status.status == expected_status) {
             if (status_out) {
@@ -1721,7 +2100,11 @@ static bool wait_for_spi_flash_progress(uint32_t min_bytes_done,
     uint32_t elapsed_ms = 0;
     while (elapsed_ms < timeout_ms) {
         if (!get_spi_flash_status(&status)) {
-            return false;
+            if (g_i2c_driver.slp_ms) {
+                g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+            }
+            elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+            continue;
         }
         if (status.status == SPI_FLASH_OP_FAILED || status.status == SPI_FLASH_OP_SUCCESS) {
             if (status_out) {
@@ -1739,6 +2122,75 @@ static bool wait_for_spi_flash_progress(uint32_t min_bytes_done,
             g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
         }
         elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    return false;
+}
+
+static bool wait_for_spi_flash_terminal(uint32_t timeout_ms,
+                                        spi_flash_status_t *status_out) {
+    spi_flash_status_t status = {};
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        if (!get_spi_flash_status(&status)) {
+            if (g_i2c_driver.slp_ms) {
+                g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+            }
+            elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+            continue;
+        }
+        if (is_spi_flash_terminal_status(status.status)) {
+            if (status_out) {
+                *status_out = status;
+            }
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    if (status_out) {
+        *status_out = status;
+    }
+    return false;
+}
+
+static bool wait_for_spi_flash_receiver(uint32_t bytes_done,
+                                        uint32_t bytes_total,
+                                        uint32_t timeout_ms,
+                                        spi_flash_status_t *status_out) {
+    spi_flash_status_t status = {};
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        if (!get_spi_flash_status(&status)) {
+            if (g_i2c_driver.slp_ms) {
+                g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+            }
+            elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+            continue;
+        }
+        if (status.status == SPI_FLASH_OP_FAILED ||
+            status.status == SPI_FLASH_OP_SUCCESS) {
+            if (status_out) {
+                *status_out = status;
+            }
+            return false;
+        }
+        if (status.status == SPI_FLASH_OP_RECEIVING &&
+            status.bytes_done == bytes_done &&
+            status.bytes_total == bytes_total) {
+            if (status_out) {
+                *status_out = status;
+            }
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    if (status_out) {
+        *status_out = status;
     }
     return false;
 }
@@ -1780,9 +2232,28 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
     if (flash_status.status != SPI_FLASH_OP_IDLE &&
         flash_status.status != SPI_FLASH_OP_SUCCESS &&
         flash_status.status != SPI_FLASH_OP_FAILED) {
-        printf("%s module flash op busy: status=%u result=%u\n",
-               label, (unsigned)flash_status.status, (unsigned)flash_status.result);
-        return false;
+        printf("%s previous module flash op busy: status=%u result=%u bytes=%u/%u, waiting...\n",
+               label,
+               (unsigned)flash_status.status,
+               (unsigned)flash_status.result,
+               (unsigned)flash_status.bytes_done,
+               (unsigned)flash_status.bytes_total);
+        if (!wait_for_spi_flash_terminal(SPI_FLASH_STALE_OP_SETTLE_TIMEOUT_MS,
+                                         &flash_status)) {
+            printf("%s previous flash op did not settle: status=%u result=%u bytes=%u/%u\n",
+                   label,
+                   (unsigned)flash_status.status,
+                   (unsigned)flash_status.result,
+                   (unsigned)flash_status.bytes_done,
+                   (unsigned)flash_status.bytes_total);
+            return false;
+        }
+        if (!wait_for_spi_data_forward_mode(SPI_DATA_FORWARDING_NONE,
+                                            SPI_FLASH_WAIT_IDLE_TIMEOUT_MS)) {
+            printf("%s previous flash op finished but spi forwarding did not return to idle\n",
+                   label);
+            return false;
+        }
     }
 
     if (!switch_spi_data_forward_mode(mode)) {
@@ -1810,6 +2281,18 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
     if (g_i2c_driver.slp_ms) {
         g_i2c_driver.slp_ms(SPI_FLASH_HEADER_GAP_MS);
     }
+    if (!wait_for_spi_flash_receiver(0,
+                                     payload_size,
+                                     SPI_FLASH_WAIT_IDLE_TIMEOUT_MS,
+                                     &flash_status)) {
+        printf("%s wait payload receiver ready timeout, status=%u result=%u bytes=%u/%u\n",
+               label,
+               (unsigned)flash_status.status,
+               (unsigned)flash_status.result,
+               (unsigned)flash_status.bytes_done,
+               (unsigned)flash_status.bytes_total);
+        return false;
+    }
 
     uint32_t sent = 0;
     while (sent < payload_size) {
@@ -1817,7 +2300,9 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
         if (chunk > SPI_FLASH_CHUNK_LEN) {
             chunk = SPI_FLASH_CHUNK_LEN;
         }
-        if (sdk_spi_write_once(transfer_payload + sent, chunk) < 0) {
+        if (sdk_spi_write_bridge_paced(transfer_payload + sent,
+                                       chunk,
+                                       SPI_FW_BRIDGE_BLOCK_GAP_US) < 0) {
             printf("%s send payload failed at offset=%u len=%u\n",
                    label, (unsigned)sent, (unsigned)chunk);
             return false;
@@ -1825,6 +2310,9 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
         sent += chunk;
         printf("%s sent chunk: %u/%u\n",
                label, (unsigned)sent, (unsigned)payload_size);
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POST_CHUNK_SETTLE_MS);
+        }
 
         uint32_t chunk_timeout_ms =
             SPI_FLASH_TRANSFER_BASE_TIMEOUT_MS +
@@ -1864,8 +2352,11 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
     uint32_t last_bytes_done = 0xFFFFFFFFu;
     while (elapsed_ms < timeout_ms) {
         if (!get_spi_flash_status(&flash_status)) {
-            printf("%s read flash status failed\n", label);
-            return false;
+            if (g_i2c_driver.slp_ms) {
+                g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+            }
+            elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+            continue;
         }
         if (flash_status.bytes_done != last_bytes_done) {
             printf("%s device progress: %u/%u status=%u result=%u\n",
@@ -1999,14 +2490,16 @@ static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
 
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
     const uint32_t wait_short_ms = 100;
-    const uint32_t wait_dd_reply_ms = 3000;
+    const uint32_t wait_dd_reply_ms = 5000;
     uint32_t val = 0;
+    int ec = 0;
     if (!fw || size == 0u) {
         printf("load_imx500_fw invalid input\n");
         return -1;
     }
-    if (imx500_res_read(IMX500_COMMAND_PREPARE_DOWNLOAD_FIRMWARE, &val, 500) != IMX500_CMD_OK) {
-        printf("prepare download firmware failed\n");
+    ec = imx500_res_read(IMX500_COMMAND_PREPARE_DOWNLOAD_FIRMWARE, &val, 500);
+    if (ec != IMX500_CMD_OK) {
+        printf("prepare download firmware failed (ec: %d)\n", ec);
         return -1;
     }
     if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS_CNT, &val, wait_short_ms) != IMX500_CMD_OK) {
@@ -2014,7 +2507,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     uint32_t DD_CMD_REPLY_STS_CNT = val;
-    printf("DD_CMD_REPLY_STS_CNT = %x\n", DD_CMD_REPLY_STS_CNT);
+    printf("DD_CMD_REPLY_STS_CNT = %" PRIx32 "\n", DD_CMD_REPLY_STS_CNT);
 
     uint32_t division = size / IMX500_MAX_BUFFER;
     if (imx500_res_write(IMX500_COMMAND_BEFORE_DOWNLOAD_FIRMWARE_1, &fw_type, wait_short_ms) != IMX500_CMD_OK ||
@@ -2024,7 +2517,8 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         printf("before download firmware setup failed\n");
         return -1;
     }
-    if (imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, wait_dd_reply_ms) != IMX500_CMD_OK) {
+    ec = imx500_res_write(IMX500_COMMAND_WAIT_DD_REPLY_SYS_CNT_CHANGE, &DD_CMD_REPLY_STS_CNT, wait_dd_reply_ms);
+    if (ec != IMX500_CMD_OK) {
         printf("wait DD reply (ready) failed\n");
         return -1;
     }
@@ -2034,7 +2528,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     DD_CMD_REPLY_STS_CNT = val;
-    printf("DD_CMD_REPLY_STS_CNT = %x\n", DD_CMD_REPLY_STS_CNT);
+    printf("DD_CMD_REPLY_STS_CNT = %" PRIx32 "\n", DD_CMD_REPLY_STS_CNT);
     g_i2c_driver.slp_ms(10);
 
     if (imx500_res_read(IMX500_COMMAND_TICK_DD_CMD_REPLY_STS, &val, wait_short_ms) != IMX500_CMD_OK) {
@@ -2042,7 +2536,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     uint32_t DD_CMD_REPLY_STS = val;
-    printf("DD_CMD_REPLY_STS = %x: %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
+    printf("DD_CMD_REPLY_STS = %" PRIx32 ": %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
     if (DD_CMD_REPLY_STS != 0x00) {
         printf("DD_CMD_REPLY_STS is not ready: %s\n", get_imx500_cmd_status(DD_CMD_REPLY_STS));
         return -1;
@@ -2074,7 +2568,7 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
     DD_CMD_REPLY_STS = val;
-    printf("DD_CMD_REPLY_STS = %x: %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
+    printf("DD_CMD_REPLY_STS = %" PRIx32 ": %s\n", DD_CMD_REPLY_STS, get_imx500_cmd_status(DD_CMD_REPLY_STS));
     if (DD_CMD_REPLY_STS != 0x01) {
         printf("DD_CMD_REPLY_STS is not done: %s\n", get_imx500_cmd_status(DD_CMD_REPLY_STS));
         return -1;
@@ -2090,32 +2584,32 @@ void stream_on() {
 
 int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax) {
     if (xmin > DWP_AP_VC_HSIZE) {
-        printf("xmin should be in range [0, %u], but got %u\n", DWP_AP_VC_HSIZE, xmin);
+        printf("xmin should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_HSIZE, xmin);
         return -1;
     }
 
     if (xmax > DWP_AP_VC_HSIZE) {
-        printf("xmax should be in range [0, %u], but got %u\n", DWP_AP_VC_HSIZE, xmax);
+        printf("xmax should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_HSIZE, xmax);
         return -1;
     }
 
     if (ymin > DWP_AP_VC_VSIZE) {
-        printf("ymin should be in range [0, %u], but got %u\n", DWP_AP_VC_VSIZE, ymin);
+        printf("ymin should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_VSIZE, ymin);
         return -1;
     }
 
     if (ymax > DWP_AP_VC_VSIZE) {
-        printf("ymax should be in range [0, %u], but got %u\n", DWP_AP_VC_VSIZE, ymax);
+        printf("ymax should be in range [0, %" PRIu32 "], but got %" PRIu32 "\n", DWP_AP_VC_VSIZE, ymax);
         return -1;
     }
 
     if (xmin > xmax) {
-        printf("xmin should be less than or equal to xmax, but got %u > %u\n", xmin, xmax);
+        printf("xmin should be less than or equal to xmax, but got %" PRIu32 " > %" PRIu32 "\n", xmin, xmax);
         return -1;
     }
 
     if (ymin > ymax) {
-        printf("ymin should be less than or equal to ymax, but got %u > %u\n", ymin, ymax);
+        printf("ymin should be less than or equal to ymax, but got %" PRIu32 " > %" PRIu32 "\n", ymin, ymax);
         return -1;
     }
 
@@ -2127,7 +2621,6 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
   // dump_s_nw_info_list();
   // init_input_tensor_preprocess_config();
 
-  uint32_t r_buff_offset = 0;
   const sc_dnn_nw_info_t* net = &network_info[0];
 
   int input_tensor_data_size =
@@ -2171,6 +2664,9 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
 }
 
 bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
+    uint32_t val;
+    imx500_res_read(IMX500_COMMAND_RESET, &val, 20);
+    g_i2c_driver.slp_ms(2000);
     uint32_t imx500_boot_status = 0;
     const uint32_t boot_timeout_ms = 10000;
     const uint32_t boot_poll_ms = 100;
@@ -2218,7 +2714,10 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         const uint32_t load_nn_timeout_ms = 20000;
         const uint32_t load_nn_poll_ms = 500;
         uint32_t load_nn_elapsed = 0;
-        int ret = g_i2c_driver.write(LOAD_MODEL_FROM_FLASH, 1, 4);
+        if (g_i2c_driver.write(LOAD_MODEL_FROM_FLASH, 1, 4) < 0) {
+            printf("request load model from flash failed\n");
+            return false;
+        }
         while (load_nn_elapsed < load_nn_timeout_ms) {
             int ret = g_i2c_driver.read(BOOT_STATUS_REG, &imx500_boot_status, 4);
             if (ret < 0) {
@@ -2232,9 +2731,10 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         }
     }
 
-    uint32_t val;
     imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
     imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
+    imx500_res_read(SENSOR_MIPI_1024x600_2LANES, &val, 500);
+    imx500_res_write(IMX500_COMMAND_SET_FRAMERATE, &fps, 500);
     switch (mipi_format)
     {
     case MIPI_DATA_IMAGE:
@@ -2287,7 +2787,7 @@ uint32_t get_metadata_size(void) {
         printf("Error: Failed to read METADATA_SIZE_REG\n");
         return 0;
     }
-    printf("data_size: %u\n", data_size);
+    printf("data_size: %" PRIu32 "\n", data_size);
     return data_size;
 }
 
@@ -2336,7 +2836,11 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
         return false;
     }
 
-    g_spi_driver.read(rx_buf, data_size);
+    ret = g_spi_driver.read(rx_buf, data_size);
+    if (ret < 0 || (uint32_t)ret != data_size) {
+        printf("Error: SPI metadata read failed ret=%d expected=%" PRIu32 "\n", ret, data_size);
+        return 0;
+    }
     return data_size;
 }
 

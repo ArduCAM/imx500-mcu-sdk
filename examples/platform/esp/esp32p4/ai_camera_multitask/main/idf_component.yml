@@ -6,3 +6,7 @@ dependencies:
     version: "2.0.*"
   example_video_common:
     override_path: "../components/example_video_common"
+  lcd:
+    override_path: "../components/lcd"
+  drawing_utils:
+    override_path: "../components/drawing_utils"

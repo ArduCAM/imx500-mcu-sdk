@@ -30,6 +30,71 @@ typedef struct {
     int zero_point;
 } QuantParam;
 
+#define SC_DNN_MAX_NETWORK_ID_DEC (999999)
+#define SC_DNN_MAX_NETWORK_ID (0x999999)
+#define MAX_DNN_HEADER_SIZE (4096)
+#define MAX_NUM_OF_NETWORKS (3)
+#define MAX_OUTPUT_TENSOR_NUM (30)
+
+#define IMX500_MAX_NETWORKS           MAX_NUM_OF_NETWORKS
+#define IMX500_MAX_TENSOR_DIMS        8
+#define IMX500_MAX_INPUT_TENSORS      8
+#define IMX500_MAX_OUTPUT_TENSORS     MAX_OUTPUT_TENSOR_NUM
+
+typedef struct {
+    uint16_t id;
+    uint16_t size;
+    uint16_t serialization_index;
+    uint16_t padding;
+} IMX500TensorDimension;
+
+typedef struct {
+    uint32_t id;
+    char name[48];
+    uint8_t format;
+    uint8_t bits_per_element;
+    uint8_t dimension_count;
+    int32_t zero_point;
+    float scale;
+    uint32_t element_count;
+    uint32_t data_bytes;
+    uint32_t aligned_data_bytes;
+    const uint8_t *data;
+    IMX500TensorDimension dimensions[IMX500_MAX_TENSOR_DIMS];
+} IMX500ParsedTensor;
+
+typedef struct {
+    uint32_t id;
+    char name[48];
+    char type[24];
+    uint8_t input_tensor_count;
+    uint8_t output_tensor_count;
+    IMX500ParsedTensor input_tensors[IMX500_MAX_INPUT_TENSORS];
+    IMX500ParsedTensor output_tensors[IMX500_MAX_OUTPUT_TENSORS];
+} IMX500ParsedNetwork;
+
+typedef struct {
+    bool has_primary_header;
+    bool has_output_header;
+    IMX500OutputHeader primary_header;
+    IMX500OutputHeader output_header;
+    uint32_t ap_param_offset;
+    uint32_t ap_param_size;
+    uint32_t ap_param_end_offset;
+    uint32_t jpeg_size;
+    uint32_t jpeg_block_offset;
+    uint32_t jpeg_block_end_offset;
+    uint32_t jpeg_data_offset;
+    uint32_t jpeg_data_len;
+    const uint8_t *jpeg_data;
+    uint32_t output_header_offset;
+    uint32_t output_payload_offset;
+    uint32_t output_payload_length;
+    uint8_t network_count;
+    uint8_t selected_network_index;
+    IMX500ParsedNetwork networks[IMX500_MAX_NETWORKS];
+} IMX500ParsedMetadata;
+
 typedef struct {
     float x1;
     float y1;
@@ -45,11 +110,6 @@ typedef struct {
 } DetectionResult;
 
 // network_info parser types migrated from main project
-#define SC_DNN_MAX_NETWORK_ID_DEC (999999)
-#define SC_DNN_MAX_NETWORK_ID (0x999999)
-#define MAX_DNN_HEADER_SIZE (4096)
-#define MAX_NUM_OF_NETWORKS (3)
-#define MAX_OUTPUT_TENSOR_NUM (30)
 
 typedef enum {
     DNN_INPUT_FORMAT_RGB = 0,
@@ -228,6 +288,7 @@ extern "C" {
 
 void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header);
 bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* detection_result);
+bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata);
 uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
 uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
 bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m);
