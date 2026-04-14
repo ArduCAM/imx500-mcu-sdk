@@ -7,6 +7,8 @@
 #include "flatbuffers/flatbuffers.h"
 #include "stdio.h"
 #include "string.h"
+#include "loader.h"
+#include "firmware.h"
 
 #define ALIGN_DOWN(size, align) ((size) & ~((align) - 1))
 #define ALIGN_UP(size, align)   (ALIGN_DOWN((size) + (align) - 1, (align)))
@@ -2667,6 +2669,8 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     uint32_t val;
     imx500_res_read(IMX500_COMMAND_RESET, &val, 20);
     g_i2c_driver.slp_ms(2000);
+    // imx500_res_read(IMX500_COMMAND_STREAM_OFF, &val, 10);
+    
     uint32_t imx500_boot_status = 0;
     const uint32_t boot_timeout_ms = 10000;
     const uint32_t boot_poll_ms = 100;
@@ -2693,6 +2697,17 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
 
     switch_spi_data_forward_mode(SPI_SLAVE_TO_IMX500_SSPI);
     if (nn_fw != nullptr) {
+
+        if (load_imx500_fw(loader_data, loader_size, IMX500_FW_TYPE_LOADER) != 0) {
+            printf("Error: loader fw failed\n");
+            return false;
+        }
+
+        if (load_imx500_fw(firmware_data, firmware_size, IMX500_FW_TYPE_MAIN) != 0) {
+            printf("Error: main fw failed\n");
+            return false;
+        }
+
         if (load_imx500_fw(nn_fw, nn_fw_size, IMX500_FW_TYPE_NETWORK_WEIGHTS) != 0) {
             printf("Error: nn fw failed\n");
             return false;
@@ -2711,6 +2726,16 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         }
         dump_network_info_list();
     } else {
+
+        if (load_imx500_fw(loader_data, loader_size, IMX500_FW_TYPE_LOADER) != 0) {
+            printf("Error: loader fw failed\n");
+            return false;
+        }
+        
+        if (load_imx500_fw(firmware_data, firmware_size, IMX500_FW_TYPE_MAIN) != 0) {
+            printf("Error: main fw failed\n");
+            return false;
+        }
         const uint32_t load_nn_timeout_ms = 20000;
         const uint32_t load_nn_poll_ms = 500;
         uint32_t load_nn_elapsed = 0;

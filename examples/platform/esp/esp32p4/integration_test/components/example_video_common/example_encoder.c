@@ -7,11 +7,21 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_check.h"
-#include "esp_video_ioctl.h"
-#include "esp_video_init.h"
-#include "esp_cam_sensor_xclk.h"
 #include "driver/jpeg_encode.h"
 #include "example_video_common.h"
+
+#if __has_include("linux/videodev2.h")
+#include "linux/videodev2.h"
+#else
+#define EXAMPLE_V4L2_FOURCC(a, b, c, d) ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
+#define V4L2_PIX_FMT_GREY EXAMPLE_V4L2_FOURCC('G', 'R', 'E', 'Y')
+#define V4L2_PIX_FMT_RGB565 EXAMPLE_V4L2_FOURCC('R', 'G', 'B', 'P')
+#define V4L2_PIX_FMT_RGB24 EXAMPLE_V4L2_FOURCC('R', 'G', 'B', '3')
+#define V4L2_PIX_FMT_UYVY EXAMPLE_V4L2_FOURCC('U', 'Y', 'V', 'Y')
+#define V4L2_PIX_FMT_YUV420 EXAMPLE_V4L2_FOURCC('Y', 'U', '1', '2')
+#define V4L2_PIX_FMT_YUV444 EXAMPLE_V4L2_FOURCC('Y', '4', '4', '4')
+#define V4L2_PIX_FMT_SBGGR8 EXAMPLE_V4L2_FOURCC('B', 'A', '8', '1')
+#endif
 
 typedef struct example_encoder {
     jpeg_encode_cfg_t jpeg_enc_config;

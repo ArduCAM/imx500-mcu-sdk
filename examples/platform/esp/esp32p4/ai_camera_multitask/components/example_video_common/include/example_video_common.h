@@ -69,8 +69,9 @@ esp_err_t example_video_prepare_camera_control(void);
 esp_err_t example_video_init(void);
 
 /**
- * @brief Initialize the video system while preserving the sensor state that was already
- * configured by the IMX500 SDK. This also supports a direct external CSI-format path.
+ * @brief Compatibility wrapper kept for older call sites.
+ *
+ * On the current default local-camera flow this falls back to example_video_init().
  *
  * @return ESP_OK on success or other value on failure
  */

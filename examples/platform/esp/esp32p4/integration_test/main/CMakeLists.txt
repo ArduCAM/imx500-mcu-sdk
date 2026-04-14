@@ -3,7 +3,7 @@ get_filename_component(REPO_ROOT "${IMX500_SDK_DIR}/.." ABSOLUTE)
 set(IMX500_FILE2CPP_SCRIPT "${IMX500_SDK_DIR}/tools/file2cpp.py")
 set(IMX500_GENERATED_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_imx500_models")
 
-set(INTEGRATION_TEST_BOOT_MODE "DIRECT" CACHE STRING "integration_test boot mode: FLASH or DIRECT")
+set(INTEGRATION_TEST_BOOT_MODE "FLASH" CACHE STRING "integration_test boot mode: FLASH or DIRECT")
 set_property(CACHE INTEGRATION_TEST_BOOT_MODE PROPERTY STRINGS FLASH DIRECT)
 set(INTEGRATION_TEST_SPI_METADATA_FORMAT "SPI_METADATA_OUTPUT_TENSOR" CACHE STRING
     "integration_test SPI metadata format: OUTPUT_TENSOR/SPI_METADATA_OUTPUT_TENSOR or JPEG_INPUT_TENSOR_OUTPUT_TENSOR/SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR")
@@ -60,6 +60,8 @@ set(srcs
     "peripherals_adapter.c"
     "${IMX500_SDK_DIR}/ArducamIMX500SDK.cc"
     "${IMX500_SDK_DIR}/ai_driver.c"
+    "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware/loader.cpp"
+    "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware/firmware.cpp"
     ${IMX500_GENERATED_ASSET_SRCS})
 
 set(imx500_sdk_test_srcs
@@ -74,6 +76,7 @@ idf_component_register(SRCS ${srcs}
                        "${IMX500_SDK_DIR}"
                        "${REPO_ROOT}"
                        "${REPO_ROOT}/imx500_firmware_cpp"
+                       "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware"
                        "${REPO_ROOT}/third_party/flatbuffers/include")
 
 if(INTEGRATION_TEST_BOOT_MODE STREQUAL "DIRECT")

@@ -21,9 +21,14 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
+#if AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK
     ESP_LOGI(TAG, "preparing camera control for ai_camera_multitask");
     ESP_ERROR_CHECK(example_video_prepare_camera_control());
 
     ESP_LOGI(TAG, "starting ai_camera_multitask");
     ESP_ERROR_CHECK(ai_camera_multitask_run());
+#else
+    ESP_LOGI(TAG, "starting local pivariety camera preview");
+    ESP_ERROR_CHECK(ai_camera_multitask_run_local_preview());
+#endif
 }

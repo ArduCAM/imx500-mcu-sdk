@@ -28,6 +28,7 @@
 #include "app_drawing_utils.h"
 #include "app_lcd.h"
 #include "app_video.h"
+#include "display_compose_helper.h"
 #include "example_video_common.h"
 #include "higherhrnet_postprocess.h"
 #include "imx500_multitask_model_registry.h"
@@ -41,6 +42,8 @@ static const char *TAG = "ai_camera_multitask";
 namespace {
 
 constexpr uint32_t kMaxFrameBufferSize = 384 * 1024;
+constexpr uint32_t kMinMetadataFrameBufferSize = 256 * 1024;
+constexpr uint8_t kInvalidLcdBufferIndex = 0xFF;
 constexpr uint16_t kSpiThumbMaxWidth = 192;
 constexpr uint16_t kSpiThumbMaxHeight = 144;
 constexpr uint32_t kSpiTaskStackSize = 10 * 1024;
@@ -344,6 +347,10 @@ static bool ensure_lcd_ready()
             return false;
         }
     }
+    if (ai_camera_lcd_compose_init() != ESP_OK) {
+        ESP_LOGE(TAG, "failed to init LCD compose helper");
+        return false;
+    }
     if (!g_lcd_refresh_callback_attempted) {
         esp_lcd_dpi_panel_event_callbacks_t callbacks = {};
         callbacks.on_refresh_done = lcd_refresh_done_cb;
@@ -412,10 +419,8 @@ static uint8_t select_lcd_compose_buffer_index(uint8_t camera_buf_index)
             return i;
         }
     }
-    if (lcd_buffer_ready(camera_buf_index)) {
-        return camera_buf_index;
-    }
-    return 0;
+    (void)camera_buf_index;
+    return kInvalidLcdBufferIndex;
 }
 
 static bool load_selected_model_index(size_t *index_out)
@@ -480,6 +485,10 @@ static bool allocate_parsed_metadata_buffer()
     uint32_t reported_size = get_metadata_size();
     uint32_t desired_size = kMaxFrameBufferSize;
 
+    if (reported_size > 0 && reported_size <= kMaxFrameBufferSize) {
+        desired_size = std::max<uint32_t>(kMinMetadataFrameBufferSize, (reported_size + 4095u) & ~4095u);
+    }
+
     if (!g_frame_buf || g_frame_buf_capacity < desired_size) {
         if (g_frame_buf) {
             free(g_frame_buf);
@@ -487,7 +496,18 @@ static bool allocate_parsed_metadata_buffer()
             g_frame_buf_capacity = 0;
         }
 
-        g_frame_buf = static_cast<uint8_t *>(heap_caps_calloc(1, desired_size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        g_frame_buf = static_cast<uint8_t *>(
+            heap_caps_aligned_calloc(kPsramFrameBufferAlignment, 1, desired_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        if (g_frame_buf) {
+            ESP_LOGI(TAG, "allocated metadata frame buffer in internal RAM size=%u", static_cast<unsigned>(desired_size));
+        }
+        if (!g_frame_buf) {
+            g_frame_buf = static_cast<uint8_t *>(
+                heap_caps_aligned_calloc(kPsramFrameBufferAlignment, 1, desired_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (g_frame_buf) {
+                ESP_LOGI(TAG, "allocated metadata frame buffer in PSRAM size=%u", static_cast<unsigned>(desired_size));
+            }
+        }
         if (!g_frame_buf) {
             g_frame_buf = static_cast<uint8_t *>(calloc(1, desired_size));
         }
@@ -499,7 +519,12 @@ static bool allocate_parsed_metadata_buffer()
     }
 
     if (!g_parsed_metadata) {
-        g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(heap_caps_calloc(1, sizeof(IMX500ParsedMetadata), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(
+            heap_caps_calloc(1, sizeof(IMX500ParsedMetadata), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        if (!g_parsed_metadata) {
+            g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(
+                heap_caps_calloc(1, sizeof(IMX500ParsedMetadata), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        }
         if (!g_parsed_metadata) {
             g_parsed_metadata = static_cast<IMX500ParsedMetadata *>(calloc(1, sizeof(IMX500ParsedMetadata)));
         }
@@ -990,6 +1015,7 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
 {
     static bool callback_logged = false;
     static bool compose_mode_logged = false;
+    static uint32_t dropped_frames = 0;
     static uint64_t first_frame_us = 0;
     static uint32_t frame_count = 0;
     (void)user_data;
@@ -1005,23 +1031,34 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
     }
 
     const uint8_t display_buf_index = select_lcd_compose_buffer_index(camera_buf_index);
-    uint8_t *display_buf = camera_buf;
-    if (lcd_buffer_ready(display_buf_index)) {
-        display_buf = reinterpret_cast<uint8_t *>(g_lcd_buffers[display_buf_index]);
-        memcpy(display_buf, camera_buf, camera_buf_len);
-        if (!compose_mode_logged) {
-            ESP_LOGI(TAG, "display composition uses LCD framebuffer ring: cam=%u compose=%u buffers=%u; overlays are completed off-screen before scanout",
-                     static_cast<unsigned>(camera_buf_index), static_cast<unsigned>(display_buf_index),
-                     static_cast<unsigned>(EXAMPLE_LCD_BUF_NUM));
-            compose_mode_logged = true;
+    if (!lcd_buffer_ready(display_buf_index)) {
+        dropped_frames++;
+        if (dropped_frames <= 5 || (dropped_frames % 60) == 0) {
+            ESP_LOGW(TAG, "dropping display frame=%" PRIu32 " cam_buf=%u because no safe LCD framebuffer is available",
+                     frame_count, static_cast<unsigned>(camera_buf_index));
         }
+        return;
+    }
+
+    uint8_t *display_buf = reinterpret_cast<uint8_t *>(g_lcd_buffers[display_buf_index]);
+    uint32_t display_w = 0;
+    uint32_t display_h = 0;
+    if (ai_camera_lcd_compose_frame(display_buf, camera_buf, camera_buf_hes, camera_buf_ves, &display_w, &display_h) != ESP_OK) {
+        ESP_LOGW(TAG, "failed to compose camera frame for LCD");
+        return;
+    }
+    if (!compose_mode_logged) {
+        ESP_LOGI(TAG, "display composition uses LCD framebuffer ring: cam=%u compose=%u buffers=%u; overlays are completed off-screen before scanout",
+                 static_cast<unsigned>(camera_buf_index), static_cast<unsigned>(display_buf_index),
+                 static_cast<unsigned>(EXAMPLE_LCD_BUF_NUM));
+        compose_mode_logged = true;
     }
 
     snapshot_overlay_state(&g_display_overlay_snapshot);
     const LocalOverlaySnapshot &snapshot = g_display_overlay_snapshot;
 
     uint16_t *frame = reinterpret_cast<uint16_t *>(display_buf);
-    blit_spi_thumbnail_with_ai_overlay(frame, camera_buf_hes, camera_buf_ves, snapshot);
+    blit_spi_thumbnail_with_ai_overlay(frame, display_w, display_h, snapshot);
     const std::string model_name = lcd_model_name();
     const std::string task_name = lcd_task_name();
     Imx500HudInfo hud = {
@@ -1031,20 +1068,18 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
         .summary_line_2 = snapshot.summary_line_2[0] ? snapshot.summary_line_2 : "PRESS BOOT TO SWITCH MODEL",
         .spi_metadata_enabled = snapshot.spi_metadata_enabled,
     };
-    imx500_render_hud(frame, camera_buf_hes, camera_buf_ves, hud);
+    imx500_render_hud(frame, display_w, display_h, hud);
     Imx500ModalInfo modal = {
         .active = snapshot.modal_active,
         .line_1 = snapshot.modal_line_1,
         .line_2 = snapshot.modal_line_2,
     };
-    imx500_render_modal(frame, camera_buf_hes, camera_buf_ves, modal);
-    if (display_buf != camera_buf && g_lcd_refresh_callback_registered) {
+    imx500_render_modal(frame, display_w, display_h, modal);
+    if (g_lcd_refresh_callback_registered) {
         g_lcd_buffer_busy_until[display_buf_index] = g_lcd_refresh_count + 2u;
     }
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(g_display_panel, 0, 0, camera_buf_hes, camera_buf_ves, display_buf));
-    if (display_buf != camera_buf) {
-        g_lcd_last_presented_index = display_buf_index;
-    }
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(g_display_panel, 0, 0, display_w, display_h, display_buf));
+    g_lcd_last_presented_index = display_buf_index;
 
     uint64_t now = now_us();
     float fps = 0.0f;
@@ -1054,7 +1089,7 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
     if (frame_count < 5 || (frame_count % 60) == 0) {
         ESP_LOGI(TAG, "display frame=%" PRIu32 " cam_buf=%u lcd_buf=%u size=%" PRIu32 "x%" PRIu32 " bytes=%u fps=%.2f",
                  frame_count, static_cast<unsigned>(camera_buf_index), static_cast<unsigned>(display_buf_index),
-                 camera_buf_hes, camera_buf_ves, static_cast<unsigned>(camera_buf_len), fps);
+                 display_w, display_h, static_cast<unsigned>(camera_buf_len), fps);
     }
     frame_count++;
 }
@@ -1063,9 +1098,9 @@ static esp_err_t init_mipi_display_path()
 {
     struct v4l2_format format = {};
 
-    ESP_LOGI(TAG, "initializing MIPI display path without reconfiguring the sensor");
+    ESP_LOGI(TAG, "initializing default MIPI display path");
     ESP_RETURN_ON_FALSE(ensure_lcd_ready(), ESP_FAIL, TAG, "failed to prepare LCD");
-    ESP_RETURN_ON_ERROR(example_video_init_preserving_sensor_state(), TAG, "failed to initialize video pipeline");
+    ESP_RETURN_ON_ERROR(example_video_init(), TAG, "failed to initialize video pipeline");
 
     g_video_fd = app_video_open((char *)EXAMPLE_CAM_DEV_PATH, APP_VIDEO_FMT);
     ESP_RETURN_ON_FALSE(g_video_fd >= 0, ESP_FAIL, TAG, "video open failed");
@@ -1195,7 +1230,7 @@ static void spi_metadata_task(void *arg)
              static_cast<unsigned>(sizeof(IMX500ParsedMetadata)),
              static_cast<unsigned>(uxTaskGetStackHighWaterMark(NULL)));
 
-    while (!g_display_first_frame_seen && wait_loops < 400) {
+    while (!g_display_first_frame_seen) {
         if (wait_loops == 0) {
             ESP_LOGI(TAG, "waiting to start SPI metadata parsing until the first MIPI frame arrives");
         } else if ((wait_loops % 100) == 0) {
@@ -1208,8 +1243,15 @@ static void spi_metadata_task(void *arg)
              g_display_first_frame_seen ? 1 : 0, wait_loops);
 
     while (true) {
+        if (metadata_frame_count < 3) {
+            ESP_LOGI(TAG, "requesting metadata read: frame=%" PRIu32 " buf=%p cap=%" PRIu32,
+                     metadata_frame_count, static_cast<void *>(g_frame_buf), g_frame_buf_capacity);
+        }
         int32_t data_size = read_metadata(g_frame_buf, g_frame_buf_capacity);
         if (data_size <= 0) {
+            if (metadata_frame_count < 3) {
+                ESP_LOGW(TAG, "metadata read returned %ld", static_cast<long>(data_size));
+            }
             continue;
         }
 
@@ -1425,16 +1467,15 @@ extern "C" esp_err_t ai_camera_multitask_run(void)
 {
     select_active_model();
     ESP_RETURN_ON_FALSE(g_active_model != nullptr, ESP_FAIL, TAG, "no embedded model selected");
+    ESP_RETURN_ON_FALSE(ensure_lcd_ready(), ESP_FAIL, TAG, "failed to prepare LCD");
+    ESP_RETURN_ON_ERROR(init_mipi_display_path(), TAG, "failed to initialize MIPI display path");
     ESP_RETURN_ON_FALSE(bind_peripherals_api(), ESP_FAIL, TAG, "failed to bind SDK peripherals");
     ESP_RETURN_ON_FALSE(allocate_spi_thumbnail_buffers(), ESP_FAIL, TAG, "failed to prepare SPI thumbnail buffers");
-    ESP_RETURN_ON_FALSE(ensure_lcd_ready(), ESP_FAIL, TAG, "failed to prepare LCD");
     imx500_present_status_screen(g_display_panel, g_lcd_buffers, EXAMPLE_LCD_BUF_NUM,
                                  "LOADING MODEL", g_active_model->display_name, get_boot_mode_name());
 
     ESP_RETURN_ON_FALSE(open_imx500_stream(), ESP_FAIL, TAG, "open() failed");
     ESP_RETURN_ON_FALSE(allocate_parsed_metadata_buffer(), ESP_FAIL, TAG, "failed to prepare parsed metadata buffer");
-    ESP_RETURN_ON_ERROR(init_mipi_display_path(), TAG, "failed to initialize MIPI display path");
-    ESP_RETURN_ON_ERROR(start_worker_tasks(), TAG, "failed to start display workers");
 
     if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         set_overlay_summary_locked("WAITING FOR AI RESULT", "PRESS BOOT TO SWITCH MODEL");
@@ -1442,9 +1483,10 @@ extern "C" esp_err_t ai_camera_multitask_run(void)
         xSemaphoreGive(g_overlay_mutex);
     }
 
-    ESP_LOGI(TAG, "starting IMX500 stream after arming display workers");
+    ESP_LOGI(TAG, "starting IMX500 stream before arming display workers");
     stream_on();
     vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_RETURN_ON_ERROR(start_worker_tasks(), TAG, "failed to start display workers");
 
     ESP_LOGI(TAG, "IMX500 multitask demo running: model=%s task=%s",
              g_active_model->key, g_active_model->task_name);

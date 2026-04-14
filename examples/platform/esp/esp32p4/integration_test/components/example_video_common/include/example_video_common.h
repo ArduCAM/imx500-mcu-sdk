@@ -6,11 +6,10 @@
 
 #pragma once
 
-#include "linux/videodev2.h"
+#include <stdint.h>
+
 #include "driver/i2c_master.h"
-#include "esp_video_device.h"
-#include "esp_video_init.h"
-#include "esp_video_ioctl.h"
+#include "esp_err.h"
 #include "example_video_common_board.h"
 
 #ifdef __cplusplus
@@ -20,21 +19,31 @@ extern "C" {
 /**
  * @brief MIPI-CSI camera sensor common configuration
  */
+#ifdef CONFIG_EXAMPLE_MIPI_CSI_SCCB_I2C_PORT
 #define EXAMPLE_MIPI_CSI_SCCB_I2C_PORT                  CONFIG_EXAMPLE_MIPI_CSI_SCCB_I2C_PORT
+#else
+#define EXAMPLE_MIPI_CSI_SCCB_I2C_PORT                  0
+#endif
 
+#ifdef CONFIG_EXAMPLE_MIPI_CSI_SCCB_I2C_FREQ
 #define EXAMPLE_MIPI_CSI_SCCB_I2C_FREQ                  CONFIG_EXAMPLE_MIPI_CSI_SCCB_I2C_FREQ
+#else
+#define EXAMPLE_MIPI_CSI_SCCB_I2C_FREQ                  100000
+#endif
 
-#if CONFIG_EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
+#if defined(CONFIG_EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR) && CONFIG_EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR
 #define EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR              1
 #define EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_PORT       CONFIG_EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_PORT
 
 #define EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_FREQ       CONFIG_EXAMPLE_MIPI_CSI_CAM_MOTOR_SCCB_I2C_FREQ
+#else
+#define EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR              0
 #endif /* CONFIG_EXAMPLE_ENABLE_MIPI_CSI_CAM_MOTOR */
 
 /**
  * @brief Example camera device path configuration
  */
-#define EXAMPLE_CAM_DEV_PATH                            ESP_VIDEO_MIPI_CSI_DEVICE_NAME
+#define EXAMPLE_CAM_DEV_PATH                            "/dev/video0"
 
 /**
  * @brief Example encoder handle
@@ -62,15 +71,18 @@ typedef struct example_encoder_config {
 esp_err_t example_video_prepare_camera_control(void);
 
 /**
- * @brief Initialize the video system
+ * @brief Prepare camera control and keep compatibility with callers that
+ *        still use the old example-video initialization entry point.
  *
  * @return ESP_OK on success or other value on failure
  */
 esp_err_t example_video_init(void);
 
 /**
- * @brief Initialize the video system while preserving the sensor state that was already
- * configured by the IMX500 SDK. This also supports a direct external CSI-format path.
+ * @brief Prepare camera control while preserving the current sensor state.
+ *
+ * In this integration-test project the esp_video pipeline is not used, so
+ * this function is equivalent to example_video_init().
  *
  * @return ESP_OK on success or other value on failure
  */
@@ -84,7 +96,7 @@ esp_err_t example_video_init_preserving_sensor_state(void);
 i2c_master_bus_handle_t example_video_get_i2c_bus_handle(void);
 
 /**
- * @brief Deinitialize the video system
+ * @brief Deinitialize the prepared camera-control resources
  *
  * @return ESP_OK on success or other value on failure
  */
