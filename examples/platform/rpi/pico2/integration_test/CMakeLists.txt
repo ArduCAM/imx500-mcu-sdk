@@ -53,6 +53,7 @@ target_include_directories(imx500_cmd PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/
+    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/imx500_firmware
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 

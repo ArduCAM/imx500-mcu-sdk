@@ -1,5 +1,0 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-# 16MB flash layout: the factory app partition fills the rest of flash.
-nvs,      data, nvs,     ,        0x6000,
-phy_init, data, phy,     ,        0x1000,
-factory,  app,  factory, ,        0xFF0000,
