@@ -1,6 +1,0 @@
-dependencies:
-  idf: ">=5.5"
-  espressif/esp_cam_sensor:
-    version: "2.0.*"
-  example_video_common:
-    override_path: "../components/example_video_common"
