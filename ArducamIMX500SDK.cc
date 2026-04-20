@@ -2778,7 +2778,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     printf("imx500 module boot completed, boot_status=%" PRIu32 "\n", imx500_boot_status);
     printf("SDK reset path: loader/main firmware loaded by module firmware\n");
     imx500_dump_basic_info();
-    uint32_t spi_frq = 5 * 1000 * 1000;
+    uint32_t spi_frq = 17.5 * 1000 * 1000;
     imx500_res_write(IMX500_COMMAND_SET_SPI_FRQ, &spi_frq, 10);
 
     if (direct_boot) {
