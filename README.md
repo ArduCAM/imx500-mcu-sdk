@@ -16,6 +16,30 @@ Platform-specific example documentation will be maintained under `examples/`.
 - SPI data forwarding mode switch and data injection support
 - Platform adapter pattern for fast MCU bring-up
 
+## B0642 Positioning
+
+`B0642` is positioned as a bridge solution for bringing `IMX500` capabilities to MCU platforms.
+It is intended for:
+- New MCU-based designs that need `IMX500` inference capability
+- Existing SoC-based projects migrating toward MCU-based systems
+- Compatibility-first integrations where `SPI` is preferred over direct metadata-over-`MIPI`
+
+Compared with Raspberry Pi AI Camera:
+
+| Feature | Raspberry Pi AI Camera | B0642 |
+| --- | --- | --- |
+| MIPI output | Image + metadata (`RGB888` input tensor + output tensor) | Image only |
+| Metadata path | Over `MIPI` | Over `SPI` (`JPEG` input tensor + output tensor, or output tensor only) |
+
+## Framework Diagram
+
+### Product
+
+![](pics/1.png)
+
+### SDK
+
+![](pics/2.png)
 ## Repository Layout
 - `ArducamIMX500SDK.h/.cc`: Public SDK API and core implementation
 - `ai_driver.h/.c`: Low-level driver abstraction and registration
