@@ -35,11 +35,16 @@ Compared with Raspberry Pi AI Camera:
 
 ### Product
 
-![](pics/1.png)
+<p align="center">
+  <img src="pics/1.png" alt="Product diagram" width="600" />
+</p>
 
 ### SDK
 
-![](pics/2.png)
+<p align="center">
+  <img src="pics/2.png" alt="SDK diagram" width="720" />
+</p>
+
 ## Repository Layout
 - `ArducamIMX500SDK.h/.cc`: Public SDK API and core implementation
 - `ai_driver.h/.c`: Low-level driver abstraction and registration
