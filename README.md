@@ -86,6 +86,8 @@ Typical flow:
 ## API Reference
 See `ArducamIMX500SDK.h` for function declarations and related data structures.
 
+API doc: [https://arducam.github.io/imx500-mcu-sdk/](https://arducam.github.io/imx500-mcu-sdk/)
+
 ## Examples
 `examples/` contains platform-specific integration projects.
 Detailed platform usage instructions will be documented inside each example folder.
