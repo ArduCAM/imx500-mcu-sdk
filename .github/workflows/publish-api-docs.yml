@@ -23,6 +23,8 @@ jobs:
   build:
     if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
+    env:
+      DOXYGEN_VERSION: "1.14.0"
 
     steps:
       - name: Check out repository
@@ -31,10 +33,24 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Install Doxygen
+      - name: Install Graphviz
         run: |
           sudo apt-get update
-          sudo apt-get install -y doxygen graphviz
+          sudo apt-get install -y graphviz
+
+      - name: Install Doxygen
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+          install_dir="$RUNNER_TEMP/doxygen-${DOXYGEN_VERSION}"
+          curl -L "https://sourceforge.net/projects/doxygen/files/rel-${DOXYGEN_VERSION}/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz/download" -o "$archive"
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir" --strip-components=1
+          doxygen_bin="$(find "$install_dir" -type f -name doxygen | head -n 1)"
+          test -n "$doxygen_bin"
+          echo "$(dirname "$doxygen_bin")" >> "$GITHUB_PATH"
+          "$doxygen_bin" --version
 
       - name: Generate API documentation
         shell: pwsh
