@@ -81,12 +81,12 @@ Typical flow:
 1. `open(...)` to load firmware/network info and configure data formats
 2. `stream_on()` to start streaming
 3. `read_metadata(...)` to fetch output metadata
-4. Optional: `switch_spi_data_forward_mode(...)`, `do_data_injection_stream(...)`, `stop_data_injection()`
+4. Optional: `switch_spi_data_forward_mode(...)`, `do_data_injection(...)`, `stop_data_injection()`
 
 ## API Reference
 See `ArducamIMX500SDK.h` for function declarations and related data structures.
 
-API doc: [https://arducam.github.io/imx500-mcu-sdk/](https://arducam.github.io/imx500-mcu-sdk/)
+API docs: [https://arducam.github.io/imx500-mcu-sdk/](https://arducam.github.io/imx500-mcu-sdk/)
 
 ## Examples
 `examples/` contains platform-specific integration projects.

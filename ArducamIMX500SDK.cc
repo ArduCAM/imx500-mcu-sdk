@@ -199,6 +199,23 @@ static uint8_t ae_gain_db_to_reg(uint8_t gain_db) {
     return (reg > 0xFFu) ? 0xFFu : (uint8_t)reg;
 }
 
+static void warn_if_module_fw_version_incompatible(uint32_t sdk_version,
+                                                   uint32_t module_fw_version) {
+    switch (sdk_version) {
+    case 0x00000004u: {
+        static const uint32_t kMinModuleFwVersion = 0x0000000Cu;
+        if (module_fw_version < kMinModuleFwVersion) {
+            printf("Warning: IMX500 SDK version 0x%x expects module fw version >= 0x%x, "
+                   "but detected 0x%x. Continuing startup.\n",
+                   sdk_version, kMinModuleFwVersion, module_fw_version);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 static uint32_t crc32_update_local(uint32_t crc, const uint8_t *data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         crc ^= data[i];
@@ -2835,7 +2852,9 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     get_pid(&module_pid);
     printf("module pid: 0x%x\n", module_pid);
     printf("module fw version: 0x%x\n", module_fw_ver);
-    printf("imx500 sdk version: %x\n", IMX500_MCU_SDK_VERSION_U32);
+    printf("imx500 sdk version: 0x%x\n", IMX500_MCU_SDK_VERSION_U32);
+    warn_if_module_fw_version_incompatible(IMX500_MCU_SDK_VERSION_U32,
+                                           module_fw_ver);
     imx500_dump_basic_info();
     uint32_t spi_frq = 17.5 * 1000 * 1000;
     imx500_res_write(IMX500_COMMAND_SET_SPI_FRQ, &spi_frq, 10);
