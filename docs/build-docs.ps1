@@ -5,6 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $doxyfile = Join-Path $RepoRoot "docs/Doxyfile"
+$outputDir = Join-Path $RepoRoot "build/docs"
 $htmlDir = Join-Path $RepoRoot "build/docs/html"
 $srcPicsDir = Join-Path $RepoRoot "pics"
 $dstPicsDir = Join-Path $htmlDir "pics"
@@ -13,6 +14,7 @@ $menuDataPath = Join-Path $htmlDir "menudata.js"
 
 Push-Location $RepoRoot
 try {
+    New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
     doxygen $doxyfile
 
     if (Test-Path $srcPicsDir) {
