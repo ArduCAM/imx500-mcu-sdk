@@ -35,6 +35,11 @@
 
 uint8_t frame_buf[MAX_FRAME_SIZE];
 
+static void configure_spi_output_pin(uint pin) {
+    gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_12MA);
+    gpio_set_slew_rate(pin, GPIO_SLEW_RATE_FAST);
+}
+
 typedef struct {
     uint32_t requested_frames;
     uint32_t success_frames;
@@ -140,6 +145,9 @@ void spi_master_init(uint32_t baudrate) {
     gpio_init(SPI_CSN_PIN);
     gpio_set_dir(SPI_CSN_PIN, GPIO_OUT);
     gpio_put(SPI_CSN_PIN, 1);  // CS idle high
+    configure_spi_output_pin(SPI_SCK_PIN);
+    configure_spi_output_pin(SPI_TX_PIN);
+    configure_spi_output_pin(SPI_CSN_PIN);
     
     // Set SPI format: 8 bits, CPOL=1, CPHA=1, MSB first
     spi_set_format(spi_default, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
