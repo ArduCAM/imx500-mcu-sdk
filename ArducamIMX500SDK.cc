@@ -1044,7 +1044,7 @@ static bool parse_suffix_index_1based(const char *key, const char *prefix, uint3
     return true;
 }
 
-int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len) {
+int load_nn_info_to_sdk_cache(const uint8_t *cfg, size_t cfg_len) {
     if (!cfg || cfg_len == 0) {
         printf("[NW_INFO] cfg buffer invalid\n");
         return -1;
@@ -2554,28 +2554,28 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
     return false;
 }
 
-bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size) {
+bool write_model_to_cam_flash(const uint8_t *model, uint32_t model_size) {
     return run_spi_blob_transfer(SPI_SLAVE_WRITE_MODEL_TO_FLASH,
                                  model,
                                  model_size,
                                  false,
-                                 "[SPI FLASH MODEL]");
+                                 "[CAM FLASH MODEL]");
 }
 
-bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size) {
+bool write_nn_info_to_cam_flash(const uint8_t *nn_info, uint32_t nn_info_size) {
     return run_spi_blob_transfer(SPI_SLAVE_WRITE_NN_INFO_TO_FLASH,
                                  nn_info,
                                  nn_info_size,
                                  false,
-                                 "[SPI FLASH NN_INFO]");
+                                 "[CAM FLASH NN_INFO]");
 }
 
-bool spi_load_nn_info_to_memory(const uint8_t *nn_info, uint32_t nn_info_size) {
+bool load_nn_info_to_cam_memory(const uint8_t *nn_info, uint32_t nn_info_size) {
     return run_spi_blob_transfer(SPI_LOAD_NN_INFO_TO_MEMORY,
                                  nn_info,
                                  nn_info_size,
                                  false,
-                                 "[SPI LOAD NN_INFO]");
+                                 "[CAM MEMORY NN_INFO]");
 }
 
 static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
@@ -2871,14 +2871,14 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         }
         printf("spi write nn fw completed\n");
 
-        if (!spi_load_nn_info_to_memory(nn_info, nn_info_size)) {
-            printf("Error: spi load nn info to memory failed\n");
+        if (!load_nn_info_to_cam_memory(nn_info, nn_info_size)) {
+            printf("Error: load nn info to cam memory failed\n");
             return false;
         }
-        printf("spi load nn info completed\n");
+        printf("load nn info to cam memory completed\n");
 
-        if (set_nw_info_from_flash_buffer(nn_info, nn_info_size) != 0) {
-            printf("Error: cache nn info on host failed\n");
+        if (load_nn_info_to_sdk_cache(nn_info, nn_info_size) != 0) {
+            printf("Error: load nn info to sdk cache failed\n");
             return false;
         }
         dump_network_info_list();

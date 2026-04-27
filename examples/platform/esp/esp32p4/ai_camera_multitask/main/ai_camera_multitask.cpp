@@ -1152,12 +1152,12 @@ static bool program_flash_assets()
              g_active_model->key,
              static_cast<unsigned>(g_active_model->firmware.size),
              static_cast<unsigned>(g_active_model->network_info.size));
-    if (!spi_slave_write_model_to_flash(g_active_model->firmware.data, static_cast<uint32_t>(g_active_model->firmware.size))) {
+    if (!write_model_to_cam_flash(g_active_model->firmware.data, static_cast<uint32_t>(g_active_model->firmware.size))) {
         dump_spi_flash_status("model flash failed");
         return false;
     }
 
-    if (!spi_slave_write_nn_info_to_flash(g_active_model->network_info.data, static_cast<uint32_t>(g_active_model->network_info.size))) {
+    if (!write_nn_info_to_cam_flash(g_active_model->network_info.data, static_cast<uint32_t>(g_active_model->network_info.size))) {
         dump_spi_flash_status("network_info flash failed");
         return false;
     }

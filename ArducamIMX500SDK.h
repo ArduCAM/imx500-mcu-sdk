@@ -301,13 +301,28 @@ extern "C" {
 #endif
 
 /**
- * @brief Dequant APIs.
- *
- * Public dequant helper interfaces are reserved for future SDK versions.
- * No public API is exposed in this category yet.
+ * @name Dequant APIs
+ * Helpers that parse tensor metadata and bind output payloads so host code can
+ * inspect quantization parameters and run dequant or post-processing.
+ * @{
  */
 
-/** @brief ROI helper APIs. */
+/**
+ * @brief Parse one raw SPI metadata buffer and bind tensor payload pointers.
+ * @param data Raw metadata buffer from @ref read_metadata.
+ * @param data_len Number of valid bytes in @p data.
+ * @param parsed_metadata Output structure filled with parsed offsets and tensors.
+ * @return `true` on success, `false` if the payload format is invalid.
+ */
+bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata);
+
+/** @} */
+
+/**
+ * @name ROI Helper APIs
+ * Helpers for crop control and coordinate mapping.
+ * @{
+ */
 
 /** @brief Scale an X coordinate from source width to target width. */
 uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
@@ -321,7 +336,13 @@ uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
  */
 int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax);
 
-/** @brief ISP and sensor tuning APIs. */
+/** @} */
+
+/**
+ * @name ISP and Sensor Tuning APIs
+ * Helpers for auto-exposure and white-balance configuration.
+ * @{
+ */
 
 /** @brief Fill an AE config structure with SDK defaults. */
 void imx500_get_default_ae_config(imx500_ae_config_t *config);
@@ -341,7 +362,13 @@ int imx500_set_white_balance_config(const imx500_white_balance_config_t *config)
 /** @brief Apply the staged white balance configuration to the sensor. */
 int imx500_apply_white_balance_config(void);
 
-/** @brief Data injection and host preprocessing APIs. */
+/** @} */
+
+/**
+ * @name Data Injection and Host Preprocessing APIs
+ * Helpers for host-driven input injection and input tensor preprocessing.
+ * @{
+ */
 
 /** @brief Callback used by @ref do_data_injection_stream to stream image bytes lazily. */
 typedef uint32_t (*data_provider_t)(uint8_t *buf, uint32_t max_len, uint32_t offset);
@@ -378,7 +405,13 @@ int _convert_injected_data(const uint8_t *img,
                            uint32_t input_height, uint32_t input_width, uint32_t channel_num,
                            const uint8_t transpose_order[3], uint32_t align_base);
 
-/** @brief IMX500 module control, metadata, and asset-management APIs. */
+/** @} */
+
+/**
+ * @name IMX500 Control, Metadata, and Asset-Management APIs
+ * Helpers for module lifecycle control, metadata transport, and asset loading.
+ * @{
+ */
 
 /** @brief Read the module firmware version register. */
 void get_fw_ver(uint32_t* v);
@@ -439,15 +472,6 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
 void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header);
 
 /**
- * @brief Parse one raw SPI metadata buffer and bind tensor payload pointers.
- * @param data Raw metadata buffer from @ref read_metadata.
- * @param data_len Number of valid bytes in @p data.
- * @param parsed_metadata Output structure filled with parsed offsets and tensors.
- * @return `true` on success, `false` if the payload format is invalid.
- */
-bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata);
-
-/**
  * @brief Read the current flash write progress from module firmware.
  * @param status Output status structure.
  * @return `true` on success.
@@ -460,7 +484,7 @@ bool get_spi_flash_status(spi_flash_status_t *status);
  * @param model_size Model size in bytes.
  * @return `true` if the transfer and module-side validation succeeded.
  */
-bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size);
+bool write_model_to_cam_flash(const uint8_t *model, uint32_t model_size);
 
 /**
  * @brief Stream a network-info blob to module flash over SPI.
@@ -468,7 +492,7 @@ bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size);
  * @param nn_info_size Network-info size in bytes.
  * @return `true` if the transfer and module-side validation succeeded.
  */
-bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size);
+bool write_nn_info_to_cam_flash(const uint8_t *nn_info, uint32_t nn_info_size);
 
 /**
  * @brief Load a network-info blob directly into module memory.
@@ -476,13 +500,13 @@ bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_s
  * @param nn_info_size Network-info size in bytes.
  * @return `true` if the module accepted the blob.
  */
-bool spi_load_nn_info_to_memory(const uint8_t *nn_info, uint32_t nn_info_size);
+bool load_nn_info_to_cam_memory(const uint8_t *nn_info, uint32_t nn_info_size);
 
 /** @brief Cached network descriptors parsed from the current network-info blob. */
 extern sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
 
-/** @brief Parse and cache a network-info blob on the host side. */
-int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len);
+/** @brief Parse and cache a network-info blob in the SDK host-side cache. */
+int load_nn_info_to_sdk_cache(const uint8_t *cfg, size_t cfg_len);
 
 /** @brief Print the cached network list through the registered logger. */
 void dump_network_info_list(void);
@@ -504,6 +528,8 @@ int sensor_i2c_write_16_32(uint16_t reg_addr, uint32_t data);
 
 /** @brief Read one 32-bit sensor register addressed by a 16-bit register address. */
 int sensor_i2c_read_16_32(uint16_t reg_addr, uint32_t *data);
+
+/** @} */
 
 #ifdef __cplusplus
 }

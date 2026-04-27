@@ -228,13 +228,13 @@ static void dump_spi_flash_status(const char *label) {
 
 static bool program_flash_assets(void) {
     printf("Programming model to module flash...\n");
-    if (!spi_slave_write_model_to_flash(NN_FW_DATA, NN_FW_SIZE)) {
+    if (!write_model_to_cam_flash(NN_FW_DATA, NN_FW_SIZE)) {
         dump_spi_flash_status("[MODEL FLASH]");
         return false;
     }
 
     printf("Programming network_info to module flash...\n");
-    if (!spi_slave_write_nn_info_to_flash(NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE)) {
+    if (!write_nn_info_to_cam_flash(NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE)) {
         dump_spi_flash_status("[NN INFO FLASH]");
         return false;
     }

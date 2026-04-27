@@ -1,6 +1,6 @@
 # IMX500 MCU SDK API Overview
 
-The IMX500 MCU SDK exposes a compact set of C/C++ interfaces for bringing up the module, starting inference streams, reading metadata, injecting test input, and tuning sensor behavior.
+The IMX500 MCU SDK exposes a compact set of C/C++ interfaces for bringing up the module, starting inference streams, parsing metadata and output tensors, injecting test input, and tuning sensor behavior.
 
 This page is the API landing page for the SDK. Build and publishing instructions remain in `README.md`; the sections below focus on what each public interface is used for.
 
@@ -15,9 +15,11 @@ This page is the API landing page for the SDK. Build and publishing instructions
 
 ### Dequant
 
-Public dequant helper APIs are not exposed yet.
+Use this category to parse raw output metadata and bind tensor payloads before reading quantization parameters or running host-side dequant and post-processing:
 
-This category is reserved for future interfaces that would convert quantized tensor outputs into host-friendly floating-point or integer representations.
+- @ref parse_output_tensor_data_with_metadata "parse_output_tensor_data_with_metadata(...)"
+
+This category is the SDK handoff point between raw SPI metadata and any host-side tensor dequantization or result decoding pipeline.
 
 ### ROI
 
@@ -69,12 +71,11 @@ Use this category for module lifecycle control, model loading, metadata transpor
 - @ref get_metadata_size "get_metadata_size()"
 - @ref read_metadata "read_metadata(...)"
 - @ref unpack_imx500_output_header "unpack_imx500_output_header(...)"
-- @ref parse_output_tensor_data_with_metadata "parse_output_tensor_data_with_metadata(...)"
 - @ref get_spi_flash_status "get_spi_flash_status(...)"
-- @ref spi_slave_write_model_to_flash "spi_slave_write_model_to_flash(...)"
-- @ref spi_slave_write_nn_info_to_flash "spi_slave_write_nn_info_to_flash(...)"
-- @ref spi_load_nn_info_to_memory "spi_load_nn_info_to_memory(...)"
-- @ref set_nw_info_from_flash_buffer "set_nw_info_from_flash_buffer(...)"
+- @ref write_model_to_cam_flash "write_model_to_cam_flash(...)"
+- @ref write_nn_info_to_cam_flash "write_nn_info_to_cam_flash(...)"
+- @ref load_nn_info_to_cam_memory "load_nn_info_to_cam_memory(...)"
+- @ref load_nn_info_to_sdk_cache "load_nn_info_to_sdk_cache(...)"
 - @ref dump_network_info_list "dump_network_info_list()"
 - @ref sensor_i2c_write_16_8 "sensor_i2c_write_16_8(...)"
 - @ref sensor_i2c_read_16_8 "sensor_i2c_read_16_8(...)"
@@ -114,4 +115,4 @@ Most integrations follow this order:
 4. Initialize the module with @ref open "open(...)".
 5. Start runtime output with @ref stream_on "stream_on()".
 6. Read metadata with @ref read_metadata "read_metadata(...)".
-7. Decode tensor metadata with @ref parse_output_tensor_data_with_metadata "parse_output_tensor_data_with_metadata(...)".
+7. Parse output metadata and bind tensor payloads for dequant or downstream decoding with @ref parse_output_tensor_data_with_metadata "parse_output_tensor_data_with_metadata(...)".
