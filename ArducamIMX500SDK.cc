@@ -9,6 +9,7 @@
 #include "string.h"
 #include "loader.h"
 #include "firmware.h"
+#include "version.h"
 
 #define ALIGN_DOWN(size, align) ((size) & ~((align) - 1))
 #define ALIGN_UP(size, align)   (ALIGN_DOWN((size) + (align) - 1, (align)))
@@ -2777,6 +2778,13 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     }
     printf("imx500 module boot completed, boot_status=%" PRIu32 "\n", imx500_boot_status);
     printf("SDK reset path: loader/main firmware loaded by module firmware\n");
+    uint32_t module_fw_ver = 0;
+    uint32_t module_pid = 0;
+    get_fw_ver(&module_fw_ver);
+    get_pid(&module_pid);
+    printf("module pid: 0x%x\n", module_pid);
+    printf("module fw version: 0x%x\n", module_fw_ver);
+    printf("imx500 sdk version: %x\n", IMX500_MCU_SDK_VERSION_U32);
     imx500_dump_basic_info();
     uint32_t spi_frq = 17.5 * 1000 * 1000;
     imx500_res_write(IMX500_COMMAND_SET_SPI_FRQ, &spi_frq, 10);

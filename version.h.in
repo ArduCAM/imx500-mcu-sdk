@@ -1,0 +1,4 @@
+#pragma once
+#include <stdint.h>
+
+#define IMX500_MCU_SDK_VERSION_U32 ((uint32_t)@IMX500_MCU_SDK_VERSION_U32@)
