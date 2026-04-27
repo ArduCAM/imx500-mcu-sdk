@@ -2,6 +2,7 @@
 #include "ArducamIMX500SDK.h"
 #include <algorithm>
 #include <inttypes.h>
+#include <stdarg.h>
 #include <vector>
 #include <string>
 #include "flatbuffers/flatbuffers.h"
@@ -58,6 +59,56 @@ typedef struct {
 } SpiBlobWireHeader;
 
 typedef void (*logger_cb_t)(const char *msg);
+
+// Route SDK logs through an optional user callback while preserving printf fallback.
+static int sdk_vprintf(const char *fmt, va_list args) {
+    if (!fmt) {
+        return 0;
+    }
+    if (!g_printf_fn) {
+        return vprintf(fmt, args);
+    }
+
+    char stack_buf[256];
+    va_list stack_args;
+    va_copy(stack_args, args);
+    int written = vsnprintf(stack_buf, sizeof(stack_buf), fmt, stack_args);
+    va_end(stack_args);
+    if (written < 0) {
+        return written;
+    }
+    if ((size_t)written < sizeof(stack_buf)) {
+        g_printf_fn(stack_buf);
+        return written;
+    }
+
+    size_t buf_size = (size_t)written + 1u;
+    char *buf = (char *)malloc(buf_size);
+    if (!buf) {
+        return -1;
+    }
+
+    va_list heap_args;
+    va_copy(heap_args, args);
+    int heap_written = vsnprintf(buf, buf_size, fmt, heap_args);
+    va_end(heap_args);
+    if (heap_written >= 0) {
+        g_printf_fn(buf);
+    }
+
+    free(buf);
+    return heap_written;
+}
+
+static int sdk_printf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int written = sdk_vprintf(fmt, args);
+    va_end(args);
+    return written;
+}
+
+#define printf(...) sdk_printf(__VA_ARGS__)
 
 static void default_logger(const char *msg) { printf("%s\n", msg); }
 

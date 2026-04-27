@@ -86,6 +86,7 @@ Include directories typically needed:
 Provide platform-specific I2C/SPI read-write and delay functions, then register them via:
 - `register_i2c_driver(...)`
 - `register_spi_driver(...)`
+- Optional: `register_printf(...)` to bind SDK log output to your platform logger.
 
 A reference implementation is available in `examples/platform/.../peripherals_adapter.c`.
 

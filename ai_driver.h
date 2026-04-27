@@ -25,6 +25,7 @@ typedef int (*i2c_write_fn)(uint16_t addr, uint32_t val, uint32_t size);
 typedef int (*i2c_read_fn)(uint16_t addr, uint32_t *val, uint32_t size);
 typedef void (*sleep_ms_fn)(uint32_t ms);
 typedef void (*sleep_us_fn)(uint64_t us);
+typedef void (*imx500_printf_fn)(const char *msg);
 
 typedef struct i2c_driver {
   i2c_write_fn write;
@@ -34,8 +35,10 @@ typedef struct i2c_driver {
 } i2c_driver;
 
 extern i2c_driver g_i2c_driver;
+extern imx500_printf_fn g_printf_fn;
 
 void register_i2c_driver(i2c_driver driver);
+void register_printf(imx500_printf_fn fn);
 int _i2c_write(uint32_t addr, uint32_t val, uint32_t size);
 int _i2c_read(uint32_t addr, uint32_t *val, uint32_t size);
 
