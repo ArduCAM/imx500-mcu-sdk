@@ -16,9 +16,9 @@ Platform-specific example documentation will be maintained under `examples/`.
 - SPI data forwarding mode switch and data injection support
 - Platform adapter pattern for fast MCU bring-up
 
-## B0642 Positioning
+## Positioning
 
-`B0642` is positioned as a bridge solution for bringing `IMX500` capabilities to MCU platforms.
+[B0642](https://www.arducam.com/arducam-imx500-ai-camera-module-for-esp32-p4-and-other-mcu-soc.html) is positioned as a bridge solution for bringing `IMX500` capabilities to MCU platforms.
 It is intended for:
 - New MCU-based designs that need `IMX500` inference capability
 - Existing SoC-based projects migrating toward MCU-based systems
@@ -30,20 +30,6 @@ Compared with Raspberry Pi AI Camera:
 | --- | --- | --- |
 | MIPI output | Image + metadata (`RGB888` input tensor + output tensor) | Image only |
 | Metadata path | Over `MIPI` | Over `SPI` (`JPEG` input tensor + output tensor, or output tensor only) |
-
-## Framework Diagram
-
-### Product
-
-<p align="center">
-  <img src="pics/1.png" alt="Product diagram" width="600" />
-</p>
-
-### SDK
-
-<p align="center">
-  <img src="pics/2.png" alt="SDK diagram" width="720" />
-</p>
 
 ## Repository Layout
 - `ArducamIMX500SDK.h/.cc`: Public SDK API and core implementation
@@ -105,5 +91,4 @@ See `ArducamIMX500SDK.h` for function declarations and related data structures.
 Detailed platform usage instructions will be documented inside each example folder.
 
 ## Notes
-- The current repository includes one reference platform example; broader MCU coverage is planned.
 - If build errors mention FlatBuffers headers, ensure submodules are initialized.

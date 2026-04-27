@@ -1,3 +1,8 @@
+/**
+ * @file ArducamIMX500SDK.h
+ * @brief Public API for integrating IMX500 modules on MCU platforms.
+ */
+
 #ifndef ARDUCAM_IMX500_SDK_H_
 #define ARDUCAM_IMX500_SDK_H_
 
@@ -16,6 +21,7 @@
 #define IMX500_FW_TYPE_NETWORK_WEIGHTS 2
 
 
+/** @brief Decoded 12-byte metadata header emitted by the IMX500 output stream. */
 typedef struct {
     uint8_t valid_flag;
     uint8_t frame_count;
@@ -48,6 +54,7 @@ typedef struct {
     uint16_t padding;
 } IMX500TensorDimension;
 
+/** @brief Parsed tensor descriptor plus bound tensor payload pointer. */
 typedef struct {
     uint32_t id;
     char name[48];
@@ -63,6 +70,7 @@ typedef struct {
     IMX500TensorDimension dimensions[IMX500_MAX_TENSOR_DIMS];
 } IMX500ParsedTensor;
 
+/** @brief Parsed network description including input and output tensors. */
 typedef struct {
     uint32_t id;
     char name[48];
@@ -73,6 +81,7 @@ typedef struct {
     IMX500ParsedTensor output_tensors[IMX500_MAX_OUTPUT_TENSORS];
 } IMX500ParsedNetwork;
 
+/** @brief Parsed metadata payload with JPEG and output tensor offsets. */
 typedef struct {
     bool has_primary_header;
     bool has_output_header;
@@ -95,6 +104,7 @@ typedef struct {
     IMX500ParsedNetwork networks[IMX500_MAX_NETWORKS];
 } IMX500ParsedMetadata;
 
+/** @brief Detection bounding box in absolute image coordinates. */
 typedef struct {
     float x1;
     float y1;
@@ -108,8 +118,6 @@ typedef struct {
     BBox* bboxs;
     uint16_t valid_num;
 } DetectionResult;
-
-// network_info parser types migrated from main project
 
 typedef enum {
     DNN_INPUT_FORMAT_RGB = 0,
@@ -179,6 +187,7 @@ typedef struct {
     sc_output_tensor_size_info_t *p_outputTensorSizeInfo;
 } sc_dnn_nw_info_t;
 
+/** @brief SPI bridge forwarding path selected inside the module. */
 typedef enum {
 	SPI_DATA_FORWARDING_NONE = 0,
 	SPI_SLAVE_FROM_IMX500_MSPI,
@@ -192,6 +201,7 @@ typedef enum {
 	SPI_FORWORDING_MODE_SWITCHING
 } spi_data_forwarding_mode_t;
 
+/** @brief SPI metadata layout returned during inference streaming. */
 typedef enum {
 	SPI_METADATA_OUTPUT_TENSOR = 0,
 	SPI_METADATA_INPUT_TENSOR,
@@ -201,6 +211,7 @@ typedef enum {
 	SPI_METADATA_NONE
 } spi_data_format_t;
 
+/** @brief MIPI data layout selected for the module video output. */
 typedef enum {
 	MIPI_DATA_IMAGE = 0,
 	MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR,
@@ -238,6 +249,7 @@ typedef enum {
 	SPI_FLASH_RESULT_FLASH_BLOB_MISSING = 8,
 } spi_flash_op_result_t;
 
+/** @brief Summary of a model or network-info flash write request. */
 typedef struct {
 	uint32_t status;
 	uint32_t result;
@@ -252,6 +264,7 @@ typedef struct {
     uint16_t width;
 } imx500_roi_t;
 
+/** @brief Auto-exposure configuration to be applied to the sensor. */
 typedef struct {
     uint16_t max_exposure_time_100us;
     uint8_t max_gain_db;
@@ -274,6 +287,7 @@ typedef enum {
     IMX500_WB_PRESET_6500 = 3,
 } imx500_white_balance_preset_t;
 
+/** @brief White balance configuration to be applied to the sensor. */
 typedef struct {
     imx500_white_balance_mode_t mode;
     imx500_white_balance_preset_t preset;
@@ -286,48 +300,209 @@ typedef struct {
 extern "C" {
 #endif
 
-void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header);
-bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata);
+/**
+ * @brief Dequant APIs.
+ *
+ * Public dequant helper interfaces are reserved for future SDK versions.
+ * No public API is exposed in this category yet.
+ */
+
+/** @brief ROI helper APIs. */
+
+/** @brief Scale an X coordinate from source width to target width. */
 uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
+
+/** @brief Scale a Y coordinate from source height to target height. */
 uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
-bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m);
-bool get_spi_flash_status(spi_flash_status_t *status);
-bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size);
-bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size);
-bool spi_load_nn_info_to_memory(const uint8_t *nn_info, uint32_t nn_info_size);
-int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type);
-void stream_on(void);
+
+/**
+ * @brief Apply a crop rectangle in absolute sensor coordinates.
+ * @return `0` on success, negative on invalid arguments or command failure.
+ */
 int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax);
-bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps);
-uint32_t get_metadata_size(void);
-int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
+
+/** @brief ISP and sensor tuning APIs. */
+
+/** @brief Fill an AE config structure with SDK defaults. */
+void imx500_get_default_ae_config(imx500_ae_config_t *config);
+
+/** @brief Fill a white balance config structure with SDK defaults. */
+void imx500_get_default_white_balance_config(imx500_white_balance_config_t *config);
+
+/** @brief Stage a new auto-exposure configuration in the sensor control block. */
+int imx500_set_ae_config(const imx500_ae_config_t *config);
+
+/** @brief Apply the staged auto-exposure configuration to the sensor. */
+int imx500_apply_ae_config(void);
+
+/** @brief Stage a new white balance configuration in the sensor control block. */
+int imx500_set_white_balance_config(const imx500_white_balance_config_t *config);
+
+/** @brief Apply the staged white balance configuration to the sensor. */
+int imx500_apply_white_balance_config(void);
+
+/** @brief Data injection and host preprocessing APIs. */
+
+/** @brief Callback used by @ref do_data_injection_stream to stream image bytes lazily. */
 typedef uint32_t (*data_provider_t)(uint8_t *buf, uint32_t max_len, uint32_t offset);
+
+/**
+ * @brief Inject input data through a pull-based provider callback.
+ * @param provider Callback that fills the next chunk.
+ * @param total_size Total input size in bytes.
+ * @param first_time Set to `true` before the first injected frame.
+ */
 void do_data_injection_stream(data_provider_t provider, uint32_t total_size, bool first_time);
+
+/**
+ * @brief Inject one complete input buffer directly.
+ * @param data Pointer to source bytes.
+ * @param size Number of bytes to inject.
+ * @param first_time Set to `true` before the first injected frame.
+ */
 void do_data_injection(const uint8_t *data, uint32_t size, bool first_time);
+
+/** @brief Exit data injection mode. */
 void stop_data_injection(void);
+
+/** @brief Apply cached network-info normalization rules to an input tensor buffer. */
 int _preprocess_nn_input_data(uint8_t *src, uint32_t src_size);
+
+/**
+ * @brief Resize, align, and transpose raw image bytes into injection layout.
+ * @return Number of bytes produced, or negative on conversion failure.
+ */
 int _convert_injected_data(const uint8_t *img,
                            uint32_t img_width, uint32_t img_height, uint32_t img_channels,
                            uint8_t *dst, uint32_t dst_size,
                            uint32_t input_height, uint32_t input_width, uint32_t channel_num,
                            const uint8_t transpose_order[3], uint32_t align_base);
-extern sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
-int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len);
-void dump_network_info_list(void);
+
+/** @brief IMX500 module control, metadata, and asset-management APIs. */
+
+/** @brief Read the module firmware version register. */
 void get_fw_ver(uint32_t* v);
+
+/** @brief Read the module device ID register. */
 void get_pid(uint32_t* v);
+
+/**
+ * @brief Probe the module and read device ID plus boot status.
+ * @return `true` if both registers were read successfully.
+ */
 bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
-void imx500_get_default_ae_config(imx500_ae_config_t *config);
-void imx500_get_default_white_balance_config(imx500_white_balance_config_t *config);
-int imx500_set_ae_config(const imx500_ae_config_t *config);
-int imx500_apply_ae_config(void);
-int imx500_set_white_balance_config(const imx500_white_balance_config_t *config);
-int imx500_apply_white_balance_config(void);
+
+/**
+ * @brief Initialize the module, load model/network info, and configure stream formats.
+ * @param nn_fw Network weights blob. Pass `NULL` for flash boot.
+ * @param nn_fw_size Size of @p nn_fw in bytes.
+ * @param nn_info Network-info blob associated with the loaded model.
+ * @param nn_info_size Size of @p nn_info in bytes.
+ * @param mipi_format Requested MIPI output format.
+ * @param spi_format Requested SPI metadata format.
+ * @param fps Target frame rate.
+ * @return `true` if initialization completed successfully.
+ */
+bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps);
+
+/**
+ * @brief Transfer one firmware blob to the module.
+ * @param fw Pointer to the firmware image.
+ * @param size Firmware size in bytes.
+ * @param fw_type One of `IMX500_FW_TYPE_*`.
+ * @return `0` on success, negative on failure.
+ */
+int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type);
+
+/** @brief Start inference/video streaming after @ref open succeeds. */
+void stream_on(void);
+
+/**
+ * @brief Switch the module SPI bridge to a different data forwarding mode.
+ * @param m Requested SPI forwarding mode.
+ * @return `true` if the switch succeeded.
+ */
+bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m);
+
+/** @brief Read the size of the next metadata payload exposed by the module. */
+uint32_t get_metadata_size(void);
+
+/**
+ * @brief Read one metadata frame over SPI.
+ * @param rx_buf Destination buffer.
+ * @param buf_size Capacity of @p rx_buf in bytes.
+ * @return Number of bytes written to @p rx_buf, or `0` on failure.
+ */
+int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
+
+/** @brief Decode a raw IMX500 metadata header into a typed structure. */
+void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header);
+
+/**
+ * @brief Parse one raw SPI metadata buffer and bind tensor payload pointers.
+ * @param data Raw metadata buffer from @ref read_metadata.
+ * @param data_len Number of valid bytes in @p data.
+ * @param parsed_metadata Output structure filled with parsed offsets and tensors.
+ * @return `true` on success, `false` if the payload format is invalid.
+ */
+bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata);
+
+/**
+ * @brief Read the current flash write progress from module firmware.
+ * @param status Output status structure.
+ * @return `true` on success.
+ */
+bool get_spi_flash_status(spi_flash_status_t *status);
+
+/**
+ * @brief Stream a model blob to module flash over SPI.
+ * @param model Pointer to the model payload.
+ * @param model_size Model size in bytes.
+ * @return `true` if the transfer and module-side validation succeeded.
+ */
+bool spi_slave_write_model_to_flash(const uint8_t *model, uint32_t model_size);
+
+/**
+ * @brief Stream a network-info blob to module flash over SPI.
+ * @param nn_info Pointer to the network-info payload.
+ * @param nn_info_size Network-info size in bytes.
+ * @return `true` if the transfer and module-side validation succeeded.
+ */
+bool spi_slave_write_nn_info_to_flash(const uint8_t *nn_info, uint32_t nn_info_size);
+
+/**
+ * @brief Load a network-info blob directly into module memory.
+ * @param nn_info Pointer to the network-info payload.
+ * @param nn_info_size Network-info size in bytes.
+ * @return `true` if the module accepted the blob.
+ */
+bool spi_load_nn_info_to_memory(const uint8_t *nn_info, uint32_t nn_info_size);
+
+/** @brief Cached network descriptors parsed from the current network-info blob. */
+extern sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];
+
+/** @brief Parse and cache a network-info blob on the host side. */
+int set_nw_info_from_flash_buffer(const uint8_t *cfg, size_t cfg_len);
+
+/** @brief Print the cached network list through the registered logger. */
+void dump_network_info_list(void);
+
+/** @brief Write one 8-bit sensor register addressed by a 16-bit register address. */
 int sensor_i2c_write_16_8(uint16_t reg_addr, uint8_t data);
+
+/** @brief Read one 8-bit sensor register addressed by a 16-bit register address. */
 int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data);
+
+/** @brief Write one 16-bit sensor register addressed by a 16-bit register address. */
 int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data);
+
+/** @brief Read one 16-bit sensor register addressed by a 16-bit register address. */
 int sensor_i2c_read_16_16(uint16_t reg_addr, uint16_t *data);
+
+/** @brief Write one 32-bit sensor register addressed by a 16-bit register address. */
 int sensor_i2c_write_16_32(uint16_t reg_addr, uint32_t data);
+
+/** @brief Read one 32-bit sensor register addressed by a 16-bit register address. */
 int sensor_i2c_read_16_32(uint16_t reg_addr, uint32_t *data);
 
 #ifdef __cplusplus
