@@ -1262,7 +1262,10 @@ static void spi_metadata_task(void *arg)
             log_metadata_first_12_bytes(g_frame_buf, static_cast<uint32_t>(data_size), "metadata raw");
         }
 
-        if (!parse_output_tensor_data_with_metadata(g_frame_buf, static_cast<uint32_t>(data_size), g_parsed_metadata)) {
+        if (!parse_metadata(g_frame_buf,
+                            static_cast<uint32_t>(data_size),
+                            SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                            g_parsed_metadata)) {
             ESP_LOGW(TAG, "failed to parse metadata payload=%ld", static_cast<long>(data_size));
             if (is_zero_header_payload(g_frame_buf, static_cast<uint32_t>(data_size))) {
                 if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {

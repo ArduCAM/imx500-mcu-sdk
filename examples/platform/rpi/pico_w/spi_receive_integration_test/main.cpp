@@ -61,6 +61,29 @@ static void print_benchmark_row(const char* metric, const char* value) {
     printf("| %-39s | %-23s |\n", metric, value);
 }
 
+static void print_frame_hex_dump(const uint8_t* buf, uint32_t len) {
+    if (!buf || len == 0) {
+        printf("[FIRST FRAME DUMP] empty frame\n");
+        return;
+    }
+
+    printf("\n========== FIRST FRAME FULL DATA DUMP (%lu bytes) ==========\n",
+           (unsigned long)len);
+    for (uint32_t offset = 0; offset < len; offset += 16) {
+        uint32_t line_len = len - offset;
+        if (line_len > 16) {
+            line_len = 16;
+        }
+
+        printf("%08lx:", (unsigned long)offset);
+        for (uint32_t i = 0; i < line_len; ++i) {
+            printf(" %02x", (unsigned)buf[offset + i]);
+        }
+        printf("\n");
+    }
+    printf("========== FIRST FRAME FULL DATA DUMP END ==========\n\n");
+}
+
 static void print_benchmark_table(
     uint64_t open_cost_us,
     uint64_t stream_on_cost_us,
@@ -169,10 +192,11 @@ FrameBenchmarkResult benchmark_read_frame(
     uint32_t count,
     uint8_t* buf,
     uint32_t max_buf_size,
-    bool print_frame_sample
+    bool dump_first_success_frame
 ) {
     FrameBenchmarkResult result = {0};
     result.requested_frames = count;
+    bool first_frame_dumped = false;
 
     for (uint32_t i = 0; i < count; ++i) {
         printf("\n=== Frame %lu/%lu ===\n", (unsigned long)(i + 1), (unsigned long)count);
@@ -190,9 +214,9 @@ FrameBenchmarkResult benchmark_read_frame(
             result.total_read_cost_us += (read_end_us - read_start_us);
             printf("Successfully read %ld bytes, read cost=%.2f ms\n",
                    (long)bytes_read, bench_us_to_ms(read_end_us - read_start_us));
-            if (print_frame_sample) {
-                print_buf_hex(buf, 12);
-                printf("\n");
+            if (dump_first_success_frame && !first_frame_dumped) {
+                print_frame_hex_dump(buf, (uint32_t)bytes_read);
+                first_frame_dumped = true;
             }
         } else {
             result.failed_frames++;

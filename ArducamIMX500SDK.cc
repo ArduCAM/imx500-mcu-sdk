@@ -613,13 +613,17 @@ static void imx500_bind_output_tensor_payload(IMX500ParsedMetadata *parsed_metad
     }
 }
 
-extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata)
+static bool imx500_parse_metadata_impl(const uint8_t *data,
+                                       uint32_t data_len,
+                                       bool allow_jpeg_input_tensor,
+                                       bool allow_output_header,
+                                       IMX500ParsedMetadata *parsed_metadata)
 {
     IMX500OutputHeader primary_header = {};
     IMX500OutputHeader output_header = {};
 
     if (!data || !parsed_metadata) {
-        printf("parse_output_tensor_data: null input\n");
+        printf("parse_metadata: null input\n");
         return false;
     }
     memset(parsed_metadata, 0, sizeof(*parsed_metadata));
@@ -629,7 +633,7 @@ extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint
         if (data_len >= IMX500_HEADER_LEN) {
             unpack_imx500_output_header(data, &unpacked);
         }
-        printf("parse_output_tensor_data: failed to parse primary metadata header "
+        printf("parse_metadata: failed to parse primary metadata header "
                "(valid=%u frame=%u line=%u ap=%u ord=%u ind=%u bytes=%02X %02X %02X %02X %02X %02X %02X %02X %02X)\n",
                unpacked.valid_flag,
                unpacked.frame_count,
@@ -658,12 +662,12 @@ extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint
     if (!imx500_parse_networks_from_ap_params(data + parsed_metadata->ap_param_offset,
                                               parsed_metadata->ap_param_size,
                                               parsed_metadata)) {
-        printf("parse_output_tensor_data: failed to parse ApParams block\n");
+        printf("parse_metadata: failed to parse ApParams block\n");
         return false;
     }
 
     uint32_t output_payload_offset = parsed_metadata->ap_param_end_offset;
-    if (parsed_metadata->ap_param_end_offset + 4 <= data_len) {
+    if (allow_jpeg_input_tensor && parsed_metadata->ap_param_end_offset + 4 <= data_len) {
         uint32_t jpeg_size = ((uint32_t)data[parsed_metadata->ap_param_end_offset]) |
                              ((uint32_t)data[parsed_metadata->ap_param_end_offset + 1] << 8) |
                              ((uint32_t)data[parsed_metadata->ap_param_end_offset + 2] << 16) |
@@ -700,7 +704,7 @@ extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint
         }
     }
 
-    if (imx500_parse_header_at_impl(data, data_len, output_payload_offset, false, &output_header)) {
+    if (allow_output_header && imx500_parse_header_at_impl(data, data_len, output_payload_offset, false, &output_header)) {
         parsed_metadata->has_output_header = true;
         parsed_metadata->output_header = output_header;
         parsed_metadata->output_header_offset = output_payload_offset;
@@ -709,7 +713,7 @@ extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint
 
     uint32_t expected_output_bytes = imx500_estimate_output_payload_bytes(parsed_metadata);
     if (expected_output_bytes == 0 || output_payload_offset > data_len || data_len - output_payload_offset < expected_output_bytes) {
-        printf("parse_output_tensor_data: output payload too short: off=%lu remain=%lu need=%lu\n",
+        printf("parse_metadata: output payload too short: off=%lu remain=%lu need=%lu\n",
                (unsigned long)output_payload_offset,
                (unsigned long)(output_payload_offset <= data_len ? (data_len - output_payload_offset) : 0),
                (unsigned long)expected_output_bytes);
@@ -723,6 +727,21 @@ extern "C" bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint
         parsed_metadata->selected_network_index = (uint8_t)primary_header.network_ordinal;
     }
     return true;
+}
+
+extern "C" bool parse_metadata(const uint8_t *data,
+                               uint32_t data_len,
+                               spi_data_format_t spi_format,
+                               IMX500ParsedMetadata *parsed_metadata)
+{
+    switch (spi_format) {
+    case SPI_METADATA_OUTPUT_TENSOR:
+        return imx500_parse_metadata_impl(data, data_len, false, false, parsed_metadata);
+    case SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR:
+        return imx500_parse_metadata_impl(data, data_len, true, true, parsed_metadata);
+    default:
+        return imx500_parse_metadata_impl(data, data_len, true, true, parsed_metadata);
+    }
 }
 
 extern "C" {

@@ -308,13 +308,17 @@ extern "C" {
  */
 
 /**
- * @brief Parse one raw SPI metadata buffer and bind tensor payload pointers.
+ * @brief Parse one raw SPI metadata buffer using the selected SPI metadata layout.
  * @param data Raw metadata buffer from @ref read_metadata.
  * @param data_len Number of valid bytes in @p data.
+ * @param spi_format SPI metadata layout passed to @ref open.
  * @param parsed_metadata Output structure filled with parsed offsets and tensors.
  * @return `true` on success, `false` if the payload format is invalid.
  */
-bool parse_output_tensor_data_with_metadata(const uint8_t *data, uint32_t data_len, IMX500ParsedMetadata *parsed_metadata);
+bool parse_metadata(const uint8_t *data,
+                    uint32_t data_len,
+                    spi_data_format_t spi_format,
+                    IMX500ParsedMetadata *parsed_metadata);
 
 /** @} */
 

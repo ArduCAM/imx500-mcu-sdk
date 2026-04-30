@@ -17,7 +17,7 @@ This page is the API landing page for the SDK. Build and publishing instructions
 
 Use this category to parse raw output metadata and bind tensor payloads before reading quantization parameters or running host-side dequant and post-processing:
 
-- @ref parse_output_tensor_data_with_metadata "parse_output_tensor_data_with_metadata(...)"
+- @ref parse_metadata "parse_metadata(...)"
 
 This category is the SDK handoff point between raw SPI metadata and any host-side tensor dequantization or result decoding pipeline.
 
@@ -115,4 +115,4 @@ Most integrations follow this order:
 4. Initialize the module with @ref open "open(...)".
 5. Start runtime output with @ref stream_on "stream_on()".
 6. Read metadata with @ref read_metadata "read_metadata(...)".
-7. Parse output metadata and bind tensor payloads for dequant or downstream decoding with @ref parse_output_tensor_data_with_metadata "parse_output_tensor_data_with_metadata(...)".
+7. Parse output metadata and bind tensor payloads for dequant or downstream decoding with @ref parse_metadata "parse_metadata(...)".
