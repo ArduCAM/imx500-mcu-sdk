@@ -39,10 +39,11 @@ set(WIFI_CONNECT_TIMEOUT_MS "30000" CACHE STRING "Wi-Fi connect timeout in milli
 set(WIFI_COUNTRY "CN" CACHE STRING "Two-letter Wi-Fi country code")
 set(PERSON_CLASS_ID "0" CACHE STRING "SSDMobileNet class id for person")
 set(PERSON_SCORE_THRESHOLD "0.30" CACHE STRING "Minimum detection score for person boxes")
-set(METADATA_BUFFER_SIZE "32768" CACHE STRING "SPI metadata frame buffer size in bytes")
+set(METADATA_BUFFER_SIZE "65536" CACHE STRING "SPI metadata frame buffer size in bytes")
 set(METADATA_DEBUG_FRAMES "5" CACHE STRING "Number of metadata parse failures to dump in detail")
 set(SSD_EXPECTED_OUTPUT_BYTES "1102" CACHE STRING "Expected raw SSD output tensor bytes for diagnostics only")
 set(IMX500_STREAM_FPS "10" CACHE STRING "IMX500 stream frame rate")
+set(IMX500_SPI_METADATA_FORMAT "SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR" CACHE STRING "SPI metadata format for the ROI backend")
 
 if(NOT WIFI_CONNECT_TIMEOUT_MS MATCHES "^[0-9]+$")
     message(FATAL_ERROR "WIFI_CONNECT_TIMEOUT_MS must be an integer millisecond value")
@@ -61,6 +62,10 @@ if(NOT SSD_EXPECTED_OUTPUT_BYTES MATCHES "^[0-9]+$")
 endif()
 if(NOT IMX500_STREAM_FPS MATCHES "^[0-9]+$")
     message(FATAL_ERROR "IMX500_STREAM_FPS must be an integer fps value")
+endif()
+if(NOT IMX500_SPI_METADATA_FORMAT STREQUAL "SPI_METADATA_OUTPUT_TENSOR" AND
+   NOT IMX500_SPI_METADATA_FORMAT STREQUAL "SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR")
+    message(FATAL_ERROR "IMX500_SPI_METADATA_FORMAT must be SPI_METADATA_OUTPUT_TENSOR or SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR")
 endif()
 
 function(load_dotenv DOTENV_FILE)
@@ -151,12 +156,14 @@ target_compile_definitions(imx500_person_detect_roi_mvp PRIVATE
     METADATA_DEBUG_FRAMES=${METADATA_DEBUG_FRAMES}
     SSD_EXPECTED_OUTPUT_BYTES=${SSD_EXPECTED_OUTPUT_BYTES}
     IMX500_STREAM_FPS=${IMX500_STREAM_FPS}
+    IMX500_SPI_METADATA_FORMAT=${IMX500_SPI_METADATA_FORMAT}
     CYW43_HOST_NAME="imx500-roi-mvp"
 )
 
 # Pull in basic dependencies
 target_link_libraries(imx500_person_detect_roi_mvp
     pico_stdlib
+    pico_multicore
     pico_cyw43_arch_lwip_threadsafe_background
     hardware_spi
     hardware_i2c
