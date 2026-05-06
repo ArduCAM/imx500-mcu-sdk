@@ -110,6 +110,10 @@ static int sdk_printf(const char *fmt, ...) {
 
 #define printf(...) sdk_printf(__VA_ARGS__)
 
+#ifndef IMX500_METADATA_READ_VERBOSE
+#define IMX500_METADATA_READ_VERBOSE 0
+#endif
+
 static void default_logger(const char *msg) { printf("%s\n", msg); }
 
 static void log_progress(logger_cb_t logger_cb, const char *prefix,
@@ -2990,7 +2994,9 @@ uint32_t get_metadata_size(void) {
         printf("Error: Failed to read METADATA_SIZE_REG\n");
         return 0;
     }
+#if IMX500_METADATA_READ_VERBOSE
     printf("data_size: %" PRIu32 "\n", data_size);
+#endif
     return data_size;
 }
 
@@ -2998,7 +3004,9 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
     uint8_t ready_status;
     int ret;
 
+#if IMX500_METADATA_READ_VERBOSE
     printf("Waiting for data ready...\n");
+#endif
     bool data_ready = false;
     uint32_t is_metadata_ready_;
 
@@ -3012,7 +3020,9 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
         
         if (ready_status == 0x01) {
             data_ready = true;
+#if IMX500_METADATA_READ_VERBOSE
             printf("Data ready! (status: 0x%02X)\n", ready_status);
+#endif
             break;
         }
         
@@ -3025,7 +3035,9 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
         return 0;
     }
 
+#if IMX500_METADATA_READ_VERBOSE
     printf("Data ready, starting SPI DMA read...\n");
+#endif
 
     uint32_t data_size = get_metadata_size();
 

@@ -11,7 +11,6 @@
 #define LWIP_ICMP 1
 #define LWIP_RAW 1
 #define LWIP_TCP 1
-#define LWIP_UDP 1
 #define LWIP_DHCP 1
 #define LWIP_DNS 1
 #define IP_SOF_BROADCAST 1
@@ -40,7 +39,6 @@
 #define LINK_STATS 0
 #define IP_STATS 0
 #define ICMP_STATS 0
-#define UDP_STATS 0
 #define TCP_STATS 0
 
 #define LWIP_CHKSUM_ALGORITHM 3

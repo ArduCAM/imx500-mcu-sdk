@@ -14,7 +14,7 @@
 #include "lwip/ip.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
-#include "lwip/udp.h"
+#include "lwip/tcp.h"
 #include "peripherals_adapter.h"
 #include "pico/cyw43_arch.h"
 #include "pico/multicore.h"
@@ -26,27 +26,30 @@
 #define WIFI_CONNECT_TIMEOUT_MS 30000
 #endif
 
-#define BOARD_UDP_PORT 42424
-#define BOARD_DISCOVERY_REQUEST "IMX500_ROI_MVP_DISCOVER"
-#define BOARD_PING_REQUEST "IMX500_ROI_MVP_PING"
-#define BOARD_FRAME_REQUEST "IMX500_ROI_MVP_GET_FRAME"
-#define BOARD_SET_ROI_REQUEST "IMX500_ROI_MVP_SET_ROI"
-#define BOARD_ANNOUNCE_INTERVAL_MS 2000
-#define BACKEND_UDP_CHUNK_BYTES 1024
-#define BACKEND_JSON_BYTES 3072
-#define BACKEND_HEADER_BYTES 160
-#define BACKEND_UDP_PACKET_BYTES (BACKEND_HEADER_BYTES + BACKEND_JSON_BYTES)
+#ifndef IMX500_ROI_MVP_VERBOSE_LOGS
+#define IMX500_ROI_MVP_VERBOSE_LOGS 0
+#endif
+
+#define HTTP_SERVER_PORT 80
+#define HTTP_HEADER_BYTES 256
+#define HTTP_HTML_BYTES 8192
+#define HTTP_JSON_BYTES 2048
+#define HTTP_MAX_CLIENTS 2
+#define HTTP_FRAME_REFRESH_MS 1000
+#define HTTP_FRAME_RETRY_MS 1500
+#define PERSON_DETECT_GPIO0_PIN 0
+#define PERSON_DETECT_GPIO1_PIN 1
 #define IMX500_DEFAULT_SPI_BAUDRATE_HZ (5 * 1000 * 1000)
 #define MAX_PERSON_DETECTIONS 10
 
 static constexpr spi_data_format_t kImx500SpiMetadataFormat = IMX500_SPI_METADATA_FORMAT;
 
 static bool s_cyw43_ready = false;
-static struct udp_pcb *s_udp_pcb = nullptr;
-static uint32_t s_last_announce_ms = 0;
+static struct tcp_pcb *s_http_pcb = nullptr;
 static uint32_t s_metadata_parse_failures = 0;
 static uint8_t s_metadata_buf[METADATA_BUFFER_SIZE];
 static IMX500ParsedMetadata s_parsed_metadata;
+static float s_person_score_threshold = PERSON_SCORE_THRESHOLD;
 
 struct PersonDetection {
     float x1;
@@ -75,13 +78,6 @@ struct PersonDetectionResult {
     PersonDetection items[MAX_PERSON_DETECTIONS];
 };
 
-struct FrameBackendRequest {
-    bool pending;
-    ip_addr_t addr;
-    uint16_t port;
-    uint32_t request_id;
-};
-
 struct LatestBackendFrame {
     bool valid;
     uint32_t sequence;
@@ -92,18 +88,31 @@ struct LatestBackendFrame {
     uint8_t jpeg[METADATA_BUFFER_SIZE];
 };
 
-static critical_section_t s_backend_lock;
-static mutex_t s_latest_frame_mutex;
-static mutex_t s_roi_mutex;
-static FrameBackendRequest s_frame_request = {};
-static LatestBackendFrame s_latest_frame = {};
-static RoiConfig s_roi_config = {};
-static uint8_t s_udp_frame_packet[BACKEND_UDP_PACKET_BYTES];
-static uint32_t s_next_request_id = 1;
-static volatile bool s_metadata_started = false;
+struct HttpClientState {
+    char header[HTTP_HEADER_BYTES];
+    char inline_body[HTTP_HTML_BYTES];
+    uint16_t header_len;
+    uint16_t header_offset;
+    uint8_t *body;
+    uint32_t body_len;
+    uint32_t body_offset;
+    uint8_t poll_count;
+    bool in_use;
+    bool request_handled;
+    bool latest_frame_locked;
+};
 
-static void announce_board_if_due(void);
-static void send_frame_response_if_pending(void);
+static mutex_t s_latest_frame_mutex;
+static mutex_t s_config_mutex;
+static mutex_t s_roi_mutex;
+static mutex_t s_http_client_mutex;
+static LatestBackendFrame s_latest_frame = {};
+static HttpClientState s_http_clients[HTTP_MAX_CLIENTS] = {};
+static RoiConfig s_roi_config = {
+    true,
+    {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}}
+};
+static volatile bool s_metadata_started = false;
 
 static void service_wifi_connected_led(void) {
     if (!s_cyw43_ready) {
@@ -119,6 +128,21 @@ static void service_wifi_connected_led(void) {
     const uint32_t brightness = (phase < 1000u) ? phase / 10u : (2000u - phase) / 10u;
     const bool on = (now_ms % 100u) < brightness;
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on ? 1 : 0);
+}
+
+static void init_person_detect_outputs(void) {
+    gpio_init(PERSON_DETECT_GPIO0_PIN);
+    gpio_set_dir(PERSON_DETECT_GPIO0_PIN, GPIO_OUT);
+    gpio_put(PERSON_DETECT_GPIO0_PIN, 0);
+
+    gpio_init(PERSON_DETECT_GPIO1_PIN);
+    gpio_set_dir(PERSON_DETECT_GPIO1_PIN, GPIO_OUT);
+    gpio_put(PERSON_DETECT_GPIO1_PIN, 0);
+}
+
+static void set_person_detect_outputs(bool detected) {
+    gpio_put(PERSON_DETECT_GPIO0_PIN, detected ? 1 : 0);
+    gpio_put(PERSON_DETECT_GPIO1_PIN, detected ? 1 : 0);
 }
 
 static void configure_spi_output_pin(uint pin) {
@@ -278,6 +302,19 @@ static float clamp01(float value) {
     return clamp_float(value, 0.0f, 1.0f);
 }
 
+static float get_person_score_threshold(void) {
+    mutex_enter_blocking(&s_config_mutex);
+    const float threshold = s_person_score_threshold;
+    mutex_exit(&s_config_mutex);
+    return threshold;
+}
+
+static void set_person_score_threshold(float threshold) {
+    mutex_enter_blocking(&s_config_mutex);
+    s_person_score_threshold = clamp_float(threshold, 0.0f, 1.0f);
+    mutex_exit(&s_config_mutex);
+}
+
 static RoiConfig copy_roi_config(void) {
     RoiConfig roi = {};
     mutex_enter_blocking(&s_roi_mutex);
@@ -363,6 +400,20 @@ static bool detection_intersects_roi(const PersonDetection &item, const RoiConfi
     return false;
 }
 
+static bool is_all_zero_payload(const uint8_t *data, uint32_t len) {
+    if (data == nullptr || len == 0) {
+        return true;
+    }
+
+    for (uint32_t i = 0; i < len; ++i) {
+        if (data[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+#if IMX500_ROI_MVP_VERBOSE_LOGS
 static uint32_t read_le32(const uint8_t *data, uint32_t len, uint32_t offset) {
     if (data == nullptr || offset + 4u > len) {
         return 0;
@@ -396,19 +447,6 @@ static void print_ascii_range(const char *label, const uint8_t *data, uint32_t l
         }
     }
     printf("\"\n");
-}
-
-static bool is_all_zero_payload(const uint8_t *data, uint32_t len) {
-    if (data == nullptr || len == 0) {
-        return true;
-    }
-
-    for (uint32_t i = 0; i < len; ++i) {
-        if (data[i] != 0) {
-            return false;
-        }
-    }
-    return true;
 }
 
 static void dump_metadata_parse_debug(const uint8_t *data, uint32_t len, const char *reason) {
@@ -476,6 +514,7 @@ static void dump_metadata_parse_debug(const uint8_t *data, uint32_t len, const c
 
     printf("----- metadata parse debug end -----\n\n");
 }
+#endif
 
 static bool postprocess_person_detections(const IMX500ParsedMetadata &parsed, PersonDetectionResult *out) {
     if (out == nullptr || parsed.network_count == 0) {
@@ -512,13 +551,14 @@ static bool postprocess_person_detections(const IMX500ParsedMetadata &parsed, Pe
     valid_count = std::min<uint32_t>(valid_count, boxes_tensor.element_count / 4u);
 
     float max_coord = 0.0f;
+    const float score_threshold = get_person_score_threshold();
     PersonDetectionResult staged = {};
     staged.source_height = input_h;
     staged.source_width = input_w;
 
     for (uint32_t i = 0; i < valid_count && staged.count < MAX_PERSON_DETECTIONS; ++i) {
         const float score = tensor_read_value_raw_index(scores_tensor, i);
-        if (score < PERSON_SCORE_THRESHOLD) {
+        if (score < score_threshold) {
             continue;
         }
 
@@ -574,13 +614,15 @@ static bool postprocess_person_detections(const IMX500ParsedMetadata &parsed, Pe
 }
 
 static void print_person_detections(uint8_t frame_id, uint32_t payload_size, const PersonDetectionResult &result) {
+#if IMX500_ROI_MVP_VERBOSE_LOGS
+    const float score_threshold = get_person_score_threshold();
     printf("\n========== frame %u ==========\n", (unsigned)frame_id);
     printf("payload=%lu bytes person_count=%lu source=%ux%u threshold=%.2f class=%d coords=relative\n",
            (unsigned long)payload_size,
            (unsigned long)result.count,
            (unsigned)result.source_width,
            (unsigned)result.source_height,
-           (double)PERSON_SCORE_THRESHOLD,
+           (double)score_threshold,
            (int)PERSON_CLASS_ID);
 
     for (uint32_t i = 0; i < result.count; ++i) {
@@ -594,9 +636,14 @@ static void print_person_detections(uint8_t frame_id, uint32_t payload_size, con
                (double)item.y2,
                item.roi_intersects ? 1u : 0u);
     }
+#else
+    (void)frame_id;
+    (void)payload_size;
+    (void)result;
+#endif
 }
 
-static void store_latest_frame(uint32_t payload_size,
+static bool store_latest_frame(uint32_t payload_size,
                                const IMX500ParsedMetadata &parsed,
                                const PersonDetectionResult &detections) {
     uint32_t jpeg_len = parsed.jpeg_data_len;
@@ -605,7 +652,9 @@ static void store_latest_frame(uint32_t payload_size,
     }
     jpeg_len = std::min<uint32_t>(jpeg_len, METADATA_BUFFER_SIZE);
 
-    mutex_enter_blocking(&s_latest_frame_mutex);
+    if (!mutex_try_enter(&s_latest_frame_mutex, nullptr)) {
+        return false;
+    }
     s_latest_frame.valid = true;
     s_latest_frame.sequence++;
     s_latest_frame.payload_size = payload_size;
@@ -616,6 +665,7 @@ static void store_latest_frame(uint32_t payload_size,
         memcpy(s_latest_frame.jpeg, parsed.jpeg_data, jpeg_len);
     }
     mutex_exit(&s_latest_frame_mutex);
+    return true;
 }
 
 static bool init_imx500_streaming(void) {
@@ -649,13 +699,18 @@ static bool init_imx500_streaming(void) {
 
 static void metadata_worker_core1(void) {
     printf("metadata worker started on core1\n");
+    uint32_t metadata_read_failures = 0;
     while (true) {
         const int32_t bytes_read = read_metadata(s_metadata_buf, sizeof(s_metadata_buf));
         if (bytes_read <= 0) {
-            printf("read_metadata failed\n");
+            ++metadata_read_failures;
+            if (metadata_read_failures <= 3 || (metadata_read_failures % 100u) == 0u) {
+                printf("read_metadata failed count=%lu\n", (unsigned long)metadata_read_failures);
+            }
             sleep_ms(10);
             continue;
         }
+        metadata_read_failures = 0;
         if (is_all_zero_payload(s_metadata_buf, static_cast<uint32_t>(bytes_read))) {
             continue;
         }
@@ -670,7 +725,14 @@ static void metadata_worker_core1(void) {
                 kImx500SpiMetadataFormat,
                 &s_parsed_metadata)) {
             ++s_metadata_parse_failures;
-            printf("metadata parse failed payload=%ld\n", (long)bytes_read);
+            if (s_metadata_parse_failures <= 3 || (s_metadata_parse_failures % 100u) == 0u) {
+                printf(
+                    "metadata parse failed count=%lu payload=%ld\n",
+                    (unsigned long)s_metadata_parse_failures,
+                    (long)bytes_read
+                );
+            }
+#if IMX500_ROI_MVP_VERBOSE_LOGS
             if (s_metadata_parse_failures <= METADATA_DEBUG_FRAMES ||
                 (s_metadata_parse_failures % 30u) == 0u) {
                 dump_metadata_parse_debug(
@@ -679,6 +741,7 @@ static void metadata_worker_core1(void) {
                     "parse_metadata failed"
                 );
             }
+#endif
             continue;
         }
         s_metadata_parse_failures = 0;
@@ -691,65 +754,13 @@ static void metadata_worker_core1(void) {
                 detections
             );
             store_latest_frame(static_cast<uint32_t>(bytes_read), s_parsed_metadata, detections);
+            set_person_detect_outputs(detections.count > 0);
         }
     }
 }
 
 static const char *get_board_ip_string(void) {
     return ip4addr_ntoa(netif_ip4_addr(&cyw43_state.netif[CYW43_ITF_STA]));
-}
-
-static bool payload_matches(struct pbuf *p, const char *expected) {
-    char request[64] = {0};
-    const uint16_t copy_len = (p->tot_len < sizeof(request) - 1) ? p->tot_len : sizeof(request) - 1;
-    pbuf_copy_partial(p, request, copy_len, 0);
-    request[copy_len] = '\0';
-    return strcmp(request, expected) == 0;
-}
-
-static bool payload_starts_with(struct pbuf *p, const char *prefix) {
-    char request[80] = {0};
-    const uint16_t copy_len = (p->tot_len < sizeof(request) - 1) ? p->tot_len : sizeof(request) - 1;
-    pbuf_copy_partial(p, request, copy_len, 0);
-    request[copy_len] = '\0';
-    return strncmp(request, prefix, strlen(prefix)) == 0;
-}
-
-static uint32_t parse_frame_request_id(struct pbuf *p) {
-    char request[96] = {0};
-    const uint16_t copy_len = (p->tot_len < sizeof(request) - 1) ? p->tot_len : sizeof(request) - 1;
-    pbuf_copy_partial(p, request, copy_len, 0);
-    request[copy_len] = '\0';
-
-    const char *cursor = strstr(request, "id=");
-    if (cursor != nullptr) {
-        const uint32_t parsed = static_cast<uint32_t>(strtoul(cursor + 3, nullptr, 10));
-        if (parsed != 0) {
-            return parsed;
-        }
-    }
-
-    cursor = request + strlen(BOARD_FRAME_REQUEST);
-    while (*cursor == ' ' || *cursor == '\t') {
-        ++cursor;
-    }
-    const uint32_t parsed = static_cast<uint32_t>(strtoul(cursor, nullptr, 10));
-    return parsed != 0 ? parsed : s_next_request_id++;
-}
-
-static uint32_t parse_request_id(struct pbuf *p) {
-    char request[96] = {0};
-    const uint16_t copy_len = (p->tot_len < sizeof(request) - 1) ? p->tot_len : sizeof(request) - 1;
-    pbuf_copy_partial(p, request, copy_len, 0);
-    request[copy_len] = '\0';
-
-    const char *cursor = strstr(request, "id=");
-    if (cursor == nullptr) {
-        return 0;
-    }
-
-    const uint32_t parsed = static_cast<uint32_t>(strtoul(cursor + 3, nullptr, 10));
-    return parsed;
 }
 
 static void set_roi_config(const RelativePoint *points) {
@@ -762,102 +773,191 @@ static void set_roi_config(const RelativePoint *points) {
     mutex_exit(&s_roi_mutex);
 }
 
-static bool parse_roi_request(struct pbuf *p, RelativePoint *points) {
-    if (points == nullptr) {
+static HttpClientState *allocate_http_client_state(void) {
+    HttpClientState *state = nullptr;
+    mutex_enter_blocking(&s_http_client_mutex);
+    for (uint32_t i = 0; i < HTTP_MAX_CLIENTS; ++i) {
+        if (!s_http_clients[i].in_use) {
+            state = &s_http_clients[i];
+            memset(state, 0, sizeof(*state));
+            state->in_use = true;
+            break;
+        }
+    }
+    mutex_exit(&s_http_client_mutex);
+    return state;
+}
+
+static void release_http_client_state(HttpClientState *state) {
+    if (state == nullptr) {
+        return;
+    }
+    if (state->latest_frame_locked) {
+        mutex_exit(&s_latest_frame_mutex);
+        state->latest_frame_locked = false;
+    }
+
+    mutex_enter_blocking(&s_http_client_mutex);
+    memset(state, 0, sizeof(*state));
+    mutex_exit(&s_http_client_mutex);
+}
+
+static void free_http_client_state(HttpClientState *state) {
+    release_http_client_state(state);
+}
+
+static err_t close_http_client(struct tcp_pcb *pcb, HttpClientState *state) {
+    tcp_arg(pcb, nullptr);
+    tcp_recv(pcb, nullptr);
+    tcp_sent(pcb, nullptr);
+    tcp_poll(pcb, nullptr, 0);
+    tcp_err(pcb, nullptr);
+    free_http_client_state(state);
+
+    const err_t close_err = tcp_close(pcb);
+    if (close_err != ERR_OK) {
+        tcp_abort(pcb);
+        return ERR_ABRT;
+    }
+    return ERR_OK;
+}
+
+static bool lock_latest_jpeg_for_response(HttpClientState *state) {
+    if (state == nullptr) {
         return false;
     }
 
-    char request[220] = {0};
-    const uint16_t copy_len = (p->tot_len < sizeof(request) - 1) ? p->tot_len : sizeof(request) - 1;
-    pbuf_copy_partial(p, request, copy_len, 0);
-    request[copy_len] = '\0';
-
-    const char *cursor = strstr(request, "points=");
-    if (cursor == nullptr) {
+    if (!mutex_try_enter(&s_latest_frame_mutex, nullptr)) {
         return false;
     }
-    cursor += strlen("points=");
-
-    for (uint32_t i = 0; i < 4; ++i) {
-        char *end = nullptr;
-        const float x = strtof(cursor, &end);
-        if (end == cursor || *end != ',') {
-            return false;
-        }
-        cursor = end + 1;
-
-        const float y = strtof(cursor, &end);
-        if (end == cursor) {
-            return false;
-        }
-        points[i].x = clamp01(x);
-        points[i].y = clamp01(y);
-        cursor = end;
-
-        if (i < 3) {
-            if (*cursor != ';') {
-                return false;
-            }
-            ++cursor;
-        }
+    const bool available = s_latest_frame.valid && s_latest_frame.jpeg_len > 0;
+    if (!available) {
+        mutex_exit(&s_latest_frame_mutex);
+        return false;
     }
 
+    state->body = s_latest_frame.jpeg;
+    state->body_len = s_latest_frame.jpeg_len;
+    state->latest_frame_locked = true;
     return true;
 }
 
-static void build_status_response(char *response, size_t response_size) {
-    snprintf(
-        response,
-        response_size,
-        "IMX500_ROI_MVP_OK ip=%s port=%u uptime_ms=%lu",
-        get_board_ip_string(),
-        (unsigned int)BOARD_UDP_PORT,
-        (unsigned long)to_ms_since_boot(get_absolute_time())
+static err_t send_http_chunks(struct tcp_pcb *pcb, HttpClientState *state) {
+    if (pcb == nullptr || state == nullptr) {
+        return ERR_ARG;
+    }
+
+    while (state->header_offset < state->header_len) {
+        const uint16_t available = tcp_sndbuf(pcb);
+        if (available == 0) {
+            break;
+        }
+        const uint16_t remaining = state->header_len - state->header_offset;
+        const uint16_t chunk = std::min<uint16_t>(available, remaining);
+        const err_t err = tcp_write(
+            pcb,
+            state->header + state->header_offset,
+            chunk,
+            TCP_WRITE_FLAG_COPY
+        );
+        if (err != ERR_OK) {
+            if (err == ERR_MEM) {
+                tcp_output(pcb);
+                return ERR_OK;
+            }
+            return err;
+        }
+        state->header_offset += chunk;
+    }
+
+    while (state->header_offset >= state->header_len && state->body_offset < state->body_len) {
+        const uint16_t available = tcp_sndbuf(pcb);
+        if (available == 0) {
+            break;
+        }
+        const uint32_t remaining = state->body_len - state->body_offset;
+        const uint16_t chunk = std::min<uint32_t>(available, std::min<uint32_t>(remaining, TCP_MSS));
+        const err_t err = tcp_write(
+            pcb,
+            state->body + state->body_offset,
+            chunk,
+            TCP_WRITE_FLAG_COPY
+        );
+        if (err != ERR_OK) {
+            if (err == ERR_MEM) {
+                tcp_output(pcb);
+                return ERR_OK;
+            }
+            return err;
+        }
+        state->body_offset += chunk;
+    }
+
+    tcp_output(pcb);
+
+    if (state->header_offset >= state->header_len && state->body_offset >= state->body_len) {
+        return close_http_client(pcb, state);
+    }
+    return ERR_OK;
+}
+
+static err_t http_sent_callback(void *arg, struct tcp_pcb *pcb, uint16_t len) {
+    (void)len;
+    HttpClientState *state = static_cast<HttpClientState *>(arg);
+    if (state != nullptr) {
+        state->poll_count = 0;
+    }
+    return send_http_chunks(pcb, state);
+}
+
+static err_t http_poll_callback(void *arg, struct tcp_pcb *pcb) {
+    HttpClientState *state = static_cast<HttpClientState *>(arg);
+    if (state == nullptr) {
+        return close_http_client(pcb, state);
+    }
+
+    if (++state->poll_count > 10) {
+        return close_http_client(pcb, state);
+    }
+
+    if (state->request_handled) {
+        return send_http_chunks(pcb, state);
+    }
+    return ERR_OK;
+}
+
+static void http_error_callback(void *arg, err_t err) {
+    (void)err;
+    free_http_client_state(static_cast<HttpClientState *>(arg));
+}
+
+static bool set_http_body(HttpClientState *state, const uint8_t *body, uint32_t body_len) {
+    if (state == nullptr) {
+        return false;
+    }
+
+    if (body_len == 0) {
+        return true;
+    }
+    if (body_len > sizeof(state->inline_body)) {
+        return false;
+    }
+
+    state->body = reinterpret_cast<uint8_t *>(state->inline_body);
+    memcpy(state->body, body, body_len);
+    state->body_len = body_len;
+    return true;
+}
+
+static bool set_http_text_body(HttpClientState *state, const char *body) {
+    return set_http_body(
+        state,
+        reinterpret_cast<const uint8_t *>(body),
+        static_cast<uint32_t>(strlen(body))
     );
 }
 
-static void send_udp_packet(struct udp_pcb *pcb, const ip_addr_t *addr, uint16_t port, const void *data, size_t data_len) {
-    if (pcb == nullptr || addr == nullptr || data == nullptr || data_len == 0) {
-        return;
-    }
-
-    struct pbuf *reply = pbuf_alloc(PBUF_TRANSPORT, data_len, PBUF_RAM);
-    if (reply == nullptr) {
-        printf("UDP response allocation failed\n");
-        return;
-    }
-
-    memcpy(reply->payload, data, data_len);
-    udp_sendto(pcb, reply, addr, port);
-    pbuf_free(reply);
-}
-
-static void send_udp_response(struct udp_pcb *pcb, const ip_addr_t *addr, uint16_t port, const char *response) {
-    send_udp_packet(pcb, addr, port, response, strlen(response));
-}
-
-static void queue_frame_request(const ip_addr_t *addr, uint16_t port, uint32_t request_id) {
-    critical_section_enter_blocking(&s_backend_lock);
-    s_frame_request.pending = true;
-    s_frame_request.addr = *addr;
-    s_frame_request.port = port;
-    s_frame_request.request_id = request_id;
-    critical_section_exit(&s_backend_lock);
-}
-
-static bool take_frame_request(FrameBackendRequest *request) {
-    bool has_request = false;
-    critical_section_enter_blocking(&s_backend_lock);
-    if (s_frame_request.pending) {
-        *request = s_frame_request;
-        s_frame_request.pending = false;
-        has_request = true;
-    }
-    critical_section_exit(&s_backend_lock);
-    return has_request;
-}
-
-static size_t append_json(char *buffer, size_t buffer_size, size_t used, const char *format, ...) {
+static size_t append_http_text(char *buffer, size_t buffer_size, size_t used, const char *format, ...) {
     if (used >= buffer_size) {
         return used;
     }
@@ -866,36 +966,271 @@ static size_t append_json(char *buffer, size_t buffer_size, size_t used, const c
     va_start(args, format);
     const int written = vsnprintf(buffer + used, buffer_size - used, format, args);
     va_end(args);
-
     if (written < 0) {
         return used;
     }
+
     const size_t requested = static_cast<size_t>(written);
     return (requested >= buffer_size - used) ? (buffer_size - 1) : (used + requested);
 }
 
-static size_t build_frame_json(char *buffer,
-                               size_t buffer_size,
-                               uint32_t request_id,
-                               const LatestBackendFrame &frame,
-                               const PersonDetectionResult &detections) {
-    const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+static void prepare_http_body_response(HttpClientState *state,
+                                       const char *status,
+                                       const char *content_type,
+                                       const char *body) {
+    const size_t body_len = strlen(body);
+    if (!set_http_text_body(state, body)) {
+        status = "500 Internal Server Error";
+        content_type = "text/plain";
+        body = "Out of memory.\n";
+        set_http_text_body(state, body);
+    }
+
+    const int header_len = snprintf(
+        state->header,
+        sizeof(state->header),
+        "HTTP/1.1 %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %lu\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        status,
+        content_type,
+        (unsigned long)state->body_len
+    );
+    state->header_len = header_len > 0 ? std::min<int>(header_len, sizeof(state->header) - 1) : 0;
+}
+
+static bool query_get_float(const char *query, const char *key, float *value) {
+    if (query == nullptr || key == nullptr || value == nullptr) {
+        return false;
+    }
+
+    const size_t key_len = strlen(key);
+    const char *cursor = query;
+    while (*cursor != '\0') {
+        if ((cursor == query || cursor[-1] == '&') &&
+            strncmp(cursor, key, key_len) == 0 &&
+            cursor[key_len] == '=') {
+            char *end = nullptr;
+            const float parsed = strtof(cursor + key_len + 1, &end);
+            if (end != cursor + key_len + 1) {
+                *value = parsed;
+                return true;
+            }
+        }
+
+        cursor = strchr(cursor, '&');
+        if (cursor == nullptr) {
+            break;
+        }
+        ++cursor;
+    }
+
+    return false;
+}
+
+static bool apply_config_query(const char *query) {
+    bool changed = false;
+    float confidence = 0.0f;
+    if (query_get_float(query, "conf", &confidence)) {
+        set_person_score_threshold(confidence);
+        changed = true;
+    }
+
+    RelativePoint points[4] = {};
+    bool roi_complete = true;
+    for (uint32_t i = 0; i < 4; ++i) {
+        char key_x[4];
+        char key_y[4];
+        snprintf(key_x, sizeof(key_x), "x%lu", (unsigned long)i);
+        snprintf(key_y, sizeof(key_y), "y%lu", (unsigned long)i);
+        roi_complete = query_get_float(query, key_x, &points[i].x) &&
+                       query_get_float(query, key_y, &points[i].y) &&
+                       roi_complete;
+    }
+
+    if (roi_complete) {
+        set_roi_config(points);
+        changed = true;
+    }
+
+    return changed;
+}
+
+static void build_home_page(char *body, size_t body_size, const char *message) {
     const RoiConfig roi = copy_roi_config();
+    uint32_t frame_sequence = 0;
+    uint32_t jpeg_len = 0;
+    uint32_t detection_count = 0;
+    if (mutex_try_enter(&s_latest_frame_mutex, nullptr)) {
+        frame_sequence = s_latest_frame.sequence;
+        jpeg_len = s_latest_frame.jpeg_len;
+        detection_count = s_latest_frame.detections.count;
+        mutex_exit(&s_latest_frame_mutex);
+    }
+
+    const float threshold = get_person_score_threshold();
+    snprintf(
+        body,
+        body_size,
+        "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>IMX500 Person Detect</title>"
+        "<style>"
+        "*{box-sizing:border-box}"
+        "html,body{height:100%%}"
+        "body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;background:#101214;color:#eee;overflow:hidden}"
+        "main{height:100vh;display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:10px;padding:10px}"
+        "#viewer{position:relative;min-width:0;min-height:0;background:#202326;border:1px solid #3a3d41;display:flex;align-items:center;justify-content:center;overflow:hidden}"
+        "img{display:block;max-width:100%%;max-height:calc(100vh - 22px);width:auto;height:auto;background:#222}"
+        "#overlay{position:absolute;left:0;top:0;pointer-events:none}"
+        "aside{min-width:0;display:grid;grid-template-rows:auto auto 1fr;gap:10px}"
+        "section{padding:10px;border:1px solid #34383d;background:#181b1f}"
+        "h2{font-size:18px;margin:0 0 8px}"
+        ".stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:13px}"
+        ".stat{padding:6px;background:#22262b;border:1px solid #363b41}"
+        ".stat b{display:block;color:#8db7ff;font-weight:600}"
+        ".msg{color:#8fdb8f;font-size:13px;min-height:18px}"
+        "label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0;color:#ccc;font-size:13px}"
+        "input{width:5.6rem;background:#222;color:#eee;border:1px solid #555;padding:4px}"
+        "button{width:100%%;margin-top:8px;padding:8px 10px;background:#2b6cff;color:white;border:0}"
+        ".grid{display:grid;grid-template-columns:1fr 1fr;gap:0 8px}"
+        "@media(max-width:760px){body{overflow:auto}main{height:auto;grid-template-columns:1fr}img{max-height:none;width:100%%}aside{grid-template-rows:auto}}"
+        "</style></head><body><main>"
+        "<div id=\"viewer\"><img id=\"frame\" src=\"/frame.jpg?t=0\" alt=\"latest jpeg frame\"><canvas id=\"overlay\"></canvas></div>"
+        "<aside><section><h2>IMX500 Person Detect</h2><div class=\"stats\">"
+        "<div class=\"stat\"><b>Frame</b><span id=\"statFrame\">%lu</span></div>"
+        "<div class=\"stat\"><b>JPEG</b><span id=\"statJpeg\">%lu</span></div>"
+        "<div class=\"stat\"><b>Persons</b><span id=\"statPersons\">%lu</span></div>"
+        "<div class=\"stat\"><b>GP0/GP1</b><span id=\"statGpio\">%s</span></div>"
+        "<div class=\"stat\"><b>Conf</b><span id=\"statConf\">%.2f</span></div>"
+        "<div class=\"stat\"><b>ROI</b><span id=\"statRoi\">full</span></div>"
+        "</div><div class=\"msg\">%s</div></section>"
+        "<section><form action=\"/config\" method=\"get\">"
+        "<label>conf<input name=\"conf\" type=\"number\" min=\"0\" max=\"1\" step=\"0.01\" value=\"%.2f\"></label>"
+        "<div class=\"grid\">"
+        "<label>x0<input name=\"x0\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "<label>y0<input name=\"y0\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "<label>x1<input name=\"x1\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "<label>y1<input name=\"y1\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "<label>x2<input name=\"x2\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "<label>y2<input name=\"y2\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "<label>x3<input name=\"x3\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "<label>y3<input name=\"y3\" type=\"number\" min=\"0\" max=\"1\" step=\"0.001\" value=\"%.3f\"></label>"
+        "</div><button type=\"submit\">Apply</button></form></section></aside>"
+        "<script>"
+        "const viewer=document.getElementById('viewer');"
+        "const img=document.getElementById('frame');"
+        "const canvas=document.getElementById('overlay');"
+        "const ctx=canvas.getContext('2d');"
+        "let pending=false;"
+        "function resize(){const vr=viewer.getBoundingClientRect();const r=img.getBoundingClientRect();const w=Math.max(1,Math.round(r.width));const h=Math.max(1,Math.round(r.height));"
+        "canvas.style.left=Math.round(r.left-vr.left)+'px';canvas.style.top=Math.round(r.top-vr.top)+'px';canvas.style.width=w+'px';canvas.style.height=h+'px';"
+        "if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;}"
+        "function box(b){const w=canvas.width,h=canvas.height;const x=b[0]*w,y=b[1]*h;return[x,y,(b[2]-b[0])*w,(b[3]-b[1])*h]}"
+        "function text(id,v){const e=document.getElementById(id);if(e)e.textContent=v}"
+        "function draw(s){text('statFrame',s.sequence);text('statJpeg',s.jpeg_bytes);text('statPersons',s.person_count);text('statGpio',s.person_count>0?'high':'low');text('statConf',Number(s.threshold).toFixed(2));text('statRoi',s.roi&&s.roi.configured?'set':'off');resize();const w=canvas.width,h=canvas.height;ctx.clearRect(0,0,w,h);ctx.lineWidth=2;ctx.font='14px system-ui';"
+        "if(s.roi&&s.roi.configured){const p=s.roi.points;ctx.beginPath();ctx.moveTo(p[0][0]*w,p[0][1]*h);for(let i=1;i<p.length;i++)ctx.lineTo(p[i][0]*w,p[i][1]*h);ctx.closePath();ctx.strokeStyle='rgba(0,200,255,.95)';ctx.stroke();}"
+        "(s.detections||[]).forEach(d=>{const r=box(d.box);ctx.strokeStyle=d.roi_intersects?'#ff3b30':'#2bd66f';ctx.fillStyle=ctx.strokeStyle;ctx.strokeRect(r[0],r[1],r[2],r[3]);ctx.fillText('person '+Math.round(d.score*100)+'%%',r[0]+4,Math.max(14,r[1]-4));});}"
+        "async function loadStatus(){try{const r=await fetch('/status.json?t='+Date.now(),{cache:'no-store'});if(r.ok)draw(await r.json())}catch(e){}}"
+        "function refresh(){"
+        "if(pending)return;"
+        "pending=true;"
+        "const next=new Image();"
+        "next.onload=()=>{img.src=next.src;loadStatus();pending=false;setTimeout(refresh,%u)};"
+        "next.onerror=()=>{pending=false;setTimeout(refresh,%u)};"
+        "next.src='/frame.jpg?t='+Date.now();"
+        "}"
+        "window.addEventListener('resize',loadStatus);"
+        "setTimeout(loadStatus,500);"
+        "setTimeout(refresh,200);"
+        "</script></main></body></html>",
+        (unsigned long)frame_sequence,
+        (unsigned long)jpeg_len,
+        (unsigned long)detection_count,
+        detection_count > 0 ? "high" : "low",
+        (double)threshold,
+        message != nullptr ? message : "",
+        (double)threshold,
+        (double)roi.points[0].x,
+        (double)roi.points[0].y,
+        (double)roi.points[1].x,
+        (double)roi.points[1].y,
+        (double)roi.points[2].x,
+        (double)roi.points[2].y,
+        (double)roi.points[3].x,
+        (double)roi.points[3].y,
+        (unsigned)HTTP_FRAME_REFRESH_MS,
+        (unsigned)HTTP_FRAME_RETRY_MS
+    );
+}
+
+static bool prepare_http_home_response(HttpClientState *state, const char *message) {
+    if (state == nullptr) {
+        return false;
+    }
+
+    build_home_page(state->inline_body, sizeof(state->inline_body), message);
+    state->body = reinterpret_cast<uint8_t *>(state->inline_body);
+    state->body_len = static_cast<uint32_t>(strlen(state->inline_body));
+
+    const int header_len = snprintf(
+        state->header,
+        sizeof(state->header),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Content-Length: %lu\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        (unsigned long)state->body_len
+    );
+    state->header_len = header_len > 0 ? std::min<int>(header_len, sizeof(state->header) - 1) : 0;
+    return state->header_len > 0;
+}
+
+static bool prepare_http_not_found_response(HttpClientState *state) {
+    if (state == nullptr) {
+        return false;
+    }
+    prepare_http_body_response(state, "404 Not Found", "text/plain", "Not found.\n");
+    return state->header_len > 0;
+}
+
+static size_t build_status_json(char *body, size_t body_size) {
+    const RoiConfig roi = copy_roi_config();
+    const float threshold = get_person_score_threshold();
+
+    bool valid = false;
+    uint32_t sequence = 0;
+    uint8_t frame_id = 0;
+    uint32_t jpeg_len = 0;
+    PersonDetectionResult detections = {};
+    if (mutex_try_enter(&s_latest_frame_mutex, nullptr)) {
+        valid = s_latest_frame.valid;
+        sequence = s_latest_frame.sequence;
+        frame_id = s_latest_frame.frame_id;
+        jpeg_len = s_latest_frame.jpeg_len;
+        detections = s_latest_frame.detections;
+        mutex_exit(&s_latest_frame_mutex);
+    }
+
     size_t used = 0;
-    used = append_json(
-        buffer,
-        buffer_size,
+    used = append_http_text(
+        body,
+        body_size,
         used,
-        "{\"type\":\"frame\",\"id\":%lu,\"frame\":%u,\"uptime_ms\":%lu,"
-        "\"payload_bytes\":%lu,\"mode\":%u,\"image\":{\"format\":\"jpeg\",\"bytes\":%lu},"
+        "{\"valid\":%s,\"sequence\":%lu,\"frame\":%u,\"jpeg_bytes\":%lu,"
+        "\"person_count\":%lu,\"threshold\":%.3f,"
         "\"roi\":{\"configured\":%s,\"points\":[[%.6f,%.6f],[%.6f,%.6f],[%.6f,%.6f],[%.6f,%.6f]]},"
         "\"detections\":[",
-        (unsigned long)request_id,
-        (unsigned)frame.frame_id,
-        (unsigned long)now_ms,
-        (unsigned long)frame.payload_size,
-        (unsigned)kImx500SpiMetadataFormat,
-        (unsigned long)frame.jpeg_len,
+        valid ? "true" : "false",
+        (unsigned long)sequence,
+        (unsigned)frame_id,
+        (unsigned long)jpeg_len,
+        (unsigned long)detections.count,
+        (double)threshold,
         roi.configured ? "true" : "false",
         (double)roi.points[0].x,
         (double)roi.points[0].y,
@@ -909,13 +1244,12 @@ static size_t build_frame_json(char *buffer,
 
     for (uint32_t i = 0; i < detections.count; ++i) {
         const PersonDetection &item = detections.items[i];
-        used = append_json(
-            buffer,
-            buffer_size,
+        used = append_http_text(
+            body,
+            body_size,
             used,
-            "%s{\"class_id\":%d,\"label\":\"person\",\"score\":%.4f,\"box\":[%.6f,%.6f,%.6f,%.6f],\"roi_intersects\":%s}",
-            (i == 0) ? "" : ",",
-            item.class_id,
+            "%s{\"score\":%.4f,\"box\":[%.6f,%.6f,%.6f,%.6f],\"roi_intersects\":%s}",
+            i == 0 ? "" : ",",
             (double)item.score,
             (double)item.x1,
             (double)item.y1,
@@ -925,214 +1259,195 @@ static size_t build_frame_json(char *buffer,
         );
     }
 
-    used = append_json(buffer, buffer_size, used, "]}");
+    used = append_http_text(body, body_size, used, "]}");
     return used;
 }
 
-static bool latest_frame_available(void) {
-    bool available = false;
-    mutex_enter_blocking(&s_latest_frame_mutex);
-    available = s_latest_frame.valid;
-    mutex_exit(&s_latest_frame_mutex);
-    return available;
+static bool prepare_http_status_response(HttpClientState *state) {
+    if (state == nullptr) {
+        return false;
+    }
+
+    state->body_len = static_cast<uint32_t>(build_status_json(state->inline_body, HTTP_JSON_BYTES));
+    state->body = reinterpret_cast<uint8_t *>(state->inline_body);
+
+    const int header_len = snprintf(
+        state->header,
+        sizeof(state->header),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %lu\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        (unsigned long)state->body_len
+    );
+    state->header_len = header_len > 0 ? std::min<int>(header_len, sizeof(state->header) - 1) : 0;
+    return state->header_len > 0;
 }
 
-static void send_frame_response_if_pending(void) {
-    if (!latest_frame_available()) {
+static bool prepare_http_jpeg_response(HttpClientState *state) {
+    if (state == nullptr) {
+        return false;
+    }
+
+    if (!lock_latest_jpeg_for_response(state)) {
+        prepare_http_body_response(state, "503 Service Unavailable", "text/plain", "No JPEG frame available yet.\n");
+        return true;
+    }
+
+    const int header_len = snprintf(
+        state->header,
+        sizeof(state->header),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: image/jpeg\r\n"
+        "Content-Length: %lu\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        (unsigned long)state->body_len
+    );
+    state->header_len = header_len > 0 ? std::min<int>(header_len, sizeof(state->header) - 1) : 0;
+    return state->header_len > 0;
+}
+
+static void parse_http_request_uri(struct pbuf *p, char *path, size_t path_size, char *query, size_t query_size) {
+    if (path == nullptr || query == nullptr || path_size == 0 || query_size == 0) {
         return;
     }
+    path[0] = '\0';
+    query[0] = '\0';
 
-    FrameBackendRequest request = {};
-    if (!take_frame_request(&request)) {
+    char request[256] = {};
+    const uint16_t copy_len = (p->tot_len < sizeof(request) - 1) ? p->tot_len : sizeof(request) - 1;
+    pbuf_copy_partial(p, request, copy_len, 0);
+    request[copy_len] = '\0';
+
+    char *method_end = strchr(request, ' ');
+    if (method_end == nullptr) {
+        snprintf(path, path_size, "/");
         return;
     }
+    char *uri = method_end + 1;
+    char *uri_end = strchr(uri, ' ');
+    if (uri_end == nullptr) {
+        snprintf(path, path_size, "/");
+        return;
+    }
+    *uri_end = '\0';
 
-    mutex_enter_blocking(&s_latest_frame_mutex);
-
-    char json[BACKEND_JSON_BYTES] = {};
-    const size_t json_len = build_frame_json(
-        json,
-        sizeof(json),
-        request.request_id,
-        s_latest_frame,
-        s_latest_frame.detections
-    );
-
-    char header[BACKEND_HEADER_BYTES] = {};
-    const uint32_t jpeg_len = s_latest_frame.jpeg_len;
-    const uint32_t detection_count = s_latest_frame.detections.count;
-    const uint32_t chunk_count = (jpeg_len + BACKEND_UDP_CHUNK_BYTES - 1u) / BACKEND_UDP_CHUNK_BYTES;
-
-    cyw43_arch_lwip_begin();
-    int header_len = snprintf(
-        header,
-        sizeof(header),
-        "IMX500_ROI_MVP_FRAME_JSON id=%lu jpeg_len=%lu chunks=%lu json_len=%lu\n",
-        (unsigned long)request.request_id,
-        (unsigned long)jpeg_len,
-        (unsigned long)chunk_count,
-        (unsigned long)json_len
-    );
-    if (header_len > 0 && static_cast<size_t>(header_len) + json_len <= sizeof(header) + sizeof(json)) {
-        memcpy(s_udp_frame_packet, header, static_cast<size_t>(header_len));
-        memcpy(s_udp_frame_packet + header_len, json, json_len);
-        send_udp_packet(s_udp_pcb, &request.addr, request.port, s_udp_frame_packet, static_cast<size_t>(header_len) + json_len);
+    char *query_start = strchr(uri, '?');
+    if (query_start != nullptr) {
+        *query_start = '\0';
+        ++query_start;
+        snprintf(query, query_size, "%s", query_start);
     }
 
-    for (uint32_t chunk_index = 0; chunk_index < chunk_count; ++chunk_index) {
-        const uint32_t offset = chunk_index * BACKEND_UDP_CHUNK_BYTES;
-        const uint32_t chunk_len = std::min<uint32_t>(BACKEND_UDP_CHUNK_BYTES, jpeg_len - offset);
-        header_len = snprintf(
-            header,
-            sizeof(header),
-            "IMX500_ROI_MVP_FRAME_JPEG id=%lu index=%lu chunks=%lu offset=%lu len=%lu\n",
-            (unsigned long)request.request_id,
-            (unsigned long)chunk_index,
-            (unsigned long)chunk_count,
-            (unsigned long)offset,
-            (unsigned long)chunk_len
-        );
-        if (header_len <= 0 || static_cast<size_t>(header_len) + chunk_len > sizeof(header) + BACKEND_UDP_CHUNK_BYTES) {
-            continue;
+    snprintf(path, path_size, "%s", uri[0] != '\0' ? uri : "/");
+}
+
+static bool prepare_http_response_for_request(HttpClientState *state, const char *path, const char *query) {
+    if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
+        return prepare_http_home_response(state, "");
+    }
+    if (strcmp(path, "/frame.jpg") == 0 || strcmp(path, "/frame.jpeg") == 0) {
+        return prepare_http_jpeg_response(state);
+    }
+    if (strcmp(path, "/status.json") == 0) {
+        return prepare_http_status_response(state);
+    }
+    if (strcmp(path, "/config") == 0) {
+        const bool changed = apply_config_query(query);
+        return prepare_http_home_response(state, changed ? "Config applied." : "No config value changed.");
+    }
+    return prepare_http_not_found_response(state);
+}
+
+static err_t http_recv_callback(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
+    HttpClientState *state = static_cast<HttpClientState *>(arg);
+    if (err != ERR_OK) {
+        if (p != nullptr) {
+            pbuf_free(p);
         }
-
-        memcpy(s_udp_frame_packet, header, static_cast<size_t>(header_len));
-        memcpy(s_udp_frame_packet + header_len, s_latest_frame.jpeg + offset, chunk_len);
-        send_udp_packet(s_udp_pcb, &request.addr, request.port, s_udp_frame_packet, static_cast<size_t>(header_len) + chunk_len);
+        return close_http_client(pcb, state);
     }
-
-    header_len = snprintf(
-        header,
-        sizeof(header),
-        "IMX500_ROI_MVP_FRAME_END id=%lu\n",
-        (unsigned long)request.request_id
-    );
-    if (header_len > 0) {
-        send_udp_packet(s_udp_pcb, &request.addr, request.port, header, static_cast<size_t>(header_len));
-    }
-    cyw43_arch_lwip_end();
-    mutex_exit(&s_latest_frame_mutex);
-
-    printf("backend frame response id=%lu detections=%lu jpeg=%lu chunks=%lu\n",
-           (unsigned long)request.request_id,
-           (unsigned long)detection_count,
-           (unsigned long)jpeg_len,
-           (unsigned long)chunk_count);
-}
-
-static void udp_recv_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, uint16_t port) {
-    (void)arg;
 
     if (p == nullptr) {
-        return;
+        return close_http_client(pcb, state);
     }
 
-    if (payload_matches(p, BOARD_DISCOVERY_REQUEST) || payload_matches(p, BOARD_PING_REQUEST)) {
-        char response[128];
-        build_status_response(response, sizeof(response));
-        send_udp_response(pcb, addr, port, response);
-    } else if (payload_starts_with(p, BOARD_FRAME_REQUEST)) {
-        const uint32_t request_id = parse_frame_request_id(p);
-        queue_frame_request(addr, port, request_id);
-        char response[96];
-        snprintf(response, sizeof(response), "IMX500_ROI_MVP_FRAME_PENDING id=%lu", (unsigned long)request_id);
-        send_udp_response(pcb, addr, port, response);
-    } else if (payload_starts_with(p, BOARD_SET_ROI_REQUEST)) {
-        const uint32_t request_id = parse_request_id(p);
-        RelativePoint points[4] = {};
-        char response[128];
-        if (parse_roi_request(p, points)) {
-            set_roi_config(points);
-            snprintf(response, sizeof(response), "IMX500_ROI_MVP_SET_ROI_OK id=%lu", (unsigned long)request_id);
-            printf("roi configured: (%.3f,%.3f) (%.3f,%.3f) (%.3f,%.3f) (%.3f,%.3f)\n",
-                   (double)points[0].x,
-                   (double)points[0].y,
-                   (double)points[1].x,
-                   (double)points[1].y,
-                   (double)points[2].x,
-                   (double)points[2].y,
-                   (double)points[3].x,
-                   (double)points[3].y);
-        } else {
-            snprintf(response, sizeof(response), "IMX500_ROI_MVP_SET_ROI_ERR id=%lu", (unsigned long)request_id);
-        }
-        for (uint32_t i = 0; i < 3; ++i) {
-            send_udp_response(pcb, addr, port, response);
-        }
-    }
-
+    char path[64] = {};
+    char query[192] = {};
+    parse_http_request_uri(p, path, sizeof(path), query, sizeof(query));
+    tcp_recved(pcb, p->tot_len);
     pbuf_free(p);
+
+    if (state == nullptr || state->request_handled) {
+        return ERR_OK;
+    }
+
+    state->request_handled = true;
+    if (!prepare_http_response_for_request(state, path, query)) {
+        return close_http_client(pcb, state);
+    }
+
+    tcp_arg(pcb, state);
+    tcp_sent(pcb, http_sent_callback);
+    tcp_err(pcb, http_error_callback);
+    return send_http_chunks(pcb, state);
 }
 
-static bool start_udp_control_server(void) {
+static err_t http_accept_callback(void *arg, struct tcp_pcb *new_pcb, err_t err) {
+    (void)arg;
+    if (err != ERR_OK || new_pcb == nullptr) {
+        return ERR_VAL;
+    }
+
+    HttpClientState *state = allocate_http_client_state();
+    if (state == nullptr) {
+        tcp_abort(new_pcb);
+        return ERR_ABRT;
+    }
+
+    tcp_arg(new_pcb, state);
+    tcp_recv(new_pcb, http_recv_callback);
+    tcp_err(new_pcb, http_error_callback);
+    tcp_poll(new_pcb, http_poll_callback, 4);
+    tcp_nagle_disable(new_pcb);
+    return ERR_OK;
+}
+
+static bool start_http_jpeg_server(void) {
     cyw43_arch_lwip_begin();
 
-    s_udp_pcb = udp_new_ip_type(IPADDR_TYPE_V4);
-    if (s_udp_pcb == nullptr) {
+    s_http_pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+    if (s_http_pcb == nullptr) {
         cyw43_arch_lwip_end();
-        printf("udp_new_ip_type() failed\n");
+        printf("tcp_new_ip_type() failed\n");
         return false;
     }
-    ip_set_option(s_udp_pcb, SOF_BROADCAST);
 
-    const err_t bind_err = udp_bind(s_udp_pcb, IP_ADDR_ANY, BOARD_UDP_PORT);
+    const err_t bind_err = tcp_bind(s_http_pcb, IP_ADDR_ANY, HTTP_SERVER_PORT);
     if (bind_err != ERR_OK) {
-        udp_remove(s_udp_pcb);
-        s_udp_pcb = nullptr;
+        tcp_close(s_http_pcb);
+        s_http_pcb = nullptr;
         cyw43_arch_lwip_end();
-        printf("udp_bind() failed, err=%d\n", bind_err);
+        printf("tcp_bind() failed, err=%d\n", bind_err);
         return false;
     }
 
-    udp_recv(s_udp_pcb, udp_recv_callback, nullptr);
-    printf("UDP control server listening on %s:%u\n", get_board_ip_string(), (unsigned int)BOARD_UDP_PORT);
+    s_http_pcb = tcp_listen_with_backlog(s_http_pcb, 2);
+    if (s_http_pcb == nullptr) {
+        cyw43_arch_lwip_end();
+        printf("tcp_listen_with_backlog() failed\n");
+        return false;
+    }
+
+    tcp_accept(s_http_pcb, http_accept_callback);
+    printf("HTTP JPEG server listening on http://%s/\n", get_board_ip_string());
 
     cyw43_arch_lwip_end();
     return true;
-}
-
-static bool get_subnet_broadcast_addr(ip_addr_t *addr) {
-    if (addr == nullptr) {
-        return false;
-    }
-
-    struct netif *netif = &cyw43_state.netif[CYW43_ITF_STA];
-    const ip4_addr_t *ip = netif_ip4_addr(netif);
-    const ip4_addr_t *netmask = netif_ip4_netmask(netif);
-    if (ip4_addr_isany_val(*ip) || ip4_addr_isany_val(*netmask)) {
-        return false;
-    }
-
-    ip4_addr_t broadcast_ip4;
-    ip4_addr_set_u32(&broadcast_ip4, ip4_addr_get_u32(ip) | ~ip4_addr_get_u32(netmask));
-    IP_ADDR4(addr,
-             ip4_addr1(&broadcast_ip4),
-             ip4_addr2(&broadcast_ip4),
-             ip4_addr3(&broadcast_ip4),
-             ip4_addr4(&broadcast_ip4));
-    return true;
-}
-
-static void announce_board_if_due(void) {
-    const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    if (s_udp_pcb == nullptr || now_ms - s_last_announce_ms < BOARD_ANNOUNCE_INTERVAL_MS) {
-        return;
-    }
-    s_last_announce_ms = now_ms;
-
-    cyw43_arch_lwip_begin();
-    char response[128];
-    ip_addr_t broadcast_addr;
-    IP_ADDR4(&broadcast_addr, 255, 255, 255, 255);
-    build_status_response(response, sizeof(response));
-    send_udp_response(s_udp_pcb, &broadcast_addr, BOARD_UDP_PORT, response);
-
-    ip_addr_t subnet_broadcast_addr;
-    if (get_subnet_broadcast_addr(&subnet_broadcast_addr) &&
-        !ip_addr_cmp(&broadcast_addr, &subnet_broadcast_addr)) {
-        send_udp_response(s_udp_pcb, &subnet_broadcast_addr, BOARD_UDP_PORT, response);
-    }
-    cyw43_arch_lwip_end();
 }
 
 static bool connect_wifi(void) {
@@ -1166,9 +1481,11 @@ static bool connect_wifi(void) {
 
 int main() {
     stdio_init_all();
-    critical_section_init(&s_backend_lock);
+    init_person_detect_outputs();
     mutex_init(&s_latest_frame_mutex);
+    mutex_init(&s_config_mutex);
     mutex_init(&s_roi_mutex);
+    mutex_init(&s_http_client_mutex);
     printf("booting imx500 person detect ROI MVP\n");
 
     if (!connect_wifi()) {
@@ -1185,12 +1502,11 @@ int main() {
     }
 
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-    start_udp_control_server();
+    start_http_jpeg_server();
 
     if (!init_imx500_streaming()) {
         while (true) {
             service_wifi_connected_led();
-            announce_board_if_due();
             sleep_ms(5);
         }
     }
@@ -1198,8 +1514,6 @@ int main() {
     multicore_launch_core1(metadata_worker_core1);
     while (true) {
         service_wifi_connected_led();
-        announce_board_if_due();
-        send_frame_response_if_pending();
         sleep_ms(5);
     }
 }

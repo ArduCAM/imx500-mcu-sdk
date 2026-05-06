@@ -26,7 +26,7 @@ endif()
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
-include(pico_sdk_import.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../integration_test/pico_sdk_import.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_mcu_sdk.cmake)
 
