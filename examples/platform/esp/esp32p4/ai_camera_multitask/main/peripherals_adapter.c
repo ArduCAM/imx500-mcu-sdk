@@ -166,6 +166,7 @@ static esp_err_t ensure_spi_device(void)
 
     ESP_RETURN_ON_ERROR(spi_bus_initialize(IMX500_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO), TAG, "failed to init spi bus");
     ESP_RETURN_ON_ERROR(spi_bus_add_device(IMX500_SPI_HOST, &devcfg, &s_imx500_spi_handle), TAG, "failed to add spi device");
+    ESP_LOGI(TAG, "SPI initialized at %d Hz", s_imx500_spi_clock_hz);
 
     size_t queried_max_read_chunk_len = 0;
     ESP_RETURN_ON_ERROR(spi_bus_get_max_transaction_len(IMX500_SPI_HOST, &queried_max_read_chunk_len),
