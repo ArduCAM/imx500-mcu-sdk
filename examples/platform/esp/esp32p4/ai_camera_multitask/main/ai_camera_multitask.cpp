@@ -598,10 +598,9 @@ static bool allocate_spi_thumbnail_buffers()
     }
 
     if (!g_jpeg_decoder) {
-        jpeg_decode_engine_cfg_t cfg = {
-            .intr_priority = 0,
-            .timeout_ms = 2000,
-        };
+        jpeg_decode_engine_cfg_t cfg = {};
+        cfg.intr_priority = 0;
+        cfg.timeout_ms = 2000;
         if (jpeg_new_decoder_engine(&cfg, &g_jpeg_decoder) != ESP_OK) {
             ESP_LOGE(TAG, "failed to create JPEG decoder");
             return false;
