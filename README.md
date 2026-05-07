@@ -63,6 +63,18 @@ Add these source groups to your target:
 - `${IMX500_MCU_SDK_SRC_FILES}`
 - `${IMX500_FIRMWARE_CPP_FILES}`
 
+Apply the SDK compile-time configuration to your target:
+```cmake
+imx500_mcu_sdk_apply_config(your_target)
+```
+
+The SDK defaults to `1024x600` MIPI output. To select another supported
+resolution, configure CMake with one of `1920x1080`, `1600x1200`,
+`1280x720`, or `640x480`:
+```bash
+cmake -S . -B build -DIMX500_MCU_SDK_SENSOR_MIPI_RESOLUTION=1280x720
+```
+
 Include directories typically needed:
 - SDK root
 - `imx500_firmware_cpp/`

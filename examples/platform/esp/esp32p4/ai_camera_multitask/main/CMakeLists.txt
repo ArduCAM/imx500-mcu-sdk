@@ -116,6 +116,7 @@ idf_component_register(SRCS ${srcs}
 
 if(AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK=1)
+    imx500_mcu_sdk_apply_config(${COMPONENT_LIB})
 
     if(AI_CAMERA_MULTITASK_BOOT_MODE STREQUAL "DIRECT")
         target_compile_definitions(${COMPONENT_LIB} PRIVATE

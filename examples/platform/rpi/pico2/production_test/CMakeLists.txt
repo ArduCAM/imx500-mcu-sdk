@@ -59,6 +59,8 @@ target_include_directories(imx500_production_test PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 
+imx500_mcu_sdk_apply_config(imx500_production_test)
+
 if(PRODUCTION_TEST_BOOT_TRIGGER_MODE STREQUAL "ON")
     target_compile_definitions(imx500_production_test PRIVATE
         PRODUCTION_TEST_BOOT_TRIGGER_MODE=1

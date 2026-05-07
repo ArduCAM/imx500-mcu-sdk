@@ -62,6 +62,8 @@ target_include_directories(spi_receive_integration_test PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 
+imx500_mcu_sdk_apply_config(spi_receive_integration_test)
+
 if(INTEGRATION_TEST_BOOT_MODE STREQUAL "DIRECT")
     target_compile_definitions(spi_receive_integration_test PRIVATE
         INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_DIRECT

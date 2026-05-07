@@ -94,9 +94,9 @@
 #define IMX500_COMMAND_SET_FORMAT_MIPI_DATA_NONE                                        (IMX500_COMMAND_BASE | 75)
 #define SENSOR_MIPI_COMMON_RAW10_2LANES                                                 (IMX500_COMMAND_BASE | 160)
 #define SENSOR_MIPI_1024x600_2LANES                                                     (IMX500_COMMAND_BASE | 161)
-// #define SENSOR_MIPI_1920x1080_2LANES                                                    (IMX500_COMMAND_BASE | 162)
-// #define SENSOR_MIPI_1600x1200_2LANES                                                    (IMX500_COMMAND_BASE | 163)
-// #define SENSOR_MIPI_1280x720_2LANES                                                     (IMX500_COMMAND_BASE | 164)
-// #define SENSOR_MIPI_640x480_2LANES                                                      (IMX500_COMMAND_BASE | 165)
+#define SENSOR_MIPI_1920x1080_2LANES                                                    (IMX500_COMMAND_BASE | 162)
+#define SENSOR_MIPI_1600x1200_2LANES                                                    (IMX500_COMMAND_BASE | 163)
+#define SENSOR_MIPI_1280x720_2LANES                                                     (IMX500_COMMAND_BASE | 164)
+#define SENSOR_MIPI_640x480_2LANES                                                      (IMX500_COMMAND_BASE | 165)
 
 #endif  // AI_REGS_H_
