@@ -204,6 +204,10 @@ struct OverlayRenderTarget {
     int y = 0;
     uint32_t width = 0;
     uint32_t height = 0;
+    float source_crop_x = 0.0f;
+    float source_crop_y = 0.0f;
+    float source_crop_width = 1.0f;
+    float source_crop_height = 1.0f;
 };
 
 SharedOverlayState g_overlay_state = {};
@@ -861,6 +865,7 @@ static int thumbnail_origin_y(uint32_t frame_h, const LocalOverlaySnapshot &snap
 
 static bool get_ai_overlay_target(uint32_t frame_w, uint32_t frame_h,
                                   const LocalOverlaySnapshot &snapshot,
+                                  const ai_camera_lcd_compose_info_t *compose_info,
                                   OverlayRenderTarget *target)
 {
     if (target == nullptr || frame_w == 0 || frame_h == 0) {
@@ -868,6 +873,7 @@ static bool get_ai_overlay_target(uint32_t frame_w, uint32_t frame_h,
     }
 
 #if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
+    (void)compose_info;
     if (!snapshot.thumbnail_ready || snapshot.thumb_width == 0 || snapshot.thumb_height == 0) {
         return false;
     }
@@ -881,18 +887,39 @@ static bool get_ai_overlay_target(uint32_t frame_w, uint32_t frame_h,
     target->y = 0;
     target->width = frame_w;
     target->height = frame_h;
+    if (compose_info != nullptr &&
+        compose_info->input_full_width > 0 && compose_info->input_full_height > 0 &&
+        compose_info->input_width > 0 && compose_info->input_height > 0) {
+        const float full_w = static_cast<float>(compose_info->input_full_width);
+        const float full_h = static_cast<float>(compose_info->input_full_height);
+        if (full_w > 0.0f && full_h > 0.0f) {
+            target->source_crop_x = static_cast<float>(compose_info->input_offset_x) / full_w;
+            target->source_crop_y = static_cast<float>(compose_info->input_offset_y) / full_h;
+            target->source_crop_width = static_cast<float>(compose_info->input_width) / full_w;
+            target->source_crop_height = static_cast<float>(compose_info->input_height) / full_h;
+        }
+    }
 #endif
 
     return target->width > 0 && target->height > 0;
 }
 
-static int map_overlay_coord(float value, float source_extent, int target_origin, uint32_t target_extent)
+static int map_overlay_coord_with_crop(float value,
+                                       float source_extent,
+                                       int target_origin,
+                                       uint32_t target_extent,
+                                       float crop_origin_ratio,
+                                       float crop_extent_ratio)
 {
-    if (source_extent <= 0.0f || target_extent == 0) {
+    if (source_extent <= 0.0f || target_extent == 0 || crop_extent_ratio <= 0.0f) {
         return target_origin;
     }
-    const float clamped = std::clamp(value, 0.0f, source_extent);
-    const float scaled = clamped * static_cast<float>(target_extent - 1u) / source_extent;
+
+    const float crop_origin = source_extent * crop_origin_ratio;
+    const float crop_extent = source_extent * crop_extent_ratio;
+    const float crop_end = crop_origin + crop_extent;
+    const float clamped = std::clamp(value, crop_origin, crop_end);
+    const float scaled = (clamped - crop_origin) * static_cast<float>(target_extent - 1u) / crop_extent;
     return target_origin + static_cast<int>(std::lround(scaled));
 }
 
@@ -970,12 +997,26 @@ static void render_detection_overlay(uint16_t *frame, uint32_t frame_w, uint32_t
     const int origin_y = target.y;
     const float src_w = static_cast<float>(std::max<uint16_t>(1, snapshot.detection.source_width));
     const float src_h = static_cast<float>(std::max<uint16_t>(1, snapshot.detection.source_height));
+    const float crop_x1 = src_w * target.source_crop_x;
+    const float crop_y1 = src_h * target.source_crop_y;
+    const float crop_x2 = crop_x1 + src_w * target.source_crop_width;
+    const float crop_y2 = crop_y1 + src_h * target.source_crop_height;
     for (uint32_t i = 0; i < snapshot.detection.count; ++i) {
         const Imx500DetectionOverlayItem &item = snapshot.detection.items[i];
-        int x1 = map_overlay_coord(item.x1, src_w, origin_x, target.width);
-        int y1 = map_overlay_coord(item.y1, src_h, origin_y, target.height);
-        int x2 = map_overlay_coord(item.x2, src_w, origin_x, target.width);
-        int y2 = map_overlay_coord(item.y2, src_h, origin_y, target.height);
+        if (std::max(item.x1, item.x2) < crop_x1 ||
+            std::min(item.x1, item.x2) > crop_x2 ||
+            std::max(item.y1, item.y2) < crop_y1 ||
+            std::min(item.y1, item.y2) > crop_y2) {
+            continue;
+        }
+        int x1 = map_overlay_coord_with_crop(item.x1, src_w, origin_x, target.width,
+                                             target.source_crop_x, target.source_crop_width);
+        int y1 = map_overlay_coord_with_crop(item.y1, src_h, origin_y, target.height,
+                                             target.source_crop_y, target.source_crop_height);
+        int x2 = map_overlay_coord_with_crop(item.x2, src_w, origin_x, target.width,
+                                             target.source_crop_x, target.source_crop_width);
+        int y2 = map_overlay_coord_with_crop(item.y2, src_h, origin_y, target.height,
+                                             target.source_crop_y, target.source_crop_height);
         if (x1 > x2) {
             std::swap(x1, x2);
         }
@@ -1004,22 +1045,35 @@ static void render_segmentation_overlay(uint16_t *frame, uint32_t frame_w, uint3
     if (!snapshot.segmentation.ready || !g_segmentation_mask_snapshot) {
         return;
     }
-    for (uint32_t y = 0; y < snapshot.segmentation.height; ++y) {
-        const int dst_y1 = target.y + static_cast<int>((static_cast<uint64_t>(y) * target.height) / snapshot.segmentation.height);
-        const int dst_y2 = target.y + static_cast<int>((static_cast<uint64_t>(y + 1u) * target.height) / snapshot.segmentation.height) - 1;
-        for (uint32_t x = 0; x < snapshot.segmentation.width; ++x) {
-            const uint8_t class_id = g_segmentation_mask_snapshot[y * snapshot.segmentation.width + x];
+    if (snapshot.segmentation.width == 0 || snapshot.segmentation.height == 0) {
+        return;
+    }
+
+    const float crop_x = static_cast<float>(snapshot.segmentation.width) * target.source_crop_x;
+    const float crop_y = static_cast<float>(snapshot.segmentation.height) * target.source_crop_y;
+    const float crop_w = std::max(1.0f, static_cast<float>(snapshot.segmentation.width) * target.source_crop_width);
+    const float crop_h = std::max(1.0f, static_cast<float>(snapshot.segmentation.height) * target.source_crop_height);
+    for (uint32_t y = 0; y < target.height; ++y) {
+        const uint32_t src_y = std::min<uint32_t>(
+            snapshot.segmentation.height - 1u,
+            static_cast<uint32_t>(crop_y + (static_cast<float>(y) * crop_h) / static_cast<float>(target.height)));
+        const int dst_y = target.y + static_cast<int>(y);
+        if (dst_y < 0 || dst_y >= static_cast<int>(frame_h)) {
+            continue;
+        }
+        for (uint32_t x = 0; x < target.width; ++x) {
+            const uint32_t src_x = std::min<uint32_t>(
+                snapshot.segmentation.width - 1u,
+                static_cast<uint32_t>(crop_x + (static_cast<float>(x) * crop_w) / static_cast<float>(target.width)));
+            const uint8_t class_id = g_segmentation_mask_snapshot[src_y * snapshot.segmentation.width + src_x];
             if (class_id == 0) {
                 continue;
             }
             const uint8_t *colour = kSegmentationColours[class_id % (sizeof(kSegmentationColours) / sizeof(kSegmentationColours[0]))];
-            const int dst_x1 = target.x + static_cast<int>((static_cast<uint64_t>(x) * target.width) / snapshot.segmentation.width);
-            const int dst_x2 = target.x + static_cast<int>((static_cast<uint64_t>(x + 1u) * target.width) / snapshot.segmentation.width) - 1;
-            for (int py = std::max(0, dst_y1); py <= std::min<int>(static_cast<int>(frame_h) - 1, dst_y2); ++py) {
-                for (int px = std::max(0, dst_x1); px <= std::min<int>(static_cast<int>(frame_w) - 1, dst_x2); ++px) {
-                    uint16_t &pixel = frame[py * frame_w + px];
-                    pixel = imx500_blend_rgb565(pixel, colour[0], colour[1], colour[2], kSegmentationAlpha);
-                }
+            const int dst_x = target.x + static_cast<int>(x);
+            if (dst_x >= 0 && dst_x < static_cast<int>(frame_w)) {
+                uint16_t &pixel = frame[dst_y * frame_w + dst_x];
+                pixel = imx500_blend_rgb565(pixel, colour[0], colour[1], colour[2], kSegmentationAlpha);
             }
         }
     }
@@ -1036,10 +1090,14 @@ static void render_pose_overlay(uint16_t *frame, uint32_t frame_w, uint32_t fram
 
     for (uint32_t i = 0; i < snapshot.hrnet.pose_count; ++i) {
         const HigherhrnetPose &pose = snapshot.hrnet.poses[i];
-        int x1 = map_overlay_coord(pose.x1, src_w, origin_x, target.width);
-        int y1 = map_overlay_coord(pose.y1, src_h, origin_y, target.height);
-        int x2 = map_overlay_coord(pose.x2, src_w, origin_x, target.width);
-        int y2 = map_overlay_coord(pose.y2, src_h, origin_y, target.height);
+        int x1 = map_overlay_coord_with_crop(pose.x1, src_w, origin_x, target.width,
+                                             target.source_crop_x, target.source_crop_width);
+        int y1 = map_overlay_coord_with_crop(pose.y1, src_h, origin_y, target.height,
+                                             target.source_crop_y, target.source_crop_height);
+        int x2 = map_overlay_coord_with_crop(pose.x2, src_w, origin_x, target.width,
+                                             target.source_crop_x, target.source_crop_width);
+        int y2 = map_overlay_coord_with_crop(pose.y2, src_h, origin_y, target.height,
+                                             target.source_crop_y, target.source_crop_height);
         if (x1 > x2) {
             std::swap(x1, x2);
         }
@@ -1052,10 +1110,14 @@ static void render_pose_overlay(uint16_t *frame, uint32_t frame_w, uint32_t fram
             const HigherhrnetKeypoint &a = pose.keypoints[joint[0]];
             const HigherhrnetKeypoint &b = pose.keypoints[joint[1]];
             if (a.score > 0.05f && b.score > 0.05f) {
-                int ax = map_overlay_coord(a.x, src_w, origin_x, target.width);
-                int ay = map_overlay_coord(a.y, src_h, origin_y, target.height);
-                int bx = map_overlay_coord(b.x, src_w, origin_x, target.width);
-                int by = map_overlay_coord(b.y, src_h, origin_y, target.height);
+                int ax = map_overlay_coord_with_crop(a.x, src_w, origin_x, target.width,
+                                                     target.source_crop_x, target.source_crop_width);
+                int ay = map_overlay_coord_with_crop(a.y, src_h, origin_y, target.height,
+                                                     target.source_crop_y, target.source_crop_height);
+                int bx = map_overlay_coord_with_crop(b.x, src_w, origin_x, target.width,
+                                                     target.source_crop_x, target.source_crop_width);
+                int by = map_overlay_coord_with_crop(b.y, src_h, origin_y, target.height,
+                                                     target.source_crop_y, target.source_crop_height);
                 draw_line_rgb(frame, frame_w, frame_h, ax, ay, bx, by, 0, 0, 255, 255, 255, 2, false);
             }
         }
@@ -1065,21 +1127,24 @@ static void render_pose_overlay(uint16_t *frame, uint32_t frame_w, uint32_t fram
             if (keypoint.score <= 0.05f) {
                 continue;
             }
-            int x = map_overlay_coord(keypoint.x, src_w, origin_x, target.width);
-            int y = map_overlay_coord(keypoint.y, src_h, origin_y, target.height);
+            int x = map_overlay_coord_with_crop(keypoint.x, src_w, origin_x, target.width,
+                                                target.source_crop_x, target.source_crop_width);
+            int y = map_overlay_coord_with_crop(keypoint.y, src_h, origin_y, target.height,
+                                                target.source_crop_y, target.source_crop_height);
             draw_point_rgb(frame, frame_w, frame_h, x, y, 0, 0, 255, 0, 0, 3, false);
         }
     }
 }
 
 static void render_ai_overlay_on_mipi_frame(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
-                                            const LocalOverlaySnapshot &snapshot)
+                                            const LocalOverlaySnapshot &snapshot,
+                                            const ai_camera_lcd_compose_info_t *compose_info)
 {
     if (!frame || !g_overlay_mutex) {
         return;
     }
     OverlayRenderTarget target = {};
-    if (!get_ai_overlay_target(frame_w, frame_h, snapshot, &target)) {
+    if (!get_ai_overlay_target(frame_w, frame_h, snapshot, compose_info, &target)) {
         return;
     }
 
@@ -1146,14 +1211,25 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
     uint8_t *display_buf = reinterpret_cast<uint8_t *>(g_lcd_buffers[display_buf_index]);
     uint32_t display_w = 0;
     uint32_t display_h = 0;
-    if (ai_camera_lcd_compose_frame(display_buf, camera_buf, camera_buf_hes, camera_buf_ves, &display_w, &display_h) != ESP_OK) {
+    ai_camera_lcd_compose_info_t compose_info = {};
+    if (ai_camera_lcd_compose_frame(display_buf,
+                                    camera_buf,
+                                    camera_buf_hes,
+                                    camera_buf_ves,
+                                    &display_w,
+                                    &display_h,
+                                    &compose_info) != ESP_OK) {
         ESP_LOGW(TAG, "failed to compose camera frame for LCD");
         return;
     }
     if (!compose_mode_logged) {
-        ESP_LOGI(TAG, "display composition uses LCD framebuffer ring: cam=%u compose=%u buffers=%u; overlays are completed off-screen before scanout",
+        ESP_LOGI(TAG, "display composition uses LCD framebuffer ring: cam=%u compose=%u buffers=%u input=%" PRIu32 "x%" PRIu32 " crop=(%" PRIu32 ",%" PRIu32 " %" PRIu32 "x%" PRIu32 ") output=%" PRIu32 "x%" PRIu32 "; overlays are completed off-screen before scanout",
                  static_cast<unsigned>(camera_buf_index), static_cast<unsigned>(display_buf_index),
-                 static_cast<unsigned>(EXAMPLE_LCD_BUF_NUM));
+                 static_cast<unsigned>(EXAMPLE_LCD_BUF_NUM),
+                 camera_buf_hes, camera_buf_ves,
+                 compose_info.input_offset_x, compose_info.input_offset_y,
+                 compose_info.input_width, compose_info.input_height,
+                 display_w, display_h);
         compose_mode_logged = true;
     }
 
@@ -1161,7 +1237,7 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
     const LocalOverlaySnapshot &snapshot = g_display_overlay_snapshot;
 
     uint16_t *frame = reinterpret_cast<uint16_t *>(display_buf);
-    render_ai_overlay_on_mipi_frame(frame, display_w, display_h, snapshot);
+    render_ai_overlay_on_mipi_frame(frame, display_w, display_h, snapshot, &compose_info);
     const std::string model_name = lcd_model_name();
     const std::string task_name = lcd_task_name();
     Imx500HudInfo hud = {
