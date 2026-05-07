@@ -44,18 +44,32 @@ namespace {
 constexpr uint32_t kMaxFrameBufferSize = 384 * 1024;
 constexpr uint32_t kMinMetadataFrameBufferSize = 256 * 1024;
 constexpr uint8_t kInvalidLcdBufferIndex = 0xFF;
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
 constexpr uint16_t kSpiThumbMaxWidth = 192;
 constexpr uint16_t kSpiThumbMaxHeight = 144;
+#endif
 constexpr uint32_t kSpiTaskStackSize = 10 * 1024;
 constexpr uint32_t kBootButtonTaskStackSize = 4 * 1024;
 constexpr uint32_t kMetadataDisableThreshold = 3;
 constexpr uint32_t kAiResultExpiryUs = 1000000;
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
 constexpr uint32_t kThumbDecodeMaxWidth = 384;
 constexpr uint32_t kThumbDecodeMaxHeight = 288;
 constexpr uint32_t kThumbDecodeBufferBytes = kThumbDecodeMaxWidth * kThumbDecodeMaxHeight * 2;
+#endif
+constexpr uint16_t kMipiOverlayMaskWidth = 256;
+constexpr uint16_t kMipiOverlayMaskHeight = 150;
+constexpr uint32_t kSegmentationMaskBufferBytes =
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
+    kSpiThumbMaxWidth * kSpiThumbMaxHeight;
+#else
+    kMipiOverlayMaskWidth * kMipiOverlayMaskHeight;
+#endif
 constexpr size_t kPsramFrameBufferAlignment = 64;
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
 constexpr uint32_t kJpegAlignment = 1024;
 constexpr uint32_t kJpegMinBlockBytes = 4 * 1024;
+#endif
 constexpr uint32_t kOverlayTextLen = 96;
 constexpr uint32_t kHudHeight = 74;
 constexpr uint32_t kBootButtonPollMs = 20;
@@ -95,6 +109,20 @@ constexpr uint8_t kSegmentationColours[][3] = {
     {0, 64, 128},
 };
 
+constexpr spi_data_format_t kSpiMetadataFormat =
+#if AI_CAMERA_MULTITASK_SPI_METADATA_MODE == AI_CAMERA_MULTITASK_SPI_METADATA_MODE_JPEG_INPUT_OUTPUT
+    SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR;
+#else
+    SPI_METADATA_OUTPUT_TENSOR;
+#endif
+
+constexpr const char *kSpiMetadataFormatName =
+#if AI_CAMERA_MULTITASK_SPI_METADATA_MODE == AI_CAMERA_MULTITASK_SPI_METADATA_MODE_JPEG_INPUT_OUTPUT
+    "SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR";
+#else
+    "SPI_METADATA_OUTPUT_TENSOR";
+#endif
+
 uint8_t *g_frame_buf = nullptr;
 uint32_t g_frame_buf_capacity = 0;
 IMX500ParsedMetadata *g_parsed_metadata = nullptr;
@@ -112,6 +140,7 @@ bool g_lcd_refresh_callback_attempted = false;
 bool g_lcd_refresh_callback_registered = false;
 uint32_t g_lcd_buffer_busy_until[EXAMPLE_LCD_BUF_NUM] = {};
 
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
 uint8_t *g_spi_thumb_buffer = nullptr;
 uint8_t *g_spi_thumb_staging = nullptr;
 uint8_t *g_spi_thumb_snapshot = nullptr;
@@ -120,6 +149,7 @@ size_t g_spi_jpeg_input_buffer_size = 0;
 uint8_t *g_spi_jpeg_full_buffer = nullptr;
 size_t g_spi_jpeg_full_buffer_size = 0;
 jpeg_decoder_handle_t g_jpeg_decoder = nullptr;
+#endif
 HigherhrnetResult *g_overlay_pose_snapshot = nullptr;
 HigherhrnetResult *g_spi_hrnet_result = nullptr;
 uint8_t *g_segmentation_mask = nullptr;
@@ -169,6 +199,13 @@ struct LocalOverlaySnapshot {
     char modal_line_2[kOverlayTextLen] = {};
 };
 
+struct OverlayRenderTarget {
+    int x = 0;
+    int y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
 SharedOverlayState g_overlay_state = {};
 LocalOverlaySnapshot g_display_overlay_snapshot = {};
 volatile bool g_display_first_frame_seen = false;
@@ -187,45 +224,12 @@ static bool IRAM_ATTR lcd_refresh_done_cb(esp_lcd_panel_handle_t panel, esp_lcd_
     return false;
 }
 
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
 static uint32_t align_up_u32(uint32_t value, uint32_t base)
 {
     return ((value + base - 1) / base) * base;
 }
-
-static uint32_t calculate_jpeg_aligned_size(uint32_t jpeg_size)
-{
-    return std::max(kJpegMinBlockBytes, align_up_u32(jpeg_size + 3, kJpegAlignment));
-}
-
-static bool compute_spi_thumbnail_size(uint32_t src_width, uint32_t src_height,
-                                       uint16_t *scaled_width, uint16_t *scaled_height)
-{
-    if (src_width == 0 || src_height == 0 || scaled_width == nullptr || scaled_height == nullptr) {
-        return false;
-    }
-
-    uint32_t fit_width = src_width;
-    uint32_t fit_height = src_height;
-    if (fit_width > kSpiThumbMaxWidth || fit_height > kSpiThumbMaxHeight) {
-        const uint64_t width_limited_height = (static_cast<uint64_t>(src_height) * kSpiThumbMaxWidth) / src_width;
-        if (width_limited_height > 0 && width_limited_height <= kSpiThumbMaxHeight) {
-            fit_width = kSpiThumbMaxWidth;
-            fit_height = static_cast<uint32_t>(width_limited_height);
-        } else {
-            fit_height = kSpiThumbMaxHeight;
-            fit_width = static_cast<uint32_t>((static_cast<uint64_t>(src_width) * kSpiThumbMaxHeight) / src_height);
-        }
-    }
-
-    *scaled_width = static_cast<uint16_t>(std::max<uint32_t>(1, fit_width));
-    *scaled_height = static_cast<uint16_t>(std::max<uint32_t>(1, fit_height));
-    return true;
-}
-
-static inline uint16_t swap_rgb565_bytes(uint16_t pixel)
-{
-    return static_cast<uint16_t>((pixel << 8) | (pixel >> 8));
-}
+#endif
 
 static void log_metadata_first_12_bytes(const uint8_t *data, uint32_t len, const char *prefix)
 {
@@ -542,7 +546,7 @@ static bool allocate_parsed_metadata_buffer()
     return true;
 }
 
-static bool allocate_spi_thumbnail_buffers()
+static bool allocate_overlay_buffers()
 {
     if (!g_overlay_mutex) {
         g_overlay_mutex = xSemaphoreCreateMutex();
@@ -552,6 +556,7 @@ static bool allocate_spi_thumbnail_buffers()
         return false;
     }
 
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
     if (!g_spi_thumb_buffer) {
         g_spi_thumb_buffer = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
     }
@@ -561,12 +566,14 @@ static bool allocate_spi_thumbnail_buffers()
     if (!g_spi_thumb_snapshot) {
         g_spi_thumb_snapshot = static_cast<uint8_t *>(heap_caps_malloc(kSpiThumbMaxWidth * kSpiThumbMaxHeight * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
     }
+#endif
     if (!g_segmentation_mask) {
-        g_segmentation_mask = static_cast<uint8_t *>(heap_caps_calloc(1, kSpiThumbMaxWidth * kSpiThumbMaxHeight, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        g_segmentation_mask = static_cast<uint8_t *>(heap_caps_calloc(1, kSegmentationMaskBufferBytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
     }
     if (!g_segmentation_mask_snapshot) {
-        g_segmentation_mask_snapshot = static_cast<uint8_t *>(heap_caps_calloc(1, kSpiThumbMaxWidth * kSpiThumbMaxHeight, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
+        g_segmentation_mask_snapshot = static_cast<uint8_t *>(heap_caps_calloc(1, kSegmentationMaskBufferBytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
     }
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
     if (!g_spi_jpeg_full_buffer) {
         jpeg_decode_memory_alloc_cfg_t out_mem_cfg = {
             .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER,
@@ -579,6 +586,12 @@ static bool allocate_spi_thumbnail_buffers()
         ESP_LOGE(TAG, "failed to allocate SPI thumbnail buffers");
         return false;
     }
+#else
+    if (!g_segmentation_mask || !g_segmentation_mask_snapshot) {
+        ESP_LOGE(TAG, "failed to allocate MIPI overlay mask buffers");
+        return false;
+    }
+#endif
 
     if (!g_overlay_pose_snapshot) {
         g_overlay_pose_snapshot = static_cast<HigherhrnetResult *>(heap_caps_calloc(1, sizeof(HigherhrnetResult), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM));
@@ -597,6 +610,7 @@ static bool allocate_spi_thumbnail_buffers()
         return false;
     }
 
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
     if (!g_jpeg_decoder) {
         jpeg_decode_engine_cfg_t cfg = {};
         cfg.intr_priority = 0;
@@ -606,6 +620,7 @@ static bool allocate_spi_thumbnail_buffers()
             return false;
         }
     }
+#endif
 
     if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         clear_overlay_state_locked();
@@ -613,12 +628,54 @@ static bool allocate_spi_thumbnail_buffers()
         xSemaphoreGive(g_overlay_mutex);
     }
 
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
     ESP_LOGI(TAG, "allocated SPI thumbnail buffers: %ux%u decode=%u alloc=%u hrnet=%u seg=%u",
              kSpiThumbMaxWidth, kSpiThumbMaxHeight, kThumbDecodeBufferBytes,
              static_cast<unsigned>(g_spi_jpeg_full_buffer_size),
              static_cast<unsigned>(sizeof(HigherhrnetResult)),
-             static_cast<unsigned>(kSpiThumbMaxWidth * kSpiThumbMaxHeight));
+             static_cast<unsigned>(kSegmentationMaskBufferBytes));
+#else
+    ESP_LOGI(TAG, "allocated MIPI output-tensor overlay buffers: mask=%ux%u hrnet=%u",
+             kMipiOverlayMaskWidth, kMipiOverlayMaskHeight,
+             static_cast<unsigned>(sizeof(HigherhrnetResult)));
+#endif
     return true;
+}
+
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
+static uint32_t calculate_jpeg_aligned_size(uint32_t jpeg_size)
+{
+    return std::max(kJpegMinBlockBytes, align_up_u32(jpeg_size + 3, kJpegAlignment));
+}
+
+static bool compute_spi_thumbnail_size(uint32_t src_width, uint32_t src_height,
+                                       uint16_t *scaled_width, uint16_t *scaled_height)
+{
+    if (src_width == 0 || src_height == 0 || scaled_width == nullptr || scaled_height == nullptr) {
+        return false;
+    }
+
+    uint32_t fit_width = src_width;
+    uint32_t fit_height = src_height;
+    if (fit_width > kSpiThumbMaxWidth || fit_height > kSpiThumbMaxHeight) {
+        const uint64_t width_limited_height = (static_cast<uint64_t>(src_height) * kSpiThumbMaxWidth) / src_width;
+        if (width_limited_height > 0 && width_limited_height <= kSpiThumbMaxHeight) {
+            fit_width = kSpiThumbMaxWidth;
+            fit_height = static_cast<uint32_t>(width_limited_height);
+        } else {
+            fit_height = kSpiThumbMaxHeight;
+            fit_width = static_cast<uint32_t>((static_cast<uint64_t>(src_width) * kSpiThumbMaxHeight) / src_height);
+        }
+    }
+
+    *scaled_width = static_cast<uint16_t>(std::max<uint32_t>(1, fit_width));
+    *scaled_height = static_cast<uint16_t>(std::max<uint32_t>(1, fit_height));
+    return true;
+}
+
+static inline uint16_t swap_rgb565_bytes(uint16_t pixel)
+{
+    return static_cast<uint16_t>((pixel << 8) | (pixel >> 8));
 }
 
 static bool ensure_spi_jpeg_input_buffer(uint32_t jpeg_len)
@@ -783,18 +840,9 @@ static bool update_spi_thumbnail_from_metadata(const IMX500ParsedMetadata &parse
     }
     return false;
 }
+#endif
 
-static float clamp_coord(float value, float max_value)
-{
-    if (value < 0.0f) {
-        return 0.0f;
-    }
-    if (value > max_value) {
-        return max_value;
-    }
-    return value;
-}
-
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
 static int thumbnail_origin_x(uint32_t frame_w, const LocalOverlaySnapshot &snapshot)
 {
     (void)frame_w;
@@ -808,6 +856,44 @@ static int thumbnail_origin_y(uint32_t frame_h, const LocalOverlaySnapshot &snap
         return 0;
     }
     return static_cast<int>(frame_h - snapshot.thumb_height);
+}
+#endif
+
+static bool get_ai_overlay_target(uint32_t frame_w, uint32_t frame_h,
+                                  const LocalOverlaySnapshot &snapshot,
+                                  OverlayRenderTarget *target)
+{
+    if (target == nullptr || frame_w == 0 || frame_h == 0) {
+        return false;
+    }
+
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
+    if (!snapshot.thumbnail_ready || snapshot.thumb_width == 0 || snapshot.thumb_height == 0) {
+        return false;
+    }
+    target->x = thumbnail_origin_x(frame_w, snapshot);
+    target->y = thumbnail_origin_y(frame_h, snapshot);
+    target->width = std::min<uint32_t>(snapshot.thumb_width, frame_w - static_cast<uint32_t>(target->x));
+    target->height = std::min<uint32_t>(snapshot.thumb_height, frame_h - static_cast<uint32_t>(target->y));
+#else
+    (void)snapshot;
+    target->x = 0;
+    target->y = 0;
+    target->width = frame_w;
+    target->height = frame_h;
+#endif
+
+    return target->width > 0 && target->height > 0;
+}
+
+static int map_overlay_coord(float value, float source_extent, int target_origin, uint32_t target_extent)
+{
+    if (source_extent <= 0.0f || target_extent == 0) {
+        return target_origin;
+    }
+    const float clamped = std::clamp(value, 0.0f, source_extent);
+    const float scaled = clamped * static_cast<float>(target_extent - 1u) / source_extent;
+    return target_origin + static_cast<int>(std::lround(scaled));
 }
 
 static void snapshot_overlay_state(LocalOverlaySnapshot *snapshot)
@@ -832,10 +918,12 @@ static void snapshot_overlay_state(LocalOverlaySnapshot *snapshot)
         memcpy(snapshot->summary_line_2, g_overlay_state.summary_line_2, sizeof(snapshot->summary_line_2));
         memcpy(snapshot->modal_line_1, g_overlay_state.modal_line_1, sizeof(snapshot->modal_line_1));
         memcpy(snapshot->modal_line_2, g_overlay_state.modal_line_2, sizeof(snapshot->modal_line_2));
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
         if (snapshot->thumbnail_ready && g_spi_thumb_buffer && g_spi_thumb_snapshot) {
             memcpy(g_spi_thumb_snapshot, g_spi_thumb_buffer,
                    static_cast<size_t>(snapshot->thumb_width) * snapshot->thumb_height * 2u);
         }
+#endif
         if (snapshot->segmentation.ready && g_segmentation_mask && g_segmentation_mask_snapshot) {
             memcpy(g_segmentation_mask_snapshot, g_segmentation_mask,
                    static_cast<size_t>(snapshot->segmentation.width) * snapshot->segmentation.height);
@@ -844,16 +932,23 @@ static void snapshot_overlay_state(LocalOverlaySnapshot *snapshot)
     }
 }
 
-static void render_classification_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
-                                          const LocalOverlaySnapshot &snapshot)
+static void render_classification_overlay(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                          const LocalOverlaySnapshot &snapshot,
+                                          const OverlayRenderTarget &target)
 {
-    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
-    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
+    const int origin_x = target.x;
+    const int origin_y = target.y;
+    const int panel_width =
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
+        static_cast<int>(target.width);
+#else
+        std::min<int>(static_cast<int>(target.width), 420);
+#endif
     const int panel_height = static_cast<int>(snapshot.classification.count) * 18 + 10;
-    const int panel_top = std::max(origin_y, origin_y + static_cast<int>(snapshot.thumb_height) - panel_height);
+    const int panel_top = std::max(origin_y, origin_y + static_cast<int>(target.height) - panel_height);
     imx500_fill_rectangle_rgb565(frame, frame_w, frame_h, origin_x, panel_top,
-                                 origin_x + static_cast<int>(snapshot.thumb_width) - 1,
-                                 origin_y + static_cast<int>(snapshot.thumb_height) - 1, 0, 0, 0);
+                                 origin_x + panel_width - 1,
+                                 origin_y + static_cast<int>(target.height) - 1, 0, 0, 0);
 
     int y = panel_top + 4;
     for (uint32_t i = 0; i < snapshot.classification.count; ++i) {
@@ -867,19 +962,26 @@ static void render_classification_preview(uint16_t *frame, uint32_t frame_w, uin
     }
 }
 
-static void render_detection_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
-                                     const LocalOverlaySnapshot &snapshot)
+static void render_detection_overlay(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                     const LocalOverlaySnapshot &snapshot,
+                                     const OverlayRenderTarget &target)
 {
-    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
-    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
-    const uint16_t src_w = std::max<uint16_t>(1, snapshot.detection.source_width);
-    const uint16_t src_h = std::max<uint16_t>(1, snapshot.detection.source_height);
+    const int origin_x = target.x;
+    const int origin_y = target.y;
+    const float src_w = static_cast<float>(std::max<uint16_t>(1, snapshot.detection.source_width));
+    const float src_h = static_cast<float>(std::max<uint16_t>(1, snapshot.detection.source_height));
     for (uint32_t i = 0; i < snapshot.detection.count; ++i) {
         const Imx500DetectionOverlayItem &item = snapshot.detection.items[i];
-        const int x1 = origin_x + static_cast<int>(item.x1 * snapshot.thumb_width / src_w);
-        const int y1 = origin_y + static_cast<int>(item.y1 * snapshot.thumb_height / src_h);
-        const int x2 = origin_x + static_cast<int>(item.x2 * snapshot.thumb_width / src_w);
-        const int y2 = origin_y + static_cast<int>(item.y2 * snapshot.thumb_height / src_h);
+        int x1 = map_overlay_coord(item.x1, src_w, origin_x, target.width);
+        int y1 = map_overlay_coord(item.y1, src_h, origin_y, target.height);
+        int x2 = map_overlay_coord(item.x2, src_w, origin_x, target.width);
+        int y2 = map_overlay_coord(item.y2, src_h, origin_y, target.height);
+        if (x1 > x2) {
+            std::swap(x1, x2);
+        }
+        if (y1 > y2) {
+            std::swap(y1, y2);
+        }
         draw_rectangle_rgb(frame, frame_w, frame_h, x1, y1, x2, y2, 0, 0, 255, 210, 0, 2, false);
 
         char caption[64] = {};
@@ -888,73 +990,72 @@ static void render_detection_preview(uint16_t *frame, uint32_t frame_w, uint32_t
         const int text_y = std::max(origin_y, y1 - 16);
         imx500_fill_rectangle_rgb565(frame, frame_w, frame_h, x1, text_y,
                                      std::min<int>(x1 + imx500_measure_text_width(caption, 1) + 6,
-                                                   origin_x + static_cast<int>(snapshot.thumb_width) - 1),
+                                                   origin_x + static_cast<int>(target.width) - 1),
                                      std::min<int>(text_y + 14,
-                                                   origin_y + static_cast<int>(snapshot.thumb_height) - 1), 0, 0, 0);
+                                                   origin_y + static_cast<int>(target.height) - 1), 0, 0, 0);
         imx500_draw_text_rgb565(frame, frame_w, frame_h, x1 + 2, text_y + 2, caption, 255, 255, 255, 1);
     }
 }
 
-static void render_segmentation_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
-                                        const LocalOverlaySnapshot &snapshot)
+static void render_segmentation_overlay(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                        const LocalOverlaySnapshot &snapshot,
+                                        const OverlayRenderTarget &target)
 {
     if (!snapshot.segmentation.ready || !g_segmentation_mask_snapshot) {
         return;
     }
-    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
-    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
     for (uint32_t y = 0; y < snapshot.segmentation.height; ++y) {
+        const int dst_y1 = target.y + static_cast<int>((static_cast<uint64_t>(y) * target.height) / snapshot.segmentation.height);
+        const int dst_y2 = target.y + static_cast<int>((static_cast<uint64_t>(y + 1u) * target.height) / snapshot.segmentation.height) - 1;
         for (uint32_t x = 0; x < snapshot.segmentation.width; ++x) {
             const uint8_t class_id = g_segmentation_mask_snapshot[y * snapshot.segmentation.width + x];
             if (class_id == 0) {
                 continue;
             }
             const uint8_t *colour = kSegmentationColours[class_id % (sizeof(kSegmentationColours) / sizeof(kSegmentationColours[0]))];
-            uint16_t &pixel = frame[(origin_y + static_cast<int>(y)) * frame_w + (origin_x + static_cast<int>(x))];
-            pixel = imx500_blend_rgb565(pixel, colour[0], colour[1], colour[2], kSegmentationAlpha);
+            const int dst_x1 = target.x + static_cast<int>((static_cast<uint64_t>(x) * target.width) / snapshot.segmentation.width);
+            const int dst_x2 = target.x + static_cast<int>((static_cast<uint64_t>(x + 1u) * target.width) / snapshot.segmentation.width) - 1;
+            for (int py = std::max(0, dst_y1); py <= std::min<int>(static_cast<int>(frame_h) - 1, dst_y2); ++py) {
+                for (int px = std::max(0, dst_x1); px <= std::min<int>(static_cast<int>(frame_w) - 1, dst_x2); ++px) {
+                    uint16_t &pixel = frame[py * frame_w + px];
+                    pixel = imx500_blend_rgb565(pixel, colour[0], colour[1], colour[2], kSegmentationAlpha);
+                }
+            }
         }
     }
 }
 
-static void render_pose_preview(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
-                                const LocalOverlaySnapshot &snapshot)
+static void render_pose_overlay(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                const LocalOverlaySnapshot &snapshot,
+                                const OverlayRenderTarget &target)
 {
-    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
-    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
-    float max_x = 0.0f;
-    float max_y = 0.0f;
-    for (uint32_t i = 0; i < snapshot.hrnet.pose_count; ++i) {
-        for (uint32_t j = 0; j < kHigherhrnetJointCount; ++j) {
-            if (snapshot.hrnet.poses[i].keypoints[j].score > 0.05f) {
-                max_x = std::max(max_x, snapshot.hrnet.poses[i].keypoints[j].x);
-                max_y = std::max(max_y, snapshot.hrnet.poses[i].keypoints[j].y);
-            }
-        }
-    }
-
-    const float src_w = (max_x <= snapshot.thumb_width * 1.5f && max_y <= snapshot.thumb_height * 1.5f)
-                            ? static_cast<float>(snapshot.thumb_width)
-                            : 384.0f;
-    const float src_h = (max_x <= snapshot.thumb_width * 1.5f && max_y <= snapshot.thumb_height * 1.5f)
-                            ? static_cast<float>(snapshot.thumb_height)
-                            : 288.0f;
+    const int origin_x = target.x;
+    const int origin_y = target.y;
+    const float src_w = 384.0f;
+    const float src_h = 288.0f;
 
     for (uint32_t i = 0; i < snapshot.hrnet.pose_count; ++i) {
         const HigherhrnetPose &pose = snapshot.hrnet.poses[i];
-        int x1 = origin_x + static_cast<int>(clamp_coord(pose.x1 * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
-        int y1 = origin_y + static_cast<int>(clamp_coord(pose.y1 * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
-        int x2 = origin_x + static_cast<int>(clamp_coord(pose.x2 * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
-        int y2 = origin_y + static_cast<int>(clamp_coord(pose.y2 * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
+        int x1 = map_overlay_coord(pose.x1, src_w, origin_x, target.width);
+        int y1 = map_overlay_coord(pose.y1, src_h, origin_y, target.height);
+        int x2 = map_overlay_coord(pose.x2, src_w, origin_x, target.width);
+        int y2 = map_overlay_coord(pose.y2, src_h, origin_y, target.height);
+        if (x1 > x2) {
+            std::swap(x1, x2);
+        }
+        if (y1 > y2) {
+            std::swap(y1, y2);
+        }
         draw_rectangle_rgb(frame, frame_w, frame_h, x1, y1, x2, y2, 0, 0, 0, 255, 0, 2, false);
 
         for (const auto &joint : kSkeleton) {
             const HigherhrnetKeypoint &a = pose.keypoints[joint[0]];
             const HigherhrnetKeypoint &b = pose.keypoints[joint[1]];
             if (a.score > 0.05f && b.score > 0.05f) {
-                int ax = origin_x + static_cast<int>(clamp_coord(a.x * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
-                int ay = origin_y + static_cast<int>(clamp_coord(a.y * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
-                int bx = origin_x + static_cast<int>(clamp_coord(b.x * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
-                int by = origin_y + static_cast<int>(clamp_coord(b.y * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
+                int ax = map_overlay_coord(a.x, src_w, origin_x, target.width);
+                int ay = map_overlay_coord(a.y, src_h, origin_y, target.height);
+                int bx = map_overlay_coord(b.x, src_w, origin_x, target.width);
+                int by = map_overlay_coord(b.y, src_h, origin_y, target.height);
                 draw_line_rgb(frame, frame_w, frame_h, ax, ay, bx, by, 0, 0, 255, 255, 255, 2, false);
             }
         }
@@ -964,30 +1065,33 @@ static void render_pose_preview(uint16_t *frame, uint32_t frame_w, uint32_t fram
             if (keypoint.score <= 0.05f) {
                 continue;
             }
-            int x = origin_x + static_cast<int>(clamp_coord(keypoint.x * snapshot.thumb_width / src_w, static_cast<float>(snapshot.thumb_width - 1)));
-            int y = origin_y + static_cast<int>(clamp_coord(keypoint.y * snapshot.thumb_height / src_h, static_cast<float>(snapshot.thumb_height - 1)));
+            int x = map_overlay_coord(keypoint.x, src_w, origin_x, target.width);
+            int y = map_overlay_coord(keypoint.y, src_h, origin_y, target.height);
             draw_point_rgb(frame, frame_w, frame_h, x, y, 0, 0, 255, 0, 0, 3, false);
         }
     }
 }
 
-static void blit_spi_thumbnail_with_ai_overlay(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
-                                               const LocalOverlaySnapshot &snapshot)
+static void render_ai_overlay_on_mipi_frame(uint16_t *frame, uint32_t frame_w, uint32_t frame_h,
+                                            const LocalOverlaySnapshot &snapshot)
 {
     if (!frame || !g_overlay_mutex) {
         return;
     }
-    if (!snapshot.thumbnail_ready || snapshot.thumb_width == 0 || snapshot.thumb_height == 0) {
+    OverlayRenderTarget target = {};
+    if (!get_ai_overlay_target(frame_w, frame_h, snapshot, &target)) {
         return;
     }
 
-    const int origin_x = thumbnail_origin_x(frame_w, snapshot);
-    const int origin_y = thumbnail_origin_y(frame_h, snapshot);
-    for (uint16_t y = 0; y < snapshot.thumb_height && (origin_y + static_cast<int>(y)) < static_cast<int>(frame_h); ++y) {
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
+    const int origin_x = target.x;
+    const int origin_y = target.y;
+    for (uint32_t y = 0; y < target.height && (origin_y + static_cast<int>(y)) < static_cast<int>(frame_h); ++y) {
         memcpy(frame + (origin_y + static_cast<int>(y)) * frame_w + origin_x,
                g_spi_thumb_snapshot + y * snapshot.thumb_width * 2,
-               snapshot.thumb_width * 2);
+               target.width * 2);
     }
+#endif
 
     if (!snapshot.ai_overlay_enabled || now_us() - snapshot.result_updated_us > kAiResultExpiryUs) {
         return;
@@ -995,16 +1099,16 @@ static void blit_spi_thumbnail_with_ai_overlay(uint16_t *frame, uint32_t frame_w
 
     switch (g_active_model ? g_active_model->task_type : Imx500ModelTaskType::kPoseEstimation) {
     case Imx500ModelTaskType::kClassification:
-        render_classification_preview(frame, frame_w, frame_h, snapshot);
+        render_classification_overlay(frame, frame_w, frame_h, snapshot, target);
         break;
     case Imx500ModelTaskType::kObjectDetection:
-        render_detection_preview(frame, frame_w, frame_h, snapshot);
+        render_detection_overlay(frame, frame_w, frame_h, snapshot, target);
         break;
     case Imx500ModelTaskType::kPoseEstimation:
-        render_pose_preview(frame, frame_w, frame_h, snapshot);
+        render_pose_overlay(frame, frame_w, frame_h, snapshot, target);
         break;
     case Imx500ModelTaskType::kSegmentation:
-        render_segmentation_preview(frame, frame_w, frame_h, snapshot);
+        render_segmentation_overlay(frame, frame_w, frame_h, snapshot, target);
         break;
     }
 }
@@ -1057,7 +1161,7 @@ static void mipi_display_frame_operation(uint8_t *camera_buf, uint8_t camera_buf
     const LocalOverlaySnapshot &snapshot = g_display_overlay_snapshot;
 
     uint16_t *frame = reinterpret_cast<uint16_t *>(display_buf);
-    blit_spi_thumbnail_with_ai_overlay(frame, display_w, display_h, snapshot);
+    render_ai_overlay_on_mipi_frame(frame, display_w, display_h, snapshot);
     const std::string model_name = lcd_model_name();
     const std::string task_name = lcd_task_name();
     Imx500HudInfo hud = {
@@ -1186,6 +1290,7 @@ static bool open_imx500_stream()
     ESP_LOGI(TAG, "module fw version: 0x%" PRIx32, module_fw_ver);
     ESP_LOGI(TAG, "module pid: 0x%" PRIx32, module_pid);
     ESP_LOGI(TAG, "selected IMX500 boot mode: %s", get_boot_mode_name());
+    ESP_LOGI(TAG, "selected SPI metadata format: %s", kSpiMetadataFormatName);
     ESP_LOGI(TAG, "selected embedded model: %s", g_active_model ? g_active_model->key : "null");
 
     if (!g_active_model) {
@@ -1202,7 +1307,7 @@ static bool open_imx500_stream()
                 g_active_model->network_info.data,
                 static_cast<uint32_t>(g_active_model->network_info.size),
                 MIPI_DATA_IMAGE,
-                SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                kSpiMetadataFormat,
                 10);
 #elif AI_CAMERA_MULTITASK_BOOT_MODE == AI_CAMERA_MULTITASK_BOOT_MODE_FLASH
     if (!program_flash_assets()) {
@@ -1212,7 +1317,7 @@ static bool open_imx500_stream()
     ESP_LOGI(TAG, "opening IMX500 from module flash");
     return open(nullptr, 0, nullptr, 0,
                 MIPI_DATA_IMAGE,
-                SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                kSpiMetadataFormat,
                 10);
 #else
 #error "Unsupported AI_CAMERA_MULTITASK_BOOT_MODE"
@@ -1263,7 +1368,7 @@ static void spi_metadata_task(void *arg)
 
         if (!parse_metadata(g_frame_buf,
                             static_cast<uint32_t>(data_size),
-                            SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                            kSpiMetadataFormat,
                             g_parsed_metadata)) {
             ESP_LOGW(TAG, "failed to parse metadata payload=%ld", static_cast<long>(data_size));
             if (is_zero_header_payload(g_frame_buf, static_cast<uint32_t>(data_size))) {
@@ -1298,7 +1403,9 @@ static void spi_metadata_task(void *arg)
         if (metadata_frame_count < 5 || (metadata_frame_count % 30) == 0) {
             log_parsed_metadata_basic_info(*g_parsed_metadata, static_cast<uint32_t>(data_size));
         }
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
         update_spi_thumbnail_from_metadata(*g_parsed_metadata);
+#endif
 
         switch (g_active_model ? g_active_model->task_type : Imx500ModelTaskType::kPoseEstimation) {
         case Imx500ModelTaskType::kClassification: {
@@ -1350,18 +1457,22 @@ static void spi_metadata_task(void *arg)
             break;
         }
         case Imx500ModelTaskType::kSegmentation: {
-            uint16_t thumb_w = 0;
-            uint16_t thumb_h = 0;
+            uint16_t overlay_mask_w = kMipiOverlayMaskWidth;
+            uint16_t overlay_mask_h = kMipiOverlayMaskHeight;
+#if AI_CAMERA_MULTITASK_ENABLE_SPI_JPEG_THUMBNAIL
+            overlay_mask_w = 0;
+            overlay_mask_h = 0;
             if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-                thumb_w = g_overlay_state.thumb_width;
-                thumb_h = g_overlay_state.thumb_height;
+                overlay_mask_w = g_overlay_state.thumb_width;
+                overlay_mask_h = g_overlay_state.thumb_height;
                 xSemaphoreGive(g_overlay_mutex);
             }
+#endif
 
             Imx500SegmentationOverlayState segmentation = {};
             std::string line1;
             std::string line2;
-            if (imx500_postprocess_segmentation(*g_parsed_metadata, g_active_labels, thumb_w, thumb_h,
+            if (imx500_postprocess_segmentation(*g_parsed_metadata, g_active_labels, overlay_mask_w, overlay_mask_h,
                                                g_segmentation_mask, &segmentation, &line1, &line2)) {
                 if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
                     g_overlay_state.segmentation = segmentation;
@@ -1472,7 +1583,7 @@ extern "C" esp_err_t ai_camera_multitask_run(void)
     ESP_RETURN_ON_FALSE(ensure_lcd_ready(), ESP_FAIL, TAG, "failed to prepare LCD");
     ESP_RETURN_ON_ERROR(init_mipi_display_path(), TAG, "failed to initialize MIPI display path");
     ESP_RETURN_ON_FALSE(bind_peripherals_api(), ESP_FAIL, TAG, "failed to bind SDK peripherals");
-    ESP_RETURN_ON_FALSE(allocate_spi_thumbnail_buffers(), ESP_FAIL, TAG, "failed to prepare SPI thumbnail buffers");
+    ESP_RETURN_ON_FALSE(allocate_overlay_buffers(), ESP_FAIL, TAG, "failed to prepare overlay buffers");
     imx500_present_status_screen(g_display_panel, g_lcd_buffers, EXAMPLE_LCD_BUF_NUM,
                                  "LOADING MODEL", g_active_model->display_name, get_boot_mode_name());
 

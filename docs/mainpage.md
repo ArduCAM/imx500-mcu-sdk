@@ -27,7 +27,9 @@ Use this category for crop and coordinate-mapping related helpers:
 
 - @ref bbox_coordinate_x_scale_map "bbox_coordinate_x_scale_map(...)"
 - @ref bbox_coordinate_y_scale_map "bbox_coordinate_y_scale_map(...)"
+- @ref imx500_calculate_center_crop_xyxy "imx500_calculate_center_crop_xyxy(...)"
 - @ref dnn_crop_xyxy_absolute "dnn_crop_xyxy_absolute(...)"
+- @ref apply_dnn_input_tensor_mapping "apply_dnn_input_tensor_mapping(...)"
 
 This group is used when an application needs to translate bounding-box coordinates or set a crop region on the device side.
 

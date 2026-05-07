@@ -1899,6 +1899,59 @@ uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h) {
     return y_;
 }
 
+static uint32_t align_down_even_if_possible(uint32_t value) {
+    return value > 1u ? (value & ~1u) : value;
+}
+
+int imx500_calculate_center_crop_xyxy(uint32_t source_width,
+                                      uint32_t source_height,
+                                      uint32_t target_width,
+                                      uint32_t target_height,
+                                      imx500_crop_rect_t *crop) {
+    if (crop == NULL) {
+        printf("crop output should not be NULL\n");
+        return -1;
+    }
+
+    if (source_width == 0 || source_height == 0 || target_width == 0 || target_height == 0) {
+        printf("source and target dimensions should be non-zero\n");
+        return -1;
+    }
+
+    uint32_t crop_width = source_width;
+    uint32_t crop_height = source_height;
+    const uint64_t target_aspect_num = (uint64_t)target_width * source_height;
+    const uint64_t source_aspect_num = (uint64_t)source_width * target_height;
+
+    if (target_aspect_num > source_aspect_num) {
+        crop_height = (uint32_t)(((uint64_t)source_width * target_height) / target_width);
+        crop_height = align_down_even_if_possible(crop_height);
+    } else if (target_aspect_num < source_aspect_num) {
+        crop_width = (uint32_t)(((uint64_t)source_height * target_width) / target_height);
+        crop_width = align_down_even_if_possible(crop_width);
+    }
+
+    if (crop_width == 0 || crop_height == 0) {
+        printf("calculated crop dimensions should be non-zero\n");
+        return -1;
+    }
+
+    crop_width = MIN(crop_width, source_width);
+    crop_height = MIN(crop_height, source_height);
+
+    uint32_t xmin = (source_width - crop_width) / 2u;
+    uint32_t ymin = (source_height - crop_height) / 2u;
+    xmin = align_down_even_if_possible(xmin);
+    ymin = align_down_even_if_possible(ymin);
+
+    crop->xmin = xmin;
+    crop->ymin = ymin;
+    crop->xmax = xmin + crop_width;
+    crop->ymax = ymin + crop_height;
+
+    return 0;
+}
+
 imx500_err_t imx500_res_read(uint32_t cmd_id,
                             uint32_t *data,
                             uint32_t wait_ms)
@@ -2804,6 +2857,20 @@ int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t
     return imx500_set_crop_rect_xyxy(xmin, ymin, xmax, ymax);
 }
 
+int apply_dnn_input_tensor_mapping(uint32_t width, uint32_t height) {
+    imx500_crop_rect_t crop = {};
+    int ret = imx500_calculate_center_crop_xyxy(DWP_AP_VC_HSIZE,
+                                                DWP_AP_VC_VSIZE,
+                                                width,
+                                                height,
+                                                &crop);
+    if (ret < 0) {
+        return ret;
+    }
+
+    return dnn_crop_xyxy_absolute(crop.xmin, crop.ymin, crop.xmax, crop.ymax);
+}
+
 int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_size) {
 
   // dump_s_nw_info_list();
@@ -2951,6 +3018,10 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
     imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
     imx500_res_read(SENSOR_MIPI_1024x600_2LANES, &val, 500);
+    if (apply_dnn_input_tensor_mapping(1024, 600) < 0) {
+        printf("Error: apply default DNN input tensor mapping failed\n");
+        return false;
+    }
     imx500_res_write(IMX500_COMMAND_SET_FRAMERATE, &fps, 500);
     switch (mipi_format)
     {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "g_config.h"
 
 #ifdef __cplusplus
 extern "C" {

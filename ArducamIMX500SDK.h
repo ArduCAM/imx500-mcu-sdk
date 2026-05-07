@@ -264,6 +264,14 @@ typedef struct {
     uint16_t width;
 } imx500_roi_t;
 
+/** @brief Crop rectangle in absolute sensor coordinates, using [xmin, xmax) and [ymin, ymax). */
+typedef struct {
+    uint32_t xmin;
+    uint32_t ymin;
+    uint32_t xmax;
+    uint32_t ymax;
+} imx500_crop_rect_t;
+
 /** @brief Auto-exposure configuration to be applied to the sensor. */
 typedef struct {
     uint16_t max_exposure_time_100us;
@@ -335,10 +343,40 @@ uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
 uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
 
 /**
+ * @brief Calculate a centered crop rectangle that matches a target output aspect ratio.
+ *
+ * The returned rectangle is expressed in absolute source/sensor coordinates and
+ * uses left-closed, right-open coordinates: [xmin, xmax), [ymin, ymax).
+ * Dimensions and offsets are rounded down to even values when possible so the
+ * rectangle is suitable for Bayer/binning image paths.
+ *
+ * Example: source 4056x3040 and target 1024x600 returns
+ * xmin=0, ymin=332, xmax=4056, ymax=2708.
+ *
+ * @return `0` on success, negative on invalid arguments.
+ */
+int imx500_calculate_center_crop_xyxy(uint32_t source_width,
+                                      uint32_t source_height,
+                                      uint32_t target_width,
+                                      uint32_t target_height,
+                                      imx500_crop_rect_t *crop);
+
+/**
  * @brief Apply a crop rectangle in absolute sensor coordinates.
  * @return `0` on success, negative on invalid arguments or command failure.
  */
 int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax);
+
+/**
+ * @brief Apply the DNN input-tensor mapping to the current IMX500 12MP active area.
+ *
+ * This keeps the full IMX500 active area before crop (4056x3040) as the source
+ * coordinate system, calculates a centered crop matching @p input_tensor_width x
+ * @p input_tensor_height, then applies it through @ref dnn_crop_xyxy_absolute.
+ *
+ * @return `0` on success, negative on invalid arguments or command failure.
+ */
+int apply_dnn_input_tensor_mapping(uint32_t width, uint32_t height);
 
 /** @} */
 
