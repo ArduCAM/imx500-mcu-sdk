@@ -9,6 +9,8 @@
 
 namespace {
 
+constexpr float kObjectDetectionConfidenceThreshold = 0.50f;
+
 uint32_t tensor_bytes_per_element(const IMX500ParsedTensor &tensor)
 {
     return std::max<uint32_t>(1u, (static_cast<uint32_t>(tensor.bits_per_element) + 7u) / 8u);
@@ -341,7 +343,7 @@ bool imx500_postprocess_detection(const IMX500ParsedMetadata &parsed,
     float max_coord = 0.0f;
     for (uint32_t i = 0; i < max_box_count; ++i) {
         const float score = tensor_read_value_raw_index(scores_tensor, i);
-        if (score < 0.30f) {
+        if (score < kObjectDetectionConfidenceThreshold) {
             continue;
         }
 
