@@ -39,10 +39,14 @@
 #define HTTP_FRAME_RETRY_MS 1500
 #define PERSON_DETECT_GPIO0_PIN 0
 #define PERSON_DETECT_GPIO1_PIN 1
+#ifndef PERSON_DETECT_GPIO_ACTIVE_LEVEL
+#define PERSON_DETECT_GPIO_ACTIVE_LEVEL 1
+#endif
 #define IMX500_DEFAULT_SPI_BAUDRATE_HZ (5 * 1000 * 1000)
 #define MAX_PERSON_DETECTIONS 10
 
 static constexpr spi_data_format_t kImx500SpiMetadataFormat = IMX500_SPI_METADATA_FORMAT;
+static constexpr bool kPersonDetectGpioActiveHigh = (PERSON_DETECT_GPIO_ACTIVE_LEVEL != 0);
 
 static bool s_cyw43_ready = false;
 static struct tcp_pcb *s_http_pcb = nullptr;
@@ -130,19 +134,39 @@ static void service_wifi_connected_led(void) {
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on ? 1 : 0);
 }
 
+static bool person_detect_output_level(bool warning_active) {
+    return warning_active == kPersonDetectGpioActiveHigh;
+}
+
+static const char *gpio_level_text(bool high) {
+    return high ? "high" : "low";
+}
+
+static const char *person_detect_gpio_active_level_text(void) {
+    return kPersonDetectGpioActiveHigh ? "high" : "low";
+}
+
+static const char *person_detect_gpio_state_text(bool warning_active) {
+    return warning_active ? "warning" : "idle";
+}
+
+static void put_person_detect_outputs(bool high) {
+    gpio_put(PERSON_DETECT_GPIO0_PIN, high ? 1 : 0);
+    gpio_put(PERSON_DETECT_GPIO1_PIN, high ? 1 : 0);
+}
+
 static void init_person_detect_outputs(void) {
     gpio_init(PERSON_DETECT_GPIO0_PIN);
     gpio_set_dir(PERSON_DETECT_GPIO0_PIN, GPIO_OUT);
-    gpio_put(PERSON_DETECT_GPIO0_PIN, 0);
 
     gpio_init(PERSON_DETECT_GPIO1_PIN);
     gpio_set_dir(PERSON_DETECT_GPIO1_PIN, GPIO_OUT);
-    gpio_put(PERSON_DETECT_GPIO1_PIN, 0);
+
+    put_person_detect_outputs(person_detect_output_level(false));
 }
 
 static void set_person_detect_outputs(bool detected) {
-    gpio_put(PERSON_DETECT_GPIO0_PIN, detected ? 1 : 0);
-    gpio_put(PERSON_DETECT_GPIO1_PIN, detected ? 1 : 0);
+    put_person_detect_outputs(person_detect_output_level(detected));
 }
 
 static void configure_spi_output_pin(uint pin) {
@@ -1072,6 +1096,18 @@ static void build_home_page(char *body, size_t body_size, const char *message) {
     }
 
     const float threshold = get_person_score_threshold();
+    const bool warning_active = detection_count > 0;
+    const bool gpio_high = person_detect_output_level(warning_active);
+    char gpio_status[64];
+    snprintf(
+        gpio_status,
+        sizeof(gpio_status),
+        "%s (%s, active-%s)",
+        gpio_level_text(gpio_high),
+        person_detect_gpio_state_text(warning_active),
+        person_detect_gpio_active_level_text()
+    );
+
     snprintf(
         body,
         body_size,
@@ -1130,7 +1166,8 @@ static void build_home_page(char *body, size_t body_size, const char *message) {
         "if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;}"
         "function box(b){const w=canvas.width,h=canvas.height;const x=b[0]*w,y=b[1]*h;return[x,y,(b[2]-b[0])*w,(b[3]-b[1])*h]}"
         "function text(id,v){const e=document.getElementById(id);if(e)e.textContent=v}"
-        "function draw(s){text('statFrame',s.sequence);text('statJpeg',s.jpeg_bytes);text('statPersons',s.person_count);text('statGpio',s.person_count>0?'high':'low');text('statConf',Number(s.threshold).toFixed(2));text('statRoi',s.roi&&s.roi.configured?'set':'off');resize();const w=canvas.width,h=canvas.height;ctx.clearRect(0,0,w,h);ctx.lineWidth=2;ctx.font='14px system-ui';"
+        "function gpioText(g){return g?g.level+' ('+(g.warning?'warning':'idle')+', active-'+g.active_level+')':'n/a'}"
+        "function draw(s){text('statFrame',s.sequence);text('statJpeg',s.jpeg_bytes);text('statPersons',s.person_count);text('statGpio',gpioText(s.gpio));text('statConf',Number(s.threshold).toFixed(2));text('statRoi',s.roi&&s.roi.configured?'set':'off');resize();const w=canvas.width,h=canvas.height;ctx.clearRect(0,0,w,h);ctx.lineWidth=2;ctx.font='14px system-ui';"
         "if(s.roi&&s.roi.configured){const p=s.roi.points;ctx.beginPath();ctx.moveTo(p[0][0]*w,p[0][1]*h);for(let i=1;i<p.length;i++)ctx.lineTo(p[i][0]*w,p[i][1]*h);ctx.closePath();ctx.strokeStyle='rgba(0,200,255,.95)';ctx.stroke();}"
         "(s.detections||[]).forEach(d=>{const r=box(d.box);ctx.strokeStyle=d.roi_intersects?'#ff3b30':'#2bd66f';ctx.fillStyle=ctx.strokeStyle;ctx.strokeRect(r[0],r[1],r[2],r[3]);ctx.fillText('person '+Math.round(d.score*100)+'%%',r[0]+4,Math.max(14,r[1]-4));});}"
         "async function loadStatus(){try{const r=await fetch('/status.json?t='+Date.now(),{cache:'no-store'});if(r.ok)draw(await r.json())}catch(e){}}"
@@ -1149,7 +1186,7 @@ static void build_home_page(char *body, size_t body_size, const char *message) {
         (unsigned long)frame_sequence,
         (unsigned long)jpeg_len,
         (unsigned long)detection_count,
-        detection_count > 0 ? "high" : "low",
+        gpio_status,
         (double)threshold,
         message != nullptr ? message : "",
         (double)threshold,
@@ -1217,12 +1254,15 @@ static size_t build_status_json(char *body, size_t body_size) {
     }
 
     size_t used = 0;
+    const bool warning_active = detections.count > 0;
+    const bool gpio_high = person_detect_output_level(warning_active);
     used = append_http_text(
         body,
         body_size,
         used,
         "{\"valid\":%s,\"sequence\":%lu,\"frame\":%u,\"jpeg_bytes\":%lu,"
         "\"person_count\":%lu,\"threshold\":%.3f,"
+        "\"gpio\":{\"pins\":[%u,%u],\"level\":\"%s\",\"active_level\":\"%s\",\"warning\":%s},"
         "\"roi\":{\"configured\":%s,\"points\":[[%.6f,%.6f],[%.6f,%.6f],[%.6f,%.6f],[%.6f,%.6f]]},"
         "\"detections\":[",
         valid ? "true" : "false",
@@ -1231,6 +1271,11 @@ static size_t build_status_json(char *body, size_t body_size) {
         (unsigned long)jpeg_len,
         (unsigned long)detections.count,
         (double)threshold,
+        (unsigned)PERSON_DETECT_GPIO0_PIN,
+        (unsigned)PERSON_DETECT_GPIO1_PIN,
+        gpio_level_text(gpio_high),
+        person_detect_gpio_active_level_text(),
+        warning_active ? "true" : "false",
         roi.configured ? "true" : "false",
         (double)roi.points[0].x,
         (double)roi.points[0].y,

@@ -2,7 +2,7 @@
 
 Raspberry Pi Pico W + Arducam IMX500 person detection demo.
 
-This example streams the latest JPEG frame over HTTP port 80, overlays ROI and person detection boxes in the browser, and drives GP0/GP1 high when a person is detected.
+This example streams the latest JPEG frame over HTTP port 80, overlays ROI and person detection boxes in the browser, and drives GP0/GP1 to the configured warning-active level when a person is detected.
 
 ## Features
 
@@ -14,7 +14,7 @@ This example streams the latest JPEG frame over HTTP port 80, overlays ROI and p
 - ROI polygon drawn over the displayed JPEG.
 - Confidence threshold configurable from the page.
 - ROI point configuration kept in the page. Default ROI is the full image.
-- GP0 and GP1 output high when `person_count > 0`, low otherwise.
+- GP0 and GP1 output the configured warning-active level when `person_count > 0`, and the opposite level otherwise.
 - UDP logic has been removed.
 - Serial logs are quiet by default for long-running stability.
 
@@ -28,9 +28,18 @@ Output behavior:
 
 | Pin | State |
 | --- | --- |
-| GP0 | High when at least one person is detected |
-| GP1 | High when at least one person is detected |
-| GP0/GP1 | Low when no person is detected |
+| GP0 | Warning output, default active-high |
+| GP1 | Warning output, default active-high |
+| GP0/GP1 | Idle level is the opposite of the configured warning-active level |
+
+By default, GP0/GP1 are active-high: startup and idle are low, warning is high.
+To build active-low outputs, configure with:
+
+```bash
+cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=LOW
+```
+
+With active-low outputs, startup and idle are high, and warning is low. Use `-DPERSON_DETECT_GPIO_ACTIVE_LEVEL=HIGH` to select active-high explicitly. `1` and `0` are also accepted.
 
 ## Wi-Fi Config
 
@@ -55,6 +64,13 @@ cd build
 cmake ..
 ```
 
+Useful configure options:
+
+```bash
+cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=HIGH
+cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=LOW
+```
+
 ## Runtime
 
 Open the USB serial console. After Wi-Fi connects, the firmware prints the page URL:
@@ -68,7 +84,7 @@ Open that URL in a browser on the same network.
 The page is designed for landscape use:
 
 - Left: JPEG frame with ROI and detection overlays.
-- Right: frame status, JPEG size, person count, GP0/GP1 state, confidence, and ROI config.
+- Right: frame status, JPEG size, person count, GP0/GP1 state with active level, confidence, and ROI config.
 - Apply button: updates confidence threshold and ROI points.
 
 ## Web Endpoints
@@ -77,7 +93,7 @@ The page is designed for landscape use:
 | --- | --- |
 | `/` or `/index.html` | Web UI |
 | `/frame.jpg` | Latest JPEG frame |
-| `/status.json` | Latest metadata, detections, ROI, and threshold |
+| `/status.json` | Latest metadata, detections, GPIO output state, ROI, and threshold |
 | `/config?...` | Apply runtime config |
 
 Example config request:
