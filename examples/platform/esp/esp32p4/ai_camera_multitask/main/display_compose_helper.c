@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <string.h>
 
 #include "driver/ppa.h"
 #include "esp_cache.h"
@@ -26,21 +27,24 @@ static uint32_t ppa_scale_numerator_for_fill(uint32_t source_size, uint32_t targ
     return numerator;
 }
 
-static uint32_t ppa_input_extent_for_exact_output(uint32_t source_size,
-                                                  uint32_t target_size,
-                                                  uint32_t scale_numerator)
+static uint32_t ppa_scaled_extent(uint32_t input_extent, uint32_t scale_numerator)
 {
-    const uint32_t min_extent = ceil_div_u32(target_size * 16u, scale_numerator);
-    const uint32_t max_extent = ((target_size + 1u) * 16u - 1u) / scale_numerator;
-    uint32_t extent = max_extent < source_size ? max_extent : source_size;
+    return input_extent * scale_numerator / 16u;
+}
 
-    if (extent < min_extent) {
-        extent = min_extent;
+static uint32_t ppa_input_extent_for_largest_output(uint32_t source_size,
+                                                    uint32_t target_size,
+                                                    uint32_t scale_numerator)
+{
+    uint32_t max_extent = ((target_size + 1u) * 16u - 1u) / scale_numerator;
+
+    if (max_extent == 0) {
+        max_extent = 1;
     }
-    if (extent > min_extent && (extent & 1u)) {
-        extent--;
+    if (max_extent > source_size) {
+        max_extent = source_size;
     }
-    return extent;
+    return max_extent;
 }
 
 esp_err_t ai_camera_lcd_compose_init(void)
@@ -81,8 +85,23 @@ esp_err_t ai_camera_lcd_compose_frame(void *display_buf,
     const uint32_t scale_numerator_x = ppa_scale_numerator_for_fill(camera_w, EXAMPLE_LCD_H_RES);
     const uint32_t scale_numerator_y = ppa_scale_numerator_for_fill(camera_h, EXAMPLE_LCD_V_RES);
     const uint32_t scale_numerator = scale_numerator_x > scale_numerator_y ? scale_numerator_x : scale_numerator_y;
-    const uint32_t block_w = ppa_input_extent_for_exact_output(camera_w, EXAMPLE_LCD_H_RES, scale_numerator);
-    const uint32_t block_h = ppa_input_extent_for_exact_output(camera_h, EXAMPLE_LCD_V_RES, scale_numerator);
+    const uint32_t block_w = ppa_input_extent_for_largest_output(camera_w, EXAMPLE_LCD_H_RES, scale_numerator);
+    const uint32_t block_h = ppa_input_extent_for_largest_output(camera_h, EXAMPLE_LCD_V_RES, scale_numerator);
+    const uint32_t output_w = ppa_scaled_extent(block_w, scale_numerator);
+    const uint32_t output_h = ppa_scaled_extent(block_h, scale_numerator);
+    ESP_RETURN_ON_FALSE(output_w != 0 && output_h != 0 &&
+                        output_w <= EXAMPLE_LCD_H_RES && output_h <= EXAMPLE_LCD_V_RES,
+                        ESP_ERR_INVALID_ARG, "display_compose", "invalid composed output size");
+    const uint32_t output_offset_x = (EXAMPLE_LCD_H_RES - output_w) / 2u;
+    const uint32_t output_offset_y = (EXAMPLE_LCD_V_RES - output_h) / 2u;
+    const size_t output_buffer_size = ALIGN_UP(EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES *
+                                               (APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? 2 : 3),
+                                               s_data_cache_line_size);
+
+    if (output_offset_x != 0 || output_offset_y != 0 ||
+        output_w != EXAMPLE_LCD_H_RES || output_h != EXAMPLE_LCD_V_RES) {
+        memset(display_buf, 0, output_buffer_size);
+    }
 
     srm_config.in.buffer = camera_buf;
     srm_config.in.pic_w = camera_w;
@@ -96,13 +115,11 @@ esp_err_t ai_camera_lcd_compose_frame(void *display_buf,
     srm_config.in.yuv_std = PPA_COLOR_CONV_STD_RGB_YUV_BT601;
 
     srm_config.out.buffer = display_buf;
-    srm_config.out.buffer_size = ALIGN_UP(EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES *
-                                          (APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? 2 : 3),
-                                          s_data_cache_line_size);
+    srm_config.out.buffer_size = output_buffer_size;
     srm_config.out.pic_w = EXAMPLE_LCD_H_RES;
     srm_config.out.pic_h = EXAMPLE_LCD_V_RES;
-    srm_config.out.block_offset_x = 0;
-    srm_config.out.block_offset_y = 0;
+    srm_config.out.block_offset_x = output_offset_x;
+    srm_config.out.block_offset_y = output_offset_y;
     srm_config.out.srm_cm = APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? PPA_SRM_COLOR_MODE_RGB565 : PPA_SRM_COLOR_MODE_RGB888;
     srm_config.out.yuv_range = PPA_COLOR_RANGE_LIMIT;
     srm_config.out.yuv_std = PPA_COLOR_CONV_STD_RGB_YUV_BT601;
@@ -135,8 +152,10 @@ esp_err_t ai_camera_lcd_compose_frame(void *display_buf,
         compose_info->input_offset_y = srm_config.in.block_offset_y;
         compose_info->input_width = srm_config.in.block_w;
         compose_info->input_height = srm_config.in.block_h;
-        compose_info->output_width = EXAMPLE_LCD_H_RES;
-        compose_info->output_height = EXAMPLE_LCD_V_RES;
+        compose_info->output_offset_x = srm_config.out.block_offset_x;
+        compose_info->output_offset_y = srm_config.out.block_offset_y;
+        compose_info->output_width = output_w;
+        compose_info->output_height = output_h;
     }
     return ESP_OK;
 }
