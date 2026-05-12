@@ -2,7 +2,7 @@
 
 The IMX500 MCU SDK exposes a compact set of C/C++ interfaces for bringing up the module, starting inference streams, parsing metadata and output tensors, injecting test input, and tuning sensor behavior.
 
-This page is the API landing page for the SDK. Build and publishing instructions remain in `README.md`; the sections below focus on what each public interface is used for.
+This page is the API landing page for the SDK. Platform quick-start links are maintained in `README.md`; integration details live under `docs/`.
 
 ## Public Header Files
 
