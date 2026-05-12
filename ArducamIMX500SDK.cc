@@ -12,6 +12,18 @@
 #include "firmware.h"
 #include "version.h"
 
+#ifndef IMX500_MCU_SDK_SENSOR_MIPI_COMMAND
+#define IMX500_MCU_SDK_SENSOR_MIPI_COMMAND SENSOR_MIPI_1024x600_2LANES
+#endif
+
+#ifndef IMX500_MCU_SDK_SENSOR_MIPI_WIDTH
+#define IMX500_MCU_SDK_SENSOR_MIPI_WIDTH 1024
+#endif
+
+#ifndef IMX500_MCU_SDK_SENSOR_MIPI_HEIGHT
+#define IMX500_MCU_SDK_SENSOR_MIPI_HEIGHT 600
+#endif
+
 #define ALIGN_DOWN(size, align) ((size) & ~((align) - 1))
 #define ALIGN_UP(size, align)   (ALIGN_DOWN((size) + (align) - 1, (align)))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -3017,8 +3029,9 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
 
     imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
     imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
-    imx500_res_read(SENSOR_MIPI_1024x600_2LANES, &val, 500);
-    if (apply_dnn_input_tensor_mapping(1024, 600) < 0) {
+    imx500_res_read(IMX500_MCU_SDK_SENSOR_MIPI_COMMAND, &val, 500);
+    if (apply_dnn_input_tensor_mapping(IMX500_MCU_SDK_SENSOR_MIPI_WIDTH,
+                                       IMX500_MCU_SDK_SENSOR_MIPI_HEIGHT) < 0) {
         printf("Error: apply default DNN input tensor mapping failed\n");
         return false;
     }

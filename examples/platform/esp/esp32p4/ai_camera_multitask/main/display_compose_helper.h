@@ -15,6 +15,8 @@ typedef struct {
     uint32_t input_offset_y;
     uint32_t input_width;
     uint32_t input_height;
+    uint32_t output_offset_x;
+    uint32_t output_offset_y;
     uint32_t output_width;
     uint32_t output_height;
 } ai_camera_lcd_compose_info_t;

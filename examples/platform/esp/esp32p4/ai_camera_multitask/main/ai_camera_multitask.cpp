@@ -889,7 +889,15 @@ static bool get_ai_overlay_target(uint32_t frame_w, uint32_t frame_h,
     target->height = frame_h;
     if (compose_info != nullptr &&
         compose_info->input_full_width > 0 && compose_info->input_full_height > 0 &&
-        compose_info->input_width > 0 && compose_info->input_height > 0) {
+        compose_info->input_width > 0 && compose_info->input_height > 0 &&
+        compose_info->output_width > 0 && compose_info->output_height > 0 &&
+        compose_info->output_offset_x < frame_w && compose_info->output_offset_y < frame_h) {
+        target->x = static_cast<int>(compose_info->output_offset_x);
+        target->y = static_cast<int>(compose_info->output_offset_y);
+        target->width = std::min<uint32_t>(compose_info->output_width,
+                                           frame_w - compose_info->output_offset_x);
+        target->height = std::min<uint32_t>(compose_info->output_height,
+                                            frame_h - compose_info->output_offset_y);
         const float full_w = static_cast<float>(compose_info->input_full_width);
         const float full_h = static_cast<float>(compose_info->input_full_height);
         if (full_w > 0.0f && full_h > 0.0f) {

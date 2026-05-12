@@ -165,6 +165,8 @@ target_include_directories(imx500_person_detect_roi_mvp PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 
+imx500_mcu_sdk_apply_config(imx500_person_detect_roi_mvp)
+
 target_compile_definitions(imx500_person_detect_roi_mvp PRIVATE
     WIFI_CONNECT_TIMEOUT_MS=${WIFI_CONNECT_TIMEOUT_MS}
     PERSON_CLASS_ID=${PERSON_CLASS_ID}

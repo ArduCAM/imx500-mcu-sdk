@@ -57,6 +57,8 @@ target_include_directories(imx500_cmd PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 
+imx500_mcu_sdk_apply_config(imx500_cmd)
+
 if(INTEGRATION_TEST_BOOT_MODE STREQUAL "DIRECT")
     target_compile_definitions(imx500_cmd PRIVATE
         INTEGRATION_TEST_BOOT_MODE=INTEGRATION_TEST_BOOT_MODE_DIRECT
