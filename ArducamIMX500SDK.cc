@@ -3085,6 +3085,12 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
     uint8_t ready_status;
     int ret;
 
+    if (!rx_buf || buf_size == 0) {
+        printf("Metadata frame is not ready yet: read_metadata buffer size is 0. "
+               "Wait until METADATA_SIZE_REG reports a non-zero frame size, or pass a non-zero max_size.\n");
+        return 0;
+    }
+
 #if IMX500_METADATA_READ_VERBOSE
     printf("Waiting for data ready...\n");
 #endif
@@ -3123,12 +3129,15 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
     uint32_t data_size = get_metadata_size();
 
     if (data_size == 0) {
-        printf("Error: Invalid data size\n");
+        printf("Metadata frame is not ready yet: METADATA_SIZE_REG returned 0. "
+               "Make sure stream_on() has started and a metadata frame has been produced.\n");
         return false;
     }
 
     if (data_size > buf_size) {
-        printf("Error: data_size > buf_size\n");
+        printf("Error: metadata frame size %" PRIu32 " exceeds read buffer size %" PRIu32 ". "
+               "Pass sdk.read_metadata(max_size) with a larger max_size.\n",
+               data_size, buf_size);
         return false;
     }
 
