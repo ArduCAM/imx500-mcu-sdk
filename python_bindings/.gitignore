@@ -1,0 +1,18 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Build and packaging outputs
+build/
+dist/
+*.egg-info/
+
+# Compiled pybind11 extension outputs
+python/imx500_mcu_sdk/_sdk*.so
+python/imx500_mcu_sdk/_sdk*.pyd
+python/imx500_mcu_sdk/_sdk*.dll
+python/imx500_mcu_sdk/_sdk*.dylib
+
+# Local virtual environments
+.venv/
+venv/

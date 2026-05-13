@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64", "wheel", "pybind11>=2.10"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imx500-mcu-sdk"
+version = "0.1.0"
+description = "Python bindings for the Arducam IMX500 MCU SDK."
+requires-python = ">=3.9"
+dependencies = ["pyserial>=3.5"]
+
+[tool.setuptools.packages.find]
+where = ["python"]

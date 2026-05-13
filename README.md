@@ -127,9 +127,20 @@ Example events include `person_count = 3`, `zone_occupied = true`,
 | `imx500_mcu_sdk.cmake` | SDK source collection and compile-time configuration |
 | `imx500_firmware.cmake` | Generated firmware and network-info source collection |
 | `imx500_firmware_cpp/imx500_firmware/` | Generated firmware and network-info blobs |
+| `python_bindings/` | Optional Python host tools for quick USB bridge validation |
 | `docs/` | API landing page and integration documentation |
 | `examples/` | Platform reference projects |
 | `third_party/flatbuffers/` | FlatBuffers dependency used by network-info parsing |
+
+## Quick USB Validation
+
+If you want to quickly validate a camera module from a PC before integrating
+the SDK into firmware, the optional Python host tools can exercise the USB
+bridge, `imx500_mcu_sdk.open()`, metadata reads, JPEG preview, and model
+flashing flows.
+
+See [`python_bindings/README.md`](python_bindings/README.md) for firmware
+version requirements, USB connection steps, Python dependencies, and tool usage.
 
 ## Troubleshooting
 

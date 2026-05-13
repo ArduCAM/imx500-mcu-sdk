@@ -95,6 +95,24 @@ Useful options:
 To program a model onto the IMX500 camera module:
 
 1. Hold the `Mode` button on the camera module, then connect it to the host PC over USB Type-C.
-2. Run command `python tools/imx500_usb_flash.py --model <selected_network.fpk> --network-info <selected_network_info.txt>`
+2. Select the flashing tool according to the camera module firmware version:
+
+   - For camera firmware older than `0x00000010`, use the legacy USB flashing tool
+     `imx500-mcu-sdk/tools/imx500_usb_flash.py` from the SDK root:
+
+     ```bash
+     python tools/imx500_usb_flash.py \
+       --model <selected_network.fpk> \
+       --network-info <selected_network_info.txt>
+     ```
+
+   - For camera firmware `0x00000010` or newer, use the Python binding USB bridge tool
+     `imx500-mcu-sdk/python_bindings/tools/imx500_usb_flash.py` from the SDK root:
+
+     ```bash
+     python python_bindings/tools/imx500_usb_flash.py \
+       --model <selected_network.fpk> \
+       --network-info <selected_network_info.txt>
+     ```
 
 The programmed model must also match the host-side `--task` selection.
