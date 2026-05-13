@@ -66,7 +66,9 @@ Check:
 - Quantization, input shape, preprocessing, and normalization.
 - `network_info` mismatch with the model package.
 - Tensor order, output scale, label mapping, and post-processing code.
-- Scene mismatch: lighting, lens, object scale, occlusion, or motion.
+
+Refer doc entry: [https://developer.aitrios.sony-semicon.com/en/docs/raspberry-pi-ai-camera/imx500-converter?version=3.16.1&progLang=](https://developer.aitrios.sony-semicon.com/en/docs/raspberry-pi-ai-camera/imx500-converter?version=3.16.1&progLang=)
+
 
 ## Next Unlock
 
@@ -76,5 +78,5 @@ Check:
 | Hardware path is PC/Linux | Continue with [USB3 UVC deployment](../paths/usb-validation-to-uvc.md) |
 | Product needs Linux services or packaging | Continue with [MIPI / Raspberry Pi / CM5 product path](../paths/mipi-rpi-product-path.md) |
 | Product only needs AI events | Continue with [SPI metadata to MCU product path](../paths/spi-mcu-product-path.md) |
-| Conversion or accuracy is blocked | [Contact custom model support](https://ai.arducam.com/) |
+| Conversion or accuracy is blocked | [Contact custom model support](https://www.arducam.com/blog/contact-arducam/) |
 

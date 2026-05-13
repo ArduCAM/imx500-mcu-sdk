@@ -13,8 +13,6 @@ prototyping, and production design-in.
 | Model cannot be converted | Review model task, operators, quantization, input shape, and post-processing | [Custom model support](https://ai.arducam.com/) |
 | Accuracy drops in real scene | Review data, lens, FOV, illumination, enclosure, and mounting | [Optical support](https://www.arducam.com/) |
 | Product needs Linux packaging | Review MIPI/RPi/CM5 path, networking, enclosure, and UI needs | [MIPI/RPi/CM5 support](https://www.arducam.com/embedded-camera-module/cameras-for-raspberrypi/raspberry-pi-ai-camera.html) |
-| Factory test is unclear | Define station command, pass/fail marker, logs, and failure reasons | [Production test support](https://www.arducam.com/blog/your-reliable-oem-odm/) |
-| Supply or SLA is needed | Collect volume plan, customization needs, and lifecycle expectations | [Volume supply](https://www.arducam.com/blog/your-reliable-oem-odm/) |
 
 ## What To Prepare Before Contact
 
