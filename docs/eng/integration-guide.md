@@ -22,7 +22,7 @@ notes are maintained under `examples/`.
 - Unified C/C++ SDK API, with the main entry point in `ArducamIMX500SDK.h`
 - Network firmware loading and stream control
 - Metadata readout and parsing
-- SPI data forwarding mode switching and data injection
+- SPI data forwarding mode switching
 - Platform adapter pattern for faster MCU bring-up
 
 ## Product Positioning

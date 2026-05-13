@@ -1,47 +1,28 @@
-# IMX500 Person Detect ROI MVP
+# Mission: Build A Pico W Person-Detection ROI Demo
 
 Raspberry Pi Pico W + Arducam IMX500 person detection demo.
 
-This example streams the latest JPEG frame over HTTP port 80, overlays ROI and person detection boxes in the browser, and drives GP0/GP1 to the configured warning-active level when a person is detected.
+This example streams the latest JPEG frame over HTTP port 80, overlays ROI and
+person detection boxes in the browser, and drives GP0/GP1 to the configured
+warning-active level when a person is detected.
 
-## Features
+## Goal
 
-- HTTP web UI on port 80.
-- Dynamic JPEG refresh through `/frame.jpg`.
-- Runtime status through `/status.json`.
-- Runtime configuration through `/config`.
-- Person detection boxes drawn over the displayed JPEG.
-- ROI polygon drawn over the displayed JPEG.
-- Confidence threshold configurable from the page.
-- ROI point configuration kept in the page. Default ROI is the full image.
-- GP0 and GP1 output the configured warning-active level when `person_count > 0`, and the opposite level otherwise.
-- UDP logic has been removed.
-- Serial logs are quiet by default for long-running stability.
+Turn IMX500 metadata into a product-like event loop:
+
+- browser preview through `/frame.jpg`
+- person detections exposed through `/status.json`
+- configurable ROI and confidence threshold through `/config`
+- GP0/GP1 warning outputs driven by `person_count > 0`
 
 ## Hardware
 
 - Raspberry Pi Pico W / compatible RP2040 Pico W target.
 - Arducam IMX500 module wired as expected by this SDK example.
-- GP0 and GP1 are used as detection output pins.
+- GP0 and GP1 connected to the downstream warning input, relay, LED, or test fixture.
+- Wi-Fi network reachable by the Pico W and browser.
 
-Output behavior:
-
-| Pin | State |
-| --- | --- |
-| GP0 | Warning output, default active-high |
-| GP1 | Warning output, default active-high |
-| GP0/GP1 | Idle level is the opposite of the configured warning-active level |
-
-By default, GP0/GP1 are active-high: startup and idle are low, warning is high.
-To build active-low outputs, configure with:
-
-```bash
-cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=LOW
-```
-
-With active-low outputs, startup and idle are high, and warning is low. Use `-DPERSON_DETECT_GPIO_ACTIVE_LEVEL=HIGH` to select active-high explicitly. `1` and `0` are also accepted.
-
-## Wi-Fi Config
+## Run
 
 Create a `.env` file in this directory:
 
@@ -50,30 +31,19 @@ WIFI_SSID=your_wifi_ssid
 WIFI_PASSWORD=your_wifi_password
 ```
 
-The default Wi-Fi country is `CN`. Override it at configure time if needed:
+Build the firmware:
 
 ```bash
-cmake .. -DWIFI_COUNTRY=US
-```
-
-## Build
-
-```bash
+cd examples/platform/rpi/pico_w/imx500_person_detect_roi_mvp
 mkdir build
 cd build
 cmake ..
+cmake --build .
 ```
 
-Useful configure options:
+Flash `imx500_person_detect_roi_mvp.uf2` to Pico W.
 
-```bash
-cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=HIGH
-cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=LOW
-```
-
-## Runtime
-
-Open the USB serial console. After Wi-Fi connects, the firmware prints the page URL:
+Open the USB serial console. After Wi-Fi connects, the firmware prints:
 
 ```text
 HTTP JPEG server listening on http://<board-ip>/
@@ -81,11 +51,51 @@ HTTP JPEG server listening on http://<board-ip>/
 
 Open that URL in a browser on the same network.
 
-The page is designed for landscape use:
+## Expected Feedback
 
-- Left: JPEG frame with ROI and detection overlays.
-- Right: frame status, JPEG size, person count, GP0/GP1 state with active level, confidence, and ROI config.
-- Apply button: updates confidence threshold and ROI points.
+You should see:
+
+- Serial output showing IMX500 module information.
+- `IMX500 stream_on complete`.
+- `metadata worker started on core1`.
+- Wi-Fi connected and an HTTP URL printed.
+- Browser preview with JPEG frame, ROI polygon, person boxes, and status panel.
+- GP0/GP1 switch to the configured warning-active level when `person_count > 0`.
+
+## You Passed This Mission When
+
+- The browser UI loads from the Pico W.
+- `/frame.jpg` refreshes with the latest JPEG frame.
+- `/status.json` reports metadata, person count, ROI, threshold, and GPIO state.
+- Changing confidence or ROI through the page updates runtime behavior.
+- GP0/GP1 idle and warning levels match the configured active level.
+
+## If It Fails
+
+- If Wi-Fi does not connect, check `.env`, `WIFI_COUNTRY`, SSID, password, and network reachability.
+- If the IMX500 does not open, check wiring, power, and whether the model is already deployed in module Flash.
+- If metadata parsing fails, confirm the module is running the expected person-detection model and metadata format.
+- If the browser loads but no image appears, check that `IMX500_SPI_METADATA_FORMAT` includes JPEG metadata.
+- If GP0/GP1 appear inverted, rebuild with the expected active level.
+
+## Runtime Configuration
+
+The default Wi-Fi country is `CN`. Override it at configure time if needed:
+
+```bash
+cmake .. -DWIFI_COUNTRY=US
+```
+
+Output active level:
+
+```bash
+cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=HIGH
+cmake .. -DPERSON_DETECT_GPIO_ACTIVE_LEVEL=LOW
+```
+
+By default, GP0/GP1 are active-high: startup and idle are low, warning is high.
+With active-low outputs, startup and idle are high, and warning is low. `1` and
+`0` are also accepted.
 
 ## Web Endpoints
 
@@ -107,3 +117,10 @@ Coordinates are relative to the displayed image:
 - `0.0` means left/top edge.
 - `1.0` means right/bottom edge.
 - Default ROI points are the full image: `(0,0)`, `(1,0)`, `(1,1)`, `(0,1)`.
+
+## Next Unlock
+
+- Turn `person_count > 0` into your product event logic.
+- Continue with the [SPI metadata to MCU product path](../../../../../docs/paths/spi-mcu-product-path.md).
+- Validate or replace the model with the [model validation mission](../../../../../docs/paths/model-validation-to-production.md).
+- Move toward production with the [design-in checklist](../../../../../docs/production/design-in-checklist.md).

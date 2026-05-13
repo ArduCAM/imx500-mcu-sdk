@@ -20,7 +20,7 @@
 - 提供统一 C/C++ SDK API，入口见 `ArducamIMX500SDK.h`
 - 支持网络固件加载和视频流控制
 - 支持 metadata 读取和解析
-- 支持 SPI data forwarding mode 切换和 data injection
+- 支持 SPI data forwarding mode 切换
 - 使用 platform adapter pattern 加速新 MCU 平台 bring-up
 
 ## 产品定位

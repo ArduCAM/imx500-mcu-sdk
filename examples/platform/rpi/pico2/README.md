@@ -1,4 +1,4 @@
-# Pico 2 to IMX500 Camera Wiring
+# Mission: Bring Up IMX500 Metadata On Pico 2
 
 All Pico 2 examples in this directory use the same hardware interface to the IMX500 camera module:
 
@@ -11,7 +11,58 @@ The same pin mapping is used by:
 - `camera_serial_stream_multitask`
 - `production_test`
 
-## 1. Read the Camera Header First
+## Goal
+
+Wire Pico 2 to the IMX500 module once, then reuse the same `I2C0` + `SPI0`
+interface across serial streaming, integration, and production-test examples.
+
+## Hardware
+
+- Raspberry Pi Pico 2.
+- Arducam IMX500 camera module.
+- 8-pin IMX500 header wires.
+- USB cable for Pico 2 power, flashing, and serial output.
+
+## Run
+
+After wiring, choose the mission that matches your goal:
+
+| Mission | Start with |
+| --- | --- |
+| Stream metadata to a PC for parsing | [camera_serial_stream_multitask](camera_serial_stream_multitask/README.md) |
+| Run a repeatable production check | [production_test](production_test/README.md) |
+| Port the same interface to your own MCU product | [SPI metadata to MCU product path](../../../../docs/paths/spi-mcu-product-path.md) |
+
+## Expected Feedback
+
+You should see:
+
+- Pico 2 firmware boots and prints serial output.
+- IMX500 control succeeds over `I2C0`.
+- Metadata can be read over `SPI0` in the selected example.
+
+## You Passed This Mission When
+
+- The wiring checklist below is complete.
+- The selected Pico 2 example can start the IMX500 stream.
+- At least one metadata frame is read or forwarded.
+
+## If It Fails
+
+- If the camera is not detected, first check `GND`, `3V3`, `SDA`, `SCL`, and `CS`.
+- If the module powers up but data transfer fails, check whether `SPI_TX` and `SPI_RX` were crossed correctly.
+- If you changed the wiring, update the corresponding `g_config.h` file in the example you are building.
+- The examples expect both `I2C` and `SPI` to be connected. I2C alone is not enough.
+
+## Next Unlock
+
+- Parse metadata into model output with [camera_serial_stream_multitask](camera_serial_stream_multitask/README.md).
+- Turn metadata into product events with the [SPI metadata path](../../../../docs/paths/spi-mcu-product-path.md).
+- Validate a model with the [model validation mission](../../../../docs/paths/model-validation-to-production.md).
+
+## Wiring Details
+
+### 1. Read the Camera Header First
 
 ![](../../../pics/B0642_connector.png)
 Based on the hardware image, the camera board exposes an 8-pin header. In the image orientation, the pins appear in this order from left to right:
@@ -33,7 +84,7 @@ Important:
 - If you flip the board or view it from the opposite side, the physical order will appear reversed.
 - When wiring by hand, always confirm both the pad number and the signal name on the PCB silk.
 
-## 2. Recommended Pico 2 Wiring
+### 2. Recommended Pico 2 Wiring
 
 Use the following mapping between the camera board and Pico 2:
 
@@ -48,7 +99,7 @@ Use the following mapping between the camera board and Pico 2:
 | `7` | `+3v3` | `3V3(OUT)` | `3.3 V power` |
 | `6` | `DGND` | `GND` | `Ground` |
 
-## 3. Why `SPI_TX` and `SPI_RX` Can Be Confusing
+### 3. Why `SPI_TX` and `SPI_RX` Can Be Confusing
 
 This is the part that usually causes mistakes.
 
@@ -64,7 +115,7 @@ So the correct SPI cross-connection is:
 
 If you instead connect `TX -> TX` and `RX -> RX`, SPI communication will not work.
 
-## 4. Wiring Diagram
+### 4. Wiring Diagram
 
 ```text
 Pico 2                         IMX500 camera board
@@ -79,7 +130,7 @@ GPIO17  (SPI CS)          ->   Pad 2  (SPI_CS_3v3)
 GND                       ->   Pad 6  (DGND)
 ```
 
-## 5. Wiring Checklist
+### 5. Wiring Checklist
 
 Before powering the board:
 
@@ -90,14 +141,14 @@ Before powering the board:
 5. Double-check that `3.3 V` is used. Do not feed `5 V` into the camera signal pins.
 6. Power Pico 2 through USB only after the wiring is complete.
 
-## 6. Troubleshooting
+### 6. Troubleshooting
 
 - If the camera is not detected, first check `GND`, `3V3`, `SDA`, `SCL`, and `CS`.
 - If the module powers up but data transfer fails, check whether `SPI_TX` and `SPI_RX` were crossed correctly.
 - If you changed the wiring, update the corresponding `g_config.h` file in the example you are building.
 - The examples expect both `I2C` and `SPI` to be connected. I2C alone is not enough.
 
-## 7. Pin Definitions Used by the Current Code
+### 7. Pin Definitions Used by the Current Code
 
 The current Pico 2 examples all use:
 

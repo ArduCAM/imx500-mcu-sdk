@@ -9,15 +9,45 @@ inference streams, and consume AI metadata or tensors over a portable `I2C` + `S
 interface. Use it when your product needs vision events from the sensor, not a full
 Linux vision pipeline.
 
-## Start Here
+## Choose Your Mission
 
-| Goal | Go to |
-| --- | --- |
-| Run the fastest display demo | [ESP32-P4 example](examples/platform/esp/esp32p4/README.md) |
-| Wire a Raspberry Pi Pico 2 | [Pico 2 wiring guide](examples/platform/rpi/pico2/README.md) |
-| Stream IMX500 metadata over USB serial | [Pico 2 serial stream example](examples/platform/rpi/pico2/camera_serial_stream_multitask/README.md) |
-| Integrate the SDK into your own MCU project | Integration guide: [中文](docs/zho/integration-guide.md), [English](docs/eng/integration-guide.md), [日本語](docs/jpn/integration-guide.md) |
-| Read the public API reference | [Doxygen API docs](https://arducam.github.io/imx500-mcu-sdk/) |
+Start with one small win. Each mission gives you a visible checkpoint and unlocks
+the next IMX500 product path.
+
+| Mission | Start with | Success checkpoint | Next unlock |
+| --- | --- | --- | --- |
+| Validate the camera over USB | [Python USB tools](python_bindings/README.md) | USB bridge detected, SDK `open()` completes, one metadata frame is received, optional JPEG preview is saved | [USB3 UVC deployment path / B0566](docs/paths/usb-validation-to-uvc.md) |
+| Run a visible AI demo | [ESP32-P4 example](examples/platform/esp/esp32p4/README.md) | LCD preview is visible and the serial log prints parsed AI output | [MCU integration path](docs/paths/spi-mcu-product-path.md) |
+| Read AI metadata on an MCU | [Pico 2 serial stream example](examples/platform/rpi/pico2/camera_serial_stream_multitask/README.md) | MCU receives an IMX500 metadata frame and forwards or parses it into an event | [SPI metadata productization path](docs/paths/spi-mcu-product-path.md)|
+| Test a model | [Model validation mission](docs/paths/model-validation-to-production.md) | Known model or real hardware output produces parsed metadata | [Application pack](examples/README.md) / [model conversion](https://www.arducam.com/arducam-ai-model-converter-tutorial) |
+| Port the SDK to your board | Integration guide: [中文](docs/zho/integration-guide.md), [English](docs/eng/integration-guide.md), [日本語](docs/jpn/integration-guide.md) | Your platform callbacks can probe the module, start the stream, and read metadata | [Custom MCU product path](docs/paths/spi-mcu-product-path.md) |
+| Move toward production | [Production checklist](docs/production/design-in-checklist.md) | Interface, model, optics, enclosure, and factory test flow are confirmed | [Design-in, customization, and volume supply](docs/production/support-options.md) |
+
+Need the API surface while building? Use the
+[Doxygen API docs](https://arducam.github.io/imx500-mcu-sdk/).
+
+## Quick USB Validation
+
+If you just received a B0642 module, validate the camera from a PC before wiring
+an MCU. The optional Python host tools can exercise the USB bridge,
+`imx500_mcu_sdk.open()`, metadata reads, JPEG preview, and model flashing flows.
+
+```bash
+cd python_bindings
+python3 -m pip install -e . --no-build-isolation
+PYTHONPATH=python python3 tools/imx500_first_run.py
+```
+
+You passed this checkpoint when the tool connects to the USB bridge, `open()`
+returns success, and at least one metadata frame is saved.
+
+Next unlocks:
+
+- Want PC/Linux plug-and-play deployment? Continue toward the [USB3 UVC path](docs/paths/usb-validation-to-uvc.md).
+- Want a visual MCU demo? Continue with the [ESP32-P4 example](examples/platform/esp/esp32p4/README.md).
+- Want to test a model first? Continue with the [model validation mission](docs/paths/model-validation-to-production.md).
+- Want Linux-hosted product packaging? Continue with the [MIPI / Raspberry Pi / CM5 path](docs/paths/mipi-rpi-product-path.md).
+- Want low-power event output? Continue with the [SPI metadata path](docs/paths/spi-mcu-product-path.md).
 
 ## What You Can Build
 
@@ -53,7 +83,7 @@ The SDK provides:
 - Stream control and runtime state queries
 - Metadata readout over `SPI`
 - Metadata parsing into network and tensor descriptors
-- Optional data-injection and SPI forwarding modes for validation workflows
+- Optional SPI forwarding modes for validation workflows
 - A platform adapter pattern for bringing up new MCU boards
 
 ## Supported Platforms
@@ -132,16 +162,6 @@ Example events include `person_count = 3`, `zone_occupied = true`,
 | `examples/` | Platform reference projects |
 | `third_party/flatbuffers/` | FlatBuffers dependency used by network-info parsing |
 
-## Quick USB Validation
-
-If you want to quickly validate a camera module from a PC before integrating
-the SDK into firmware, the optional Python host tools can exercise the USB
-bridge, `imx500_mcu_sdk.open()`, metadata reads, JPEG preview, and model
-flashing flows.
-
-See [`python_bindings/README.md`](python_bindings/README.md) for firmware
-version requirements, USB connection steps, Python dependencies, and tool usage.
-
 ## Troubleshooting
 
 - If FlatBuffers headers are missing, run `git submodule update --init --recursive`.
@@ -152,21 +172,53 @@ version requirements, USB connection steps, Python dependencies, and tool usage.
 
 ## Production Design-In Checklist
 
-Before moving beyond evaluation, confirm:
+Before moving beyond evaluation, confirm the product path, model output,
+optics, enclosure, firmware flow, factory test, and support expectations.
 
-- Target MCU, memory budget, SPI bandwidth, and MIPI video path
-- Camera module, lens, illumination, and mechanical mounting
-- Model, network-info version, metadata format, and post-processing path
-- Boot mode, firmware loading strategy, and flash programming flow
-- Factory test requirements and expected serial/log output
-- Failure recovery behavior for camera detect, SPI transfer, and metadata parse errors
-- Volume purchasing, optical customization, and support expectations
+| Need | Go to |
+| --- | --- |
+| Freeze production readiness | [Production Design-In Checklist](docs/production/design-in-checklist.md) |
+| Review lens, FOV, illumination, enclosure, or mounting | [Optical Selection](docs/production/optical-selection.md) |
+| Build a repeatable station or EOL test | [EOL Test](docs/production/eol-test.md) |
+| Decide when to contact Arducam | [Support Options](docs/production/support-options.md) |
 
-## Roadmap
+## Journey Map: From First Signal To Production
 
-This repository is designed to grow across more MCU and low-cost SoC platforms. The
-current focus is a reliable SDK core, reference platform examples, clear wiring guides,
-and repeatable metadata parsing flows.
+```text
+First signal
+    |
+    v
+USB validation
+    |
+    v
+Choose a product path
+    |-- USB3 UVC deployment
+    |-- MIPI / Raspberry Pi / CM5 product
+    `-- SPI / MCU low-power product
+    |
+    v
+Model validation
+    |
+    v
+Prototype validation
+    |
+    v
+Production design-in
+```
+
+Path details:
+
+- [USB Validation To USB3 UVC Deployment](docs/paths/usb-validation-to-uvc.md)
+- [MIPI / Raspberry Pi / CM5 Product](docs/paths/mipi-rpi-product-path.md)
+- [SPI Metadata To MCU Product](docs/paths/spi-mcu-product-path.md)
+- [Model Validation To Production](docs/paths/model-validation-to-production.md)
+
+| Stage | What you get | Arducam can help with |
+| --- | --- | --- |
+| First signal | Camera detected, SDK opens the module, metadata frame received | Bring-up support and debug workflow |
+| Model validation | Known model or custom model result on IMX500 | Model conversion, porting, and post-processing |
+| Prototype | Product event output in your application | Optics, firmware, metadata parsing, and interface review |
+| Production | Stable hardware/software package and test flow | [Design-in, factory test, customization, SLA, and long-term supply](docs/production/support-options.md) |
 
 ## License
 
@@ -174,5 +226,6 @@ See the repository license terms before using this SDK in a product.
 
 ## Need Help?
 
-For module information and production design-in discussions, start from the Arducam IMX500
-product page: [B0642 IMX500 AI camera module](https://www.arducam.com/arducam-imx500-ai-camera-module-for-esp32-p4-and-other-mcu-soc.html).
+For module information and production design-in discussions, start from the
+[B0642 IMX500 AI camera module](https://www.arducam.com/arducam-imx500-ai-camera-module-for-esp32-p4-and-other-mcu-soc.html)
+product page or the [support options](docs/production/support-options.md).

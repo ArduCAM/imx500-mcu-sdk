@@ -22,7 +22,7 @@
 - `ArducamIMX500SDK.h` を入口とする統一 C/C++ SDK API
 - ネットワークファームウェアのロードとストリーム制御
 - metadata の読み出しと解析
-- SPI data forwarding mode の切り替えと data injection
+- SPI data forwarding mode の切り替え
 - 新しい MCU の bring-up を早める platform adapter pattern
 
 ## 製品ポジショニング

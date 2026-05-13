@@ -1,4 +1,4 @@
-# ESP32-P4 to IMX500 Camera and LCD Wiring
+# Mission: Run A Visible IMX500 AI Demo On ESP32-P4
 
 `examples/platform/esp/esp32p4/ai_camera_multitask` uses the ESP32-P4 Function EV Board with:
 
@@ -9,7 +9,61 @@
 
 The same wiring assumptions are baked into the current `ai_camera_multitask` code.
 
-## 1. Read the Camera Header First
+## Goal
+
+Get the fastest MCU-hosted visual demo: MIPI camera preview on the LCD, IMX500
+control over `I2C`, and AI metadata/tensor access over `SPI`.
+
+## Hardware
+
+- ESP32-P4 Function EV Board.
+- Arducam IMX500 camera module.
+- LCD panel for the board `MIPI DSI` connector.
+- Camera FPC cable, LCD FPC cable, and 8-pin IMX500 header wires.
+
+## Run
+
+Wire the board using the checklist below, then build and flash the example:
+
+```bash
+cd examples/platform/esp/esp32p4/ai_camera_multitask
+idf.py set-target esp32p4
+idf.py build flash monitor
+```
+
+## Expected Feedback
+
+You should see:
+
+- LCD video preview from the camera.
+- IMX500 `I2C` and `SPI` initialization logs.
+- The demo task reading IMX500 metadata or tensor payloads.
+- AI overlay or parsed AI output matching the selected embedded model.
+
+## You Passed This Mission When
+
+- The LCD preview is visible.
+- The serial monitor shows the stream has started.
+- Parsed AI output or overlay output appears for at least 30 seconds.
+- No repeated `SPI` metadata timeout or IMX500 detect failure appears.
+
+## If It Fails
+
+- If the camera is not detected, check the `MIPI CSI` cable, `GND`, `3V3`, `SDA`, and `SCL`.
+- If the module powers up but IMX500 communication fails, check `CS`, `SCK`, and whether `SPI_TX` / `SPI_RX` were crossed correctly.
+- If the LCD stays dark, check the `MIPI DSI` cable and confirm `LCD RST` really goes to `GPIO27`.
+- If the build fails, confirm ESP-IDF supports the ESP32-P4 target and that submodules are initialized.
+
+## Next Unlock
+
+- Convert parsed metadata into product events.
+- Continue with the [SPI metadata to MCU product path](../../../../docs/paths/spi-mcu-product-path.md).
+- Validate a different model with the [model validation mission](../../../../docs/paths/model-validation-to-production.md).
+- Move toward production with the [design-in checklist](../../../../docs/production/design-in-checklist.md).
+
+## Wiring Details
+
+### 1. Read the Camera Header First
 
 ![](../../../pics/B0642_connector.png)
 
@@ -32,7 +86,7 @@ Important:
 - If you flip the board or view it from the opposite side, the physical order will appear reversed.
 - When wiring by hand, always confirm both the pad number and the signal name on the PCB silk.
 
-## 2. Required Connections for `ai_camera_multitask`
+### 2. Required Connections for `ai_camera_multitask`
 
 This project needs three physical connections:
 
@@ -44,7 +98,7 @@ Without the MIPI CSI cable, the video stream will not work.
 
 Without the 8-pin header wiring, IMX500 control and SPI data access will not work.
 
-## 3. Recommended IMX500 Header Wiring
+### 3. Recommended IMX500 Header Wiring
 
 Use the following mapping between the camera board and ESP32-P4:
 
@@ -59,7 +113,7 @@ Use the following mapping between the camera board and ESP32-P4:
 | `7` | `+3v3` | `3V3` | `3.3 V power` |
 | `6` | `DGND` | `GND` | `Ground` |
 
-## 4. Why `SPI_TX` and `SPI_RX` Can Be Confusing
+### 4. Why `SPI_TX` and `SPI_RX` Can Be Confusing
 
 This is the part that most easily gets wired wrong.
 
@@ -75,7 +129,7 @@ So the correct SPI cross-connection is:
 
 If you connect `TX -> TX` and `RX -> RX`, SPI communication will fail.
 
-## 5. LCD Wiring
+### 5. LCD Wiring
 
 The LCD used by this example is expected to connect through the board `MIPI DSI` interface.
 
@@ -90,7 +144,7 @@ Important:
 - The current code uses `GPIO27` as the LCD reset pin.
 - If your LCD reset line is connected somewhere else, update the LCD pin definition in the project before building.
 
-## 6. Wiring Diagram
+### 6. Wiring Diagram
 
 ```text
 ESP32-P4 Function EV Board         IMX500 camera board
@@ -114,7 +168,7 @@ ESP32-P4 Function EV Board         IMX500 camera module
 MIPI CSI connector             <-> Camera FPC
 ```
 
-## 7. Wiring Checklist
+### 7. Wiring Checklist
 
 Before powering the board:
 
@@ -128,14 +182,14 @@ Before powering the board:
 8. Double-check that the camera header uses `3.3 V`. Do not feed `5 V` into the camera signal pins.
 9. Power the board only after the wiring is complete.
 
-## 8. Troubleshooting
+### 8. Troubleshooting
 
 - If the camera is not detected, first check the `MIPI CSI` cable, `GND`, `3V3`, `SDA`, and `SCL`.
 - If the module powers up but IMX500 communication fails, check `CS`, `SCK`, and whether `SPI_TX` / `SPI_RX` were crossed correctly.
 - If the LCD stays dark, check the `MIPI DSI` cable and confirm `LCD RST` really goes to `GPIO27`.
 - If you changed any pins, update the corresponding source definitions before building.
 
-## 9. Pin Definitions Used by the Current Code
+### 9. Pin Definitions Used by the Current Code
 
 The current `ai_camera_multitask` code uses:
 

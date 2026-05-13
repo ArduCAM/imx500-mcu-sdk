@@ -49,6 +49,19 @@ Run the following tools from this directory. If you installed the package in
 editable mode, you can run them directly. If you built the extension in place,
 prefix the command with `PYTHONPATH=python`.
 
+### `tools/imx500_first_run.py`
+
+Runs the recommended first validation flow with checkpoint-style output. It
+connects to the USB bridge, probes the IMX500 module, calls
+`imx500_mcu_sdk.open()`, starts the stream, and saves one metadata frame. Add
+`--jpeg-preview` to request JPEG metadata output and save one extracted JPEG
+preview frame without opening a preview window.
+
+```bash
+PYTHONPATH=python python3 tools/imx500_first_run.py
+PYTHONPATH=python python3 tools/imx500_first_run.py --jpeg-preview
+```
+
 ### `tools/imx500_usb_flash.py`
 
 Writes a `.fpk` model and `network_info.txt` to the camera module Flash through

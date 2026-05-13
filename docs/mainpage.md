@@ -1,13 +1,13 @@
 # IMX500 MCU SDK API Overview
 
-The IMX500 MCU SDK exposes a compact set of C/C++ interfaces for bringing up the module, starting inference streams, parsing metadata and output tensors, injecting test input, and tuning sensor behavior.
+The IMX500 MCU SDK exposes a compact set of C/C++ interfaces for bringing up the module, starting inference streams, parsing metadata and output tensors, and tuning sensor behavior.
 
 This page is the API landing page for the SDK. Platform quick-start links are maintained in `README.md`; integration details live under `docs/`.
 
 ## Public Header Files
 
 - `ArducamIMX500SDK.h`
-  High-level SDK interfaces for module control, metadata parsing, data injection, and sensor configuration.
+  High-level SDK interfaces for module control, metadata parsing, and sensor configuration.
 - `ai_driver.h`
   Platform callback registration interfaces used to bind your `I2C`, `SPI`, delay, and optional log implementation.
 
@@ -45,16 +45,6 @@ Use this category for exposure and white-balance tuning:
 - @ref imx500_apply_white_balance_config "imx500_apply_white_balance_config()"
 
 This is the category to use when you need to tune image quality through the SDK's AE and white-balance controls.
-
-### Data Injection
-
-- @ref do_data_injection_stream "do_data_injection_stream(...)"
-- @ref do_data_injection "do_data_injection(...)"
-- @ref stop_data_injection "stop_data_injection()"
-- @ref _preprocess_nn_input_data "_preprocess_nn_input_data(...)"
-- @ref _convert_injected_data "_convert_injected_data(...)"
-
-This group is especially useful for validation pipelines where input frames are pushed from the MCU host side instead of being captured live from the image path.
 
 ### IMX500 Control
 
