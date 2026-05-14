@@ -3,14 +3,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-
 FPK_END_PATTERN = bytes([0x33, 0x36, 0x39, 0x35])
 NETWORK_INFO_START_PATTERN = b"network_info.txt\x00\x00"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Extract .fpk and network_info.txt from a .rpk file.",
+        description="Extract .fpk and network_info.txt from a .rpk file, then 32-bit endian-swap the .fpk data.",
     )
     parser.add_argument("input_rpk", type=Path, help="Path to the input .rpk file.")
     parser.add_argument(
@@ -56,6 +55,13 @@ def ensure_writable(path: Path, overwrite: bool) -> None:
         raise FileExistsError(f"Output file already exists: {path}")
 
 
+def swap_32bit_endian(data: bytes) -> bytes:
+    if len(data) % 4 != 0:
+        raise ValueError("Cannot 32-bit endian-swap .fpk data because its size is not a multiple of 4 bytes.")
+
+    return b"".join(data[index : index + 4][::-1] for index in range(0, len(data), 4))
+
+
 def convert_rpk(input_rpk: Path, output_dir: Path | None = None, overwrite: bool = False) -> tuple[Path, Path]:
     if not input_rpk.is_file():
         raise FileNotFoundError(f"Input .rpk file not found: {input_rpk}")
@@ -67,7 +73,7 @@ def convert_rpk(input_rpk: Path, output_dir: Path | None = None, overwrite: bool
     ensure_writable(network_info_output, overwrite)
 
     data = input_rpk.read_bytes()
-    fpk_output.write_bytes(extract_fpk_data(data))
+    fpk_output.write_bytes(swap_32bit_endian(extract_fpk_data(data)))
     network_info_output.write_bytes(extract_network_info_data(data))
     return fpk_output, network_info_output
 
