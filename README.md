@@ -113,10 +113,6 @@ git submodule update --init --recursive
 Then follow the board wiring and project-specific notes in
 [examples/platform/esp/esp32p4/README.md](examples/platform/esp/esp32p4/README.md).
 
-Before publishing a production-facing quick start, verify and document the exact
-`ESP-IDF` version, build command, flash command, monitor baud rate, expected boot log,
-and expected metadata output for the target hardware bundle.
-
 ## Port To A New MCU
 
 Most ports follow the same sequence:
