@@ -28,6 +28,8 @@ Need the API surface while building? Use the
 
 ## Quick USB Validation
 
+[Demo Video](https://cdn.arducam.com/wp-content/uploads/2026/05/B0642_usb_get_start.mp4)
+
 If you just received a B0642 module, validate the camera from a PC before wiring
 an MCU. The optional Python host tools can exercise the USB bridge,
 `imx500_mcu_sdk.open()`, metadata reads, JPEG preview, and model flashing flows.
