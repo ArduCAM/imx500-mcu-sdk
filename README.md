@@ -35,6 +35,9 @@ an MCU. The optional Python host tools can exercise the USB bridge,
 `imx500_mcu_sdk.open()`, metadata reads, JPEG preview, and model flashing flows.
 
 ```bash
+git clone --recursive https://github.com/ArduCAM/imx500-mcu-sdk.git
+cd imx500-mcu-sdk
+git submodule update --init --recursive
 cd python_bindings
 python3 -m pip install -e . --no-build-isolation
 PYTHONPATH=python python3 tools/imx500_first_run.py
