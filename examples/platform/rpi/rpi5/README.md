@@ -1,6 +1,9 @@
 # Mission: Bring Up IMX500 Metadata On RPi5(experimental)
 
 ## Get image
+Hardware connection
+
+![](pics/hardware_connection.png)
 
 Download the Installation Script
 ```
