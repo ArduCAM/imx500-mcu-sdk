@@ -7,6 +7,7 @@ import argparse
 import pathlib
 import struct
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
@@ -31,6 +32,7 @@ except ImportError as exc:
 IMX500_HEADER_LEN = 12
 JPEG_ALIGNMENT = 1024
 JPEG_MIN_SIZE_BYTES = 4096
+METADATA_SIZE_POLL_INTERVAL_SEC = 0.05
 
 MIPI_FORMATS = {
     "image": imx500_mcu_sdk.MipiDataFormat.IMAGE,
@@ -174,8 +176,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help=(
-            "Maximum bytes for read_metadata(). 0 means use the SDK metadata "
-            "size, except --jpeg-preview defaults to 2 MiB."
+            "Maximum bytes for read_metadata(). 0 means wait for the SDK "
+            "metadata size, except --jpeg-preview defaults to 2 MiB."
         ),
     )
     parser.add_argument(
@@ -206,6 +208,12 @@ def parse_args() -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     if (args.model is None) != (args.network_info is None):
         raise SystemExit("--model and --network-info must be passed together")
+
+    if args.model is not None and not args.model.is_file():
+        raise SystemExit(f"model file does not exist: {args.model}")
+    if args.network_info is not None and not args.network_info.is_file():
+        raise SystemExit(f"network_info file does not exist: {args.network_info}")
+
     if args.timeout <= 0:
         raise SystemExit("--timeout must be > 0")
     if args.fps <= 0:
@@ -297,15 +305,33 @@ def main() -> int:
         if not opened:
             raise RuntimeError("imx500_mcu_sdk.open() returned false")
         imx500_mcu_sdk.stream_on()
-        return f"mipi={args.mipi_format} spi={spi_format_name} fps={args.fps}"
+        boot_name = "flash" if model is None else "direct"
+        return f"boot={boot_name} mipi={args.mipi_format} spi={spi_format_name} fps={args.fps}"
+
+    def metadata_read_size() -> int:
+        if metadata_max_bytes > 0:
+            return metadata_max_bytes
+
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            size = imx500_mcu_sdk.get_metadata_size()
+            if size > 0:
+                return size
+            time.sleep(METADATA_SIZE_POLL_INTERVAL_SEC)
+
+        raise RuntimeError(
+            "METADATA_SIZE_REG stayed 0 after stream_on(); pass a non-zero "
+            "--metadata-max-bytes if the frame size is not reported promptly"
+        )
 
     def read_metadata_frame() -> str:
-        frame = imx500_mcu_sdk.read_metadata(metadata_max_bytes)
+        read_size = metadata_read_size()
+        frame = imx500_mcu_sdk.read_metadata(read_size)
         if not frame:
-            raise RuntimeError("read_metadata() returned an empty frame")
+            raise RuntimeError(f"read_metadata({read_size}) returned an empty frame")
         state.metadata_frame = frame
         state.metadata_path = save_bytes(frame, args.output_dir, "metadata", ".bin")
-        return f"bytes={len(frame)} saved={state.metadata_path}"
+        return f"bytes={len(frame)} read_size={read_size} saved={state.metadata_path}"
 
     def save_jpeg_preview() -> str:
         frame = state.metadata_frame
