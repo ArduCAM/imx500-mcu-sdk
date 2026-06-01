@@ -40,6 +40,16 @@ cd imx500-mcu-sdk
 git submodule update --init --recursive
 cd python_bindings
 python3 -m pip install -e . --no-build-isolation
+```
+
+If this is the first time using the module, flash a model and its matching
+`network_info.txt` before running validation. For example, write the bundled
+HigherHRNet model to module Flash:
+
+```bash
+PYTHONPATH=python python3 tools/imx500_usb_flash.py \
+  --model ../tools/assets/models/higherhrnet/network.fpk \
+  --network-info ../tools/assets/models/higherhrnet/network_info.txt
 PYTHONPATH=python python3 tools/imx500_first_run.py
 ```
 
