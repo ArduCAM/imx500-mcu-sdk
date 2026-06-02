@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -22,6 +23,15 @@
 static int s_i2c_fd = -1;
 static int s_spi_fd = -1;
 static uint32_t s_i2c_recovered_log_count = 0;
+
+static int rpi5_open_device(const char *path, int flags)
+{
+    /*
+     * The SDK exports a public function named open(...). Use openat through
+     * syscall so this Linux adapter cannot resolve to the SDK symbol.
+     */
+    return (int)syscall(SYS_openat, AT_FDCWD, path, flags, 0);
+}
 
 static void rpi5_sleep_us(uint64_t us)
 {
@@ -83,14 +93,14 @@ static int configure_spi_device(void)
 
 bool init_peripherals(void)
 {
-    s_i2c_fd = open(RPI5_I2C_DEVICE, O_RDWR | O_CLOEXEC);
+    s_i2c_fd = rpi5_open_device(RPI5_I2C_DEVICE, O_RDWR | O_CLOEXEC);
     if (s_i2c_fd < 0) {
         printf("[I2C] open %s failed: %s\n", RPI5_I2C_DEVICE, strerror(errno));
         return false;
     }
     printf("I2C initialized device=%s addr=0x%02x\n", RPI5_I2C_DEVICE, RPI5_I2C_TARGET_ADDR);
 
-    s_spi_fd = open(RPI5_SPI_DEVICE, O_RDWR | O_CLOEXEC);
+    s_spi_fd = rpi5_open_device(RPI5_SPI_DEVICE, O_RDWR | O_CLOEXEC);
     if (s_spi_fd < 0) {
         printf("[SPI] open %s failed: %s\n", RPI5_SPI_DEVICE, strerror(errno));
         close_peripherals();
