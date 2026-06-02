@@ -1,11 +1,58 @@
-# Mission: Bring Up IMX500 Metadata On RPi5(experimental)
+# Mission: Use B0642 camera module On RPi5 (experimental)
+
 ![](pics/hardware_connection.png)
 
-## Get image
+## Hardware Connection
+
+This RPi5 example uses two physical paths to the IMX500 camera module:
+
+- `MIPI CSI`: camera image stream from the module to Raspberry Pi 5.
+- `I2C` + `SPI`: IMX500 control and metadata access through the 8-pin camera
+  header.
+
+Both paths are required if you want to preview the image and run the
+`spi_receive_integration_test` metadata example.
+
+### MIPI CSI Connection
+
+Power off the Raspberry Pi 5 before connecting or removing the camera cable.
+
+Connect the IMX500 camera module FPC cable to one of the Raspberry Pi 5 MIPI
+camera connectors. The photo above shows the camera connected to the connector
+near the board edge.
+
+Recommended checks:
+
+1. Use a Raspberry Pi 5 compatible camera FPC cable. Raspberry Pi 5 uses the
+   small 22-pin MIPI connector on the board side.
+2. Fully insert the FPC cable into the Raspberry Pi 5 MIPI connector, then lock
+   the latch.
+3. Fully insert the other end into the camera module connector, then lock the
+   latch.
+4. Keep the metal contacts aligned with the connector contacts. If `rpicam-still`
+   cannot find the camera, power off and check the cable orientation on both
+   ends.
+5. Do not hot-plug the MIPI cable while the Raspberry Pi 5 is powered.
+
+The MIPI cable carries the image stream only. The 8-pin header wiring in
+[GPIO Wiring](#gpio-wiring) is still needed for the SDK metadata path.
+
+### 8-Pin Header Connection
+
+Connect the camera 8-pin header to the Raspberry Pi 5 40-pin header as listed
+in [GPIO Wiring](#gpio-wiring). This provides:
+
+- `I2C1` control on GPIO2/GPIO3.
+- `SPI0 CE0` metadata transfer on GPIO8/GPIO9/GPIO10/GPIO11.
+- `3.3 V` power and common `GND`.
+
+Do not connect any camera signal pin to `5 V`.
+
+## Get Image
 
 Download the Installation Script
 ```
-sudo update
+sudo apt update
 sudo apt install wget -y
 wget -O install_pivariety_pkgs.sh https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver/releases/download/install_script/install_pivariety_pkgs.sh
 chmod +x install_pivariety_pkgs.sh
@@ -37,6 +84,10 @@ Get frame
 ```
 rpicam-still -t 0 --tuning-file /usr/share/libcamera/ipa/rpi/pisp/imx500.json
 ```
+
+If the camera is not detected, power off the Raspberry Pi 5 and re-check the
+MIPI FPC cable orientation, insertion depth, and connector latch before changing
+software settings.
 
 ![](pics/image_preview.png)
 
