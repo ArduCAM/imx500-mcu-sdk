@@ -186,6 +186,19 @@ static const char* get_imx500_cmd_status(uint32_t code) {
     }
 }
 
+static const char *get_imx500_cmd_error_name(imx500_err_t err) {
+    switch (err) {
+    case IMX500_CMD_OK: return "OK";
+    case IMX500_CMD_ERR_INVALID_ARG: return "INVALID_ARG";
+    case IMX500_CMD_ERR_I2C_WRITE: return "I2C_WRITE";
+    case IMX500_CMD_ERR_I2C_READ: return "I2C_READ";
+    case IMX500_CMD_ERR_TIMEOUT: return "TIMEOUT";
+    case IMX500_CMD_ERR_RUNNING_FAILED: return "RUNNING_FAILED";
+    case IMX500_CMD_ERR_NOT_EFFECTIVE: return "NOT_EFFECTIVE";
+    default: return "UNKNOWN";
+    }
+}
+
 static inline int calc_align(int num, int align) {
   return ((num + align - 1) / align) * align;
 }
@@ -298,9 +311,17 @@ static std::vector<uint8_t> byteswap_u32_words(const uint8_t *src, uint32_t size
 
 [[maybe_unused]] static bool sdk_i2c_write_reg(uint16_t addr, uint32_t val) {
     if (!g_i2c_driver.write) {
+        printf("i2c write reg failed: driver not registered addr=0x%04X val=0x%08" PRIX32 "\n",
+               addr, val);
         return false;
     }
-    return g_i2c_driver.write(addr, val, 4) >= 0;
+    int ret = g_i2c_driver.write(addr, val, 4);
+    if (ret < 0) {
+        printf("i2c write reg failed: addr=0x%04X val=0x%08" PRIX32 " size=4 ret=%d\n",
+               addr, val, ret);
+        return false;
+    }
+    return true;
 }
 
 static bool sdk_i2c_read_reg(uint16_t addr, uint32_t *val) {
@@ -333,8 +354,14 @@ static bool wait_for_boot_status(uint32_t min_status, uint32_t timeout_ms,
 }
 
 static int sdk_spi_write(const uint8_t *buf, uint32_t len) {
-    if (!buf || len == 0) return -1;
-    if (!g_spi_driver.write) return -1;
+    if (!buf || len == 0) {
+        printf("spi write failed: invalid buffer len=%u\n", (unsigned)len);
+        return -1;
+    }
+    if (!g_spi_driver.write) {
+        printf("spi write failed: driver not registered len=%u\n", (unsigned)len);
+        return -1;
+    }
     uint32_t sent = 0;
     while (sent < len) {
         uint32_t chunk = len - sent;
@@ -343,6 +370,8 @@ static int sdk_spi_write(const uint8_t *buf, uint32_t len) {
         }
         int ret = g_spi_driver.write((uint8_t *)(buf + sent), chunk);
         if (ret < 0 || (uint32_t)ret != chunk) {
+            printf("spi write failed: offset=%u chunk=%u total=%u ret=%d\n",
+                   (unsigned)sent, (unsigned)chunk, (unsigned)len, ret);
             return -1;
         }
         sent += chunk;
@@ -354,18 +383,33 @@ static int sdk_spi_write(const uint8_t *buf, uint32_t len) {
 }
 
 static int sdk_spi_write_once(const uint8_t *buf, uint32_t len) {
-    if (!buf || len == 0) return -1;
-    if (!g_spi_driver.write) return -1;
+    if (!buf || len == 0) {
+        printf("spi write once failed: invalid buffer len=%u\n", (unsigned)len);
+        return -1;
+    }
+    if (!g_spi_driver.write) {
+        printf("spi write once failed: driver not registered len=%u\n", (unsigned)len);
+        return -1;
+    }
     int ret = g_spi_driver.write((uint8_t *)buf, len);
     if (ret < 0 || (uint32_t)ret != len) {
+        printf("spi write once failed: len=%u ret=%d\n", (unsigned)len, ret);
         return -1;
     }
     return ret;
 }
 
 static int sdk_spi_write_bridge_paced(const uint8_t *buf, uint32_t len, uint32_t gap_us) {
-    if (!buf || len == 0) return -1;
-    if (!g_spi_driver.write) return -1;
+    if (!buf || len == 0) {
+        printf("spi bridge write failed: invalid buffer len=%u gap_us=%u\n",
+               (unsigned)len, (unsigned)gap_us);
+        return -1;
+    }
+    if (!g_spi_driver.write) {
+        printf("spi bridge write failed: driver not registered len=%u gap_us=%u\n",
+               (unsigned)len, (unsigned)gap_us);
+        return -1;
+    }
     uint32_t sent = 0;
     while (sent < len) {
         uint32_t chunk = len - sent;
@@ -374,6 +418,9 @@ static int sdk_spi_write_bridge_paced(const uint8_t *buf, uint32_t len, uint32_t
         }
         int ret = g_spi_driver.write((uint8_t *)(buf + sent), chunk);
         if (ret < 0 || (uint32_t)ret != chunk) {
+            printf("spi bridge write failed: offset=%u chunk=%u total=%u gap_us=%u ret=%d\n",
+                   (unsigned)sent, (unsigned)chunk, (unsigned)len,
+                   (unsigned)gap_us, ret);
             return -1;
         }
         sent += chunk;
@@ -1385,16 +1432,23 @@ void dump_network_info_list(void) {
 }
 
 static int i2c_passthrough_write(uint16_t reg_addr, uint32_t data, uint32_t size) {
+    int ret = -1;
     if (size == 1) {
-        return sensor_i2c_write_16_8(reg_addr, (uint8_t)(data & 0xFFu));
+        ret = sensor_i2c_write_16_8(reg_addr, (uint8_t)(data & 0xFFu));
+    } else if (size == 2) {
+        ret = sensor_i2c_write_16_16(reg_addr, (uint16_t)(data & 0xFFFFu));
+    } else if (size == 4) {
+        ret = sensor_i2c_write_16_32(reg_addr, data);
+    } else {
+        printf("sensor passthrough write invalid size: reg=0x%04X data=0x%08" PRIX32 " size=%u\n",
+               reg_addr, data, (unsigned)size);
+        return -1;
     }
-    if (size == 2) {
-        return sensor_i2c_write_16_16(reg_addr, (uint16_t)(data & 0xFFFFu));
+    if (ret < 0) {
+        printf("sensor passthrough write failed: reg=0x%04X data=0x%08" PRIX32 " size=%u ret=%d\n",
+               reg_addr, data, (unsigned)size, ret);
     }
-    if (size == 4) {
-        return sensor_i2c_write_16_32(reg_addr, data);
-    }
-    return -1;
+    return ret;
 }
 
 static int fold_passthrough_write_status(int status, int ret) {
@@ -1979,11 +2033,19 @@ imx500_err_t imx500_res_read(uint32_t cmd_id,
                             uint32_t wait_ms)
 {
     if (data == NULL) {
+        printf("imx500_res_read failed: cmd=0x%08" PRIX32 " data=NULL\n", cmd_id);
+        return IMX500_CMD_ERR_INVALID_ARG;
+    }
+    if (!g_i2c_driver.write || !g_i2c_driver.read || !g_i2c_driver.slp_ms) {
+        printf("imx500_res_read failed: cmd=0x%08" PRIX32 " i2c/sleep driver not registered\n",
+               cmd_id);
         return IMX500_CMD_ERR_INVALID_ARG;
     }
 
     int ret = g_i2c_driver.write(cmd_id, 0x00000000, 4);
     if (ret < 0) {
+        printf("imx500_res_read failed: cmd=0x%08" PRIX32 " command write ret=%d\n",
+               cmd_id, ret);
         return IMX500_CMD_ERR_I2C_WRITE;
     }
 
@@ -1996,24 +2058,34 @@ imx500_err_t imx500_res_read(uint32_t cmd_id,
         elapsed += poll_interval_ms;
         ret = g_i2c_driver.read(IMX500_COMMAND_RUNNING_STATUS, &imx500_cmd_running_status, 4);
         if (ret < 0) {
+            printf("imx500_res_read failed: cmd=0x%08" PRIX32 " read running status ret=%d elapsed=%u/%u ms\n",
+                   cmd_id, ret, (unsigned)elapsed, (unsigned)wait_ms);
             return IMX500_CMD_ERR_I2C_READ;
         }
         if (imx500_cmd_running_status == 0) {
+            printf("imx500_res_read failed: cmd=0x%08" PRIX32 " not effective elapsed=%u/%u ms\n",
+                   cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
             return IMX500_CMD_ERR_NOT_EFFECTIVE;
         } else if (imx500_cmd_running_status == 1) {
             break;
         } else if (imx500_cmd_running_status == 2) {
+            printf("imx500_res_read failed: cmd=0x%08" PRIX32 " running failed elapsed=%u/%u ms\n",
+                   cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
             return IMX500_CMD_ERR_RUNNING_FAILED;
         } else if (imx500_cmd_running_status == 3) {
             continue;
         }
     }
     if (imx500_cmd_running_status != 1) {
+        printf("imx500_res_read failed: cmd=0x%08" PRIX32 " timeout wait_ms=%u last_running_status=%" PRIu32 "\n",
+               cmd_id, (unsigned)wait_ms, imx500_cmd_running_status);
         return IMX500_CMD_ERR_TIMEOUT;
     }
 
     ret = g_i2c_driver.read(IMX500_COMMAND_RETURN, data, 4);
     if (ret < 0) {
+        printf("imx500_res_read failed: cmd=0x%08" PRIX32 " read return ret=%d\n",
+               cmd_id, ret);
         return IMX500_CMD_ERR_I2C_READ;
     }
 
@@ -2025,11 +2097,19 @@ static imx500_err_t imx500_res_write(uint32_t cmd_id,
                                      uint32_t wait_ms)
 {
     if (data == NULL) {
+        printf("imx500_res_write failed: cmd=0x%08" PRIX32 " data=NULL\n", cmd_id);
+        return IMX500_CMD_ERR_INVALID_ARG;
+    }
+    if (!g_i2c_driver.write || !g_i2c_driver.read || !g_i2c_driver.slp_ms) {
+        printf("imx500_res_write failed: cmd=0x%08" PRIX32 " i2c/sleep driver not registered\n",
+               cmd_id);
         return IMX500_CMD_ERR_INVALID_ARG;
     }
 
     int ret = g_i2c_driver.write(cmd_id, *data, 4);
     if (ret < 0) {
+        printf("imx500_res_write failed: cmd=0x%08" PRIX32 " value=0x%08" PRIX32 " command write ret=%d\n",
+               cmd_id, *data, ret);
         return IMX500_CMD_ERR_I2C_WRITE;
     }
 
@@ -2042,24 +2122,34 @@ static imx500_err_t imx500_res_write(uint32_t cmd_id,
         elapsed += poll_interval_ms;
         ret = g_i2c_driver.read(IMX500_COMMAND_RUNNING_STATUS, &imx500_cmd_running_status, 4);
         if (ret < 0) {
+            printf("imx500_res_write failed: cmd=0x%08" PRIX32 " read running status ret=%d elapsed=%u/%u ms\n",
+                   cmd_id, ret, (unsigned)elapsed, (unsigned)wait_ms);
             return IMX500_CMD_ERR_I2C_READ;
         }
         if (imx500_cmd_running_status == 0) {
+            printf("imx500_res_write failed: cmd=0x%08" PRIX32 " not effective elapsed=%u/%u ms\n",
+                   cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
             return IMX500_CMD_ERR_NOT_EFFECTIVE;
         } else if (imx500_cmd_running_status == 1) {
             break;
         } else if (imx500_cmd_running_status == 2) {
+            printf("imx500_res_write failed: cmd=0x%08" PRIX32 " running failed elapsed=%u/%u ms\n",
+                   cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
             return IMX500_CMD_ERR_RUNNING_FAILED;
         } else if (imx500_cmd_running_status == 3) {
             continue;
         }
     }
     if (imx500_cmd_running_status != 1) {
+        printf("imx500_res_write failed: cmd=0x%08" PRIX32 " timeout wait_ms=%u last_running_status=%" PRIu32 "\n",
+               cmd_id, (unsigned)wait_ms, imx500_cmd_running_status);
         return IMX500_CMD_ERR_TIMEOUT;
     }
 
     ret = g_i2c_driver.read(IMX500_COMMAND_RETURN, data, 4);
     if (ret < 0) {
+        printf("imx500_res_write failed: cmd=0x%08" PRIX32 " read return ret=%d\n",
+               cmd_id, ret);
         return IMX500_CMD_ERR_I2C_READ;
     }
 
@@ -2072,14 +2162,33 @@ static int imx500_set_affine(uint32_t x0,
                              uint32_t y1y0,
                              uint32_t x2x0,
                              uint32_t y2y0) {
-    if (imx500_res_write(IMX500_COMMAND_AFFINE_1, &x0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
-        imx500_res_write(IMX500_COMMAND_AFFINE_2, &y0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
-        imx500_res_write(IMX500_COMMAND_AFFINE_3, &x1x0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
-        imx500_res_write(IMX500_COMMAND_AFFINE_4, &y1y0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
-        imx500_res_write(IMX500_COMMAND_AFFINE_5, &x2x0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK ||
-        imx500_res_write(IMX500_COMMAND_AFFINE_6, &y2y0, IMX500_AFFINE_WAIT_MS) != IMX500_CMD_OK) {
-        printf("set affine parameters failed\n");
-        return -1;
+    struct {
+        uint32_t cmd;
+        uint32_t *value;
+        const char *name;
+    } affine_cmds[] = {
+        {IMX500_COMMAND_AFFINE_1, &x0, "x0"},
+        {IMX500_COMMAND_AFFINE_2, &y0, "y0"},
+        {IMX500_COMMAND_AFFINE_3, &x1x0, "x1x0"},
+        {IMX500_COMMAND_AFFINE_4, &y1y0, "y1y0"},
+        {IMX500_COMMAND_AFFINE_5, &x2x0, "x2x0"},
+        {IMX500_COMMAND_AFFINE_6, &y2y0, "y2y0"},
+    };
+
+    for (size_t i = 0; i < sizeof(affine_cmds) / sizeof(affine_cmds[0]); ++i) {
+        imx500_err_t err = imx500_res_write(affine_cmds[i].cmd,
+                                            affine_cmds[i].value,
+                                            IMX500_AFFINE_WAIT_MS);
+        if (err != IMX500_CMD_OK) {
+            printf("set affine parameter failed: step=%s cmd=0x%08" PRIX32
+                   " value=0x%08" PRIX32 " err=%d(%s)\n",
+                   affine_cmds[i].name,
+                   affine_cmds[i].cmd,
+                   *affine_cmds[i].value,
+                   (int)err,
+                   get_imx500_cmd_error_name(err));
+            return -1;
+        }
     }
     return 0;
 }
@@ -2841,8 +2950,15 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
 
 void stream_on() {
     uint32_t val = 0;
-    imx500_res_read(IMX500_COMMAND_STREAM_ON, &val, 10);
-    g_i2c_driver.slp_ms(10);
+    imx500_err_t err = imx500_res_read(IMX500_COMMAND_STREAM_ON, &val, 10);
+    if (err != IMX500_CMD_OK) {
+        printf("stream_on failed: err=%d(%s)\n",
+               (int)err, get_imx500_cmd_error_name(err));
+        return;
+    }
+    if (g_i2c_driver.slp_ms) {
+        g_i2c_driver.slp_ms(10);
+    }
 }
 
 int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t ymax) {
@@ -2897,8 +3013,21 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
 
   // dump_s_nw_info_list();
   // init_input_tensor_preprocess_config();
+  if (!data_size) {
+    printf("calculate_spi_output_metadata_size failed: data_size=NULL format=%d\n", (int)f);
+    return -1;
+  }
+  *data_size = 0;
+  if (s_num_of_networks == 0) {
+    printf("calculate_spi_output_metadata_size failed: network info cache is empty\n");
+    return -1;
+  }
 
   const sc_dnn_nw_info_t* net = &network_info[0];
+  if (net->dnnHeaderSize == 0) {
+    printf("calculate_spi_output_metadata_size failed: network[0] dnnHeaderSize is 0\n");
+    return -1;
+  }
 
   int input_tensor_data_size =
       net->dnnHeaderSize + calc_align(net->inputTensorHeight, 2) *
@@ -2924,18 +3053,21 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
     break;
   case SPI_METADATA_JPEG_INPUT_TENSOR:
     // TODO:
+    printf("calculate_spi_output_metadata_size: SPI_METADATA_JPEG_INPUT_TENSOR not implemented\n");
     break;
   case SPI_METADATA_INPUT_TENSOR_OUTPUT_TENSOR:
     *data_size = input_tensor_data_size + output_tensor_data_size;
     break;
   case SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR:
     // TODO:
+    printf("calculate_spi_output_metadata_size: SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR not implemented\n");
     break;
   case SPI_METADATA_NONE:
     *data_size = 0;
     break;
   default:
-    break;
+    printf("calculate_spi_output_metadata_size failed: invalid spi format=%d\n", (int)f);
+    return -1;
   }
   return 0;
 }
@@ -2944,7 +3076,12 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     uint32_t val;
     const bool direct_boot = (nn_fw != nullptr && nn_fw_size > 0u);
 
-    imx500_res_read(IMX500_COMMAND_RESET, &val, 20);
+    imx500_err_t cmd_err = imx500_res_read(IMX500_COMMAND_RESET, &val, 20);
+    if (cmd_err != IMX500_CMD_OK) {
+        printf("Error: reset command failed err=%d(%s)\n",
+               (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+        return false;
+    }
     g_i2c_driver.slp_ms(2000);
     
     uint32_t imx500_boot_status = 0;
@@ -2979,7 +3116,12 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
                                            module_fw_ver);
     imx500_dump_basic_info();
     uint32_t spi_frq = 17.5 * 1000 * 1000;
-    imx500_res_write(IMX500_COMMAND_SET_SPI_FRQ, &spi_frq, 10);
+    cmd_err = imx500_res_write(IMX500_COMMAND_SET_SPI_FRQ, &spi_frq, 10);
+    if (cmd_err != IMX500_CMD_OK) {
+        printf("Error: set SPI frequency failed freq=%" PRIu32 " err=%d(%s)\n",
+               spi_frq, (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+        return false;
+    }
 
     if (direct_boot) {
         if (!switch_spi_data_forward_mode(SPI_SLAVE_TO_IMX500_SSPI)) {
@@ -3037,39 +3179,74 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("load model from flash completed, boot_status=%" PRIu32 "\n", imx500_boot_status);
     }
 
-    imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
-    imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
-    imx500_res_read(IMX500_MCU_SDK_SENSOR_MIPI_COMMAND, &val, 500);
+    cmd_err = imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
+    if (cmd_err != IMX500_CMD_OK) {
+        printf("Error: sensor default config failed err=%d(%s)\n",
+               (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+        return false;
+    }
+    cmd_err = imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
+    if (cmd_err != IMX500_CMD_OK) {
+        printf("Error: NN default config failed err=%d(%s)\n",
+               (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+        return false;
+    }
+    cmd_err = imx500_res_read(IMX500_MCU_SDK_SENSOR_MIPI_COMMAND, &val, 500);
+    if (cmd_err != IMX500_CMD_OK) {
+        printf("Error: sensor MIPI config command=0x%08" PRIX32 " failed err=%d(%s)\n",
+               (uint32_t)IMX500_MCU_SDK_SENSOR_MIPI_COMMAND,
+               (int)cmd_err,
+               get_imx500_cmd_error_name(cmd_err));
+        return false;
+    }
     if (apply_dnn_input_tensor_mapping(IMX500_MCU_SDK_SENSOR_MIPI_WIDTH,
                                        IMX500_MCU_SDK_SENSOR_MIPI_HEIGHT) < 0) {
         printf("Error: apply default DNN input tensor mapping failed\n");
         return false;
     }
-    imx500_res_write(IMX500_COMMAND_SET_FRAMERATE, &fps, 500);
+    cmd_err = imx500_res_write(IMX500_COMMAND_SET_FRAMERATE, &fps, 500);
+    if (cmd_err != IMX500_CMD_OK) {
+        printf("Error: set framerate failed fps=%" PRIu32 " err=%d(%s)\n",
+               fps, (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+        return false;
+    }
     switch (mipi_format)
     {
     case MIPI_DATA_IMAGE:
-        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_IMAGE, &val, 500);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_IMAGE, &val, 500);
         break;
     case MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR:
-        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, &val, 500);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, &val, 500);
         break;
     case MIPI_DATA_IMAGE_METADATA_INPUT_TENSOR_OUTPUT_TENSOR:
-        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_IMAGE_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, &val, 500);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_IMAGE_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, &val, 500);
         break;
     case MIPI_DATA_NONE:
-        imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_NONE, &val, 500);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_MIPI_DATA_NONE, &val, 500);
         break;
     default:
-        printf("Error: invalid mipi format");
-        break;
+        printf("Error: invalid mipi format=%d\n", (int)mipi_format);
+        return false;
+    }
+    if (cmd_err != IMX500_CMD_OK) {
+        printf("Error: set MIPI format failed format=%d err=%d(%s)\n",
+               (int)mipi_format, (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+        return false;
     }
     
     switch (spi_format)
     {
     case SPI_METADATA_OUTPUT_TENSOR:
-        imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_OUTPUT_TENSOR, &val, 10);
-        switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_MSPI);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_OUTPUT_TENSOR, &val, 10);
+        if (cmd_err != IMX500_CMD_OK) {
+            printf("Error: set SPI metadata output tensor format failed err=%d(%s)\n",
+                   (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+            return false;
+        }
+        if (!switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_MSPI)) {
+            printf("Error: switch SPI forwarding for output tensor metadata failed\n");
+            return false;
+        }
         break;
     case SPI_METADATA_INPUT_TENSOR:
         printf("Not yet implemented(SPI_METADATA_INPUT_TENSOR), disabled.\n");
@@ -3078,15 +3255,28 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("Not yet implemented(SPI_METADATA_JPEG_INPUT_TENSOR), disabled.\n");
         break;
     case SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR:
-        imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR, &val, 10);
-        switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_SSPI);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR, &val, 10);
+        if (cmd_err != IMX500_CMD_OK) {
+            printf("Error: set SPI JPEG/input/output metadata format failed err=%d(%s)\n",
+                   (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+            return false;
+        }
+        if (!switch_spi_data_forward_mode(SPI_SLAVE_FROM_IMX500_SSPI)) {
+            printf("Error: switch SPI forwarding for JPEG/input/output metadata failed\n");
+            return false;
+        }
         break;
     case SPI_METADATA_NONE:
-        imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_NONE, &val, 10);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_NONE, &val, 10);
+        if (cmd_err != IMX500_CMD_OK) {
+            printf("Error: set SPI metadata none format failed err=%d(%s)\n",
+                   (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+            return false;
+        }
         break;
     default:
-        printf("Error: invalid spi format");
-        break;
+        printf("Error: invalid spi format=%d\n", (int)spi_format);
+        return false;
     }
 
     return true;
@@ -3094,8 +3284,15 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
 
 uint32_t get_metadata_size(void) {
     uint32_t data_size = 0;
-    if (!g_i2c_driver.read(METADATA_SIZE_REG, &data_size, 4)) {
-        printf("Error: Failed to read METADATA_SIZE_REG\n");
+    if (!g_i2c_driver.read) {
+        printf("Error: Failed to read METADATA_SIZE_REG(0x%04X): i2c read driver not registered\n",
+               METADATA_SIZE_REG);
+        return 0;
+    }
+    int ret = g_i2c_driver.read(METADATA_SIZE_REG, &data_size, 4);
+    if (ret < 0) {
+        printf("Error: Failed to read METADATA_SIZE_REG(0x%04X): ret=%d\n",
+               METADATA_SIZE_REG, ret);
         return 0;
     }
 #if IMX500_METADATA_READ_VERBOSE
@@ -3113,18 +3310,30 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
                "Wait until METADATA_SIZE_REG reports a non-zero frame size, or pass a non-zero max_size.\n");
         return 0;
     }
+    if (!g_i2c_driver.read || !g_i2c_driver.slp_ms) {
+        printf("Error: read_metadata missing i2c read/sleep driver\n");
+        return 0;
+    }
+    if (!g_spi_driver.read) {
+        printf("Error: read_metadata missing spi read driver\n");
+        return 0;
+    }
 
 #if IMX500_METADATA_READ_VERBOSE
     printf("Waiting for data ready...\n");
 #endif
     bool data_ready = false;
     uint32_t is_metadata_ready_;
+    uint32_t waited_ms = 0;
+    const uint32_t ready_timeout_ms = 1000;
+    const uint32_t ready_poll_ms = 10;
 
-    while (1) {
+    while (waited_ms < ready_timeout_ms) {
         ret = g_i2c_driver.read(DATA_READY_STATUS_REG, &is_metadata_ready_, 4);
         ready_status = is_metadata_ready_&0xff;
-        if (!ret) {
-            printf("Error: Failed to read DATA_READY register\n");
+        if (ret < 0) {
+            printf("Error: Failed to read DATA_READY_STATUS_REG(0x%04X): ret=%d waited=%u/%u ms\n",
+                   DATA_READY_STATUS_REG, ret, (unsigned)waited_ms, (unsigned)ready_timeout_ms);
             return 0;
         }
         
@@ -3137,11 +3346,13 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
         }
         
         // Small delay between polls
-        g_i2c_driver.slp_ms(10);
+        g_i2c_driver.slp_ms(ready_poll_ms);
+        waited_ms += ready_poll_ms;
     }
     
     if (!data_ready) {
-        printf("Timeout: Data not ready after 1 second (last status: 0x%02X)\n", ready_status);
+        printf("Timeout: Data not ready after %u ms (DATA_READY_STATUS_REG=0x%02X)\n",
+               (unsigned)ready_timeout_ms, ready_status);
         return 0;
     }
 
@@ -3154,19 +3365,20 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
     if (data_size == 0) {
         printf("Metadata frame is not ready yet: METADATA_SIZE_REG returned 0. "
                "Make sure stream_on() has started and a metadata frame has been produced.\n");
-        return false;
+        return 0;
     }
 
     if (data_size > buf_size) {
         printf("Error: metadata frame size %" PRIu32 " exceeds read buffer size %" PRIu32 ". "
                "Pass sdk.read_metadata(max_size) with a larger max_size.\n",
                data_size, buf_size);
-        return false;
+        return 0;
     }
 
     ret = g_spi_driver.read(rx_buf, data_size);
     if (ret < 0 || (uint32_t)ret != data_size) {
-        printf("Error: SPI metadata read failed ret=%d expected=%" PRIu32 "\n", ret, data_size);
+        printf("Error: SPI metadata read failed ret=%d expected=%" PRIu32 " buf_size=%" PRIu32 "\n",
+               ret, data_size, buf_size);
         return 0;
     }
     return data_size;
@@ -3174,9 +3386,12 @@ int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size) {
 
 int _preprocess_nn_input_data(uint8_t *src, uint32_t src_size) {
     if (!src) {
+        printf("_preprocess_nn_input_data failed: src=NULL size=%u\n", (unsigned)src_size);
         return -1;
     }
     if (src_size == 0 || (src_size % 3u) != 0u) {
+        printf("_preprocess_nn_input_data failed: invalid size=%u (must be non-zero RGB byte count)\n",
+               (unsigned)src_size);
         return -1;
     }
     if (s_num_of_networks == 0) {
@@ -3204,15 +3419,22 @@ int _convert_injected_data(const uint8_t *img,
                            uint32_t input_height, uint32_t input_width, uint32_t channel_num,
                            const uint8_t transpose_order[3], uint32_t align_base) {
     if (!img || !dst) {
+        printf("_convert_injected_data failed: img=%p dst=%p\n", (const void *)img, (void *)dst);
         return -1;
     }
     if (img_width == 0 || img_height == 0 || img_channels == 0) {
+        printf("_convert_injected_data failed: invalid source dims width=%u height=%u channels=%u\n",
+               (unsigned)img_width, (unsigned)img_height, (unsigned)img_channels);
         return -1;
     }
     if (input_height == 0 || input_width == 0 || channel_num == 0) {
+        printf("_convert_injected_data failed: invalid target dims width=%u height=%u channels=%u\n",
+               (unsigned)input_width, (unsigned)input_height, (unsigned)channel_num);
         return -1;
     }
     if (img_channels < channel_num) {
+        printf("_convert_injected_data failed: source channels=%u < target channels=%u\n",
+               (unsigned)img_channels, (unsigned)channel_num);
         return -1;
     }
     if (align_base == 0) {
@@ -3222,10 +3444,14 @@ int _convert_injected_data(const uint8_t *img,
     const uint32_t input_width_aligned = (uint32_t)ALIGN_UP(input_width, align_base);
     const uint64_t total_u64 = (uint64_t)input_height * (uint64_t)input_width_aligned * (uint64_t)channel_num;
     if (total_u64 > 0xFFFFFFFFu) {
+        printf("_convert_injected_data failed: output size overflow height=%u aligned_width=%u channels=%u\n",
+               (unsigned)input_height, (unsigned)input_width_aligned, (unsigned)channel_num);
         return -1;
     }
     const uint32_t total = (uint32_t)total_u64;
     if (dst_size < total) {
+        printf("_convert_injected_data failed: dst too small dst_size=%u required=%u\n",
+               (unsigned)dst_size, (unsigned)total);
         return -1;
     }
 
@@ -3234,9 +3460,13 @@ int _convert_injected_data(const uint8_t *img,
     bool seen[3] = {false, false, false};
     for (int i = 0; i < 3; ++i) {
         if (order[i] > 2) {
+            printf("_convert_injected_data failed: transpose_order[%d]=%u out of range\n",
+                   i, (unsigned)order[i]);
             return -1;
         }
         if (seen[order[i]]) {
+            printf("_convert_injected_data failed: duplicate transpose_order value=%u\n",
+                   (unsigned)order[i]);
             return -1;
         }
         seen[order[i]] = true;
@@ -3244,6 +3474,7 @@ int _convert_injected_data(const uint8_t *img,
 
     uint8_t *input_tensor_final = (uint8_t *)malloc(total);
     if (!input_tensor_final) {
+        printf("_convert_injected_data failed: malloc %u bytes failed\n", (unsigned)total);
         return -1;
     }
     memset(input_tensor_final, 0, total);
@@ -3294,11 +3525,27 @@ void do_data_injection_stream(
     static uint8_t inject_buf[4096];
     uint32_t val = 0;
 
-    if (first_time) {
-        imx500_res_read(IMX500_COMMAND_SWITCH_TO_DATA_INJECTION_MODE, &val, 10);
+    if (!provider || total_size == 0) {
+        printf("[Data Injection] stream invalid input provider=%s total_size=%u\n",
+               provider ? "set" : "NULL", (unsigned)total_size);
+        return;
     }
 
-    imx500_res_read(IMX500_COMMAND_BEFORE_DATA_INJECTION, &val, 10);
+    if (first_time) {
+        imx500_err_t err = imx500_res_read(IMX500_COMMAND_SWITCH_TO_DATA_INJECTION_MODE, &val, 10);
+        if (err != IMX500_CMD_OK) {
+            printf("[Data Injection] switch to injection mode failed: err=%d(%s)\n",
+                   (int)err, get_imx500_cmd_error_name(err));
+            return;
+        }
+    }
+
+    imx500_err_t err = imx500_res_read(IMX500_COMMAND_BEFORE_DATA_INJECTION, &val, 10);
+    if (err != IMX500_CMD_OK) {
+        printf("[Data Injection] before injection command failed: err=%d(%s)\n",
+               (int)err, get_imx500_cmd_error_name(err));
+        return;
+    }
 
     uint32_t offset = 0;
     uint32_t step = 0;
@@ -3323,7 +3570,11 @@ void do_data_injection_stream(
                 ? MAX_SPI_PACKET_LEN
                 : (got - sent);
 
-            sdk_spi_write(inject_buf + sent, pkt);
+            if (sdk_spi_write(inject_buf + sent, pkt) < 0) {
+                printf("[Data Injection] spi write failed at stream_offset=%u packet_offset=%u len=%u\n",
+                       (unsigned)offset, (unsigned)sent, (unsigned)pkt);
+                return;
+            }
             sent += pkt;
 
             step++;
@@ -3343,10 +3594,20 @@ void do_data_injection(const uint8_t *data, uint32_t size, bool first_time) {
 
     uint32_t val = 0;
     if (first_time) {
-        imx500_res_read(IMX500_COMMAND_SWITCH_TO_DATA_INJECTION_MODE, &val, 10);
+        imx500_err_t err = imx500_res_read(IMX500_COMMAND_SWITCH_TO_DATA_INJECTION_MODE, &val, 10);
+        if (err != IMX500_CMD_OK) {
+            printf("[Data Injection] switch to injection mode failed: err=%d(%s)\n",
+                   (int)err, get_imx500_cmd_error_name(err));
+            return;
+        }
     }
 
-    imx500_res_read(IMX500_COMMAND_BEFORE_DATA_INJECTION, &val, 10);
+    imx500_err_t err = imx500_res_read(IMX500_COMMAND_BEFORE_DATA_INJECTION, &val, 10);
+    if (err != IMX500_CMD_OK) {
+        printf("[Data Injection] before injection command failed: err=%d(%s)\n",
+               (int)err, get_imx500_cmd_error_name(err));
+        return;
+    }
 
     uint32_t offset = 0;
     uint32_t step = 0;
@@ -3358,7 +3619,11 @@ void do_data_injection(const uint8_t *data, uint32_t size, bool first_time) {
             ? MAX_SPI_PACKET_LEN
             : (size - offset);
 
-        sdk_spi_write(data + offset, pkt);
+        if (sdk_spi_write(data + offset, pkt) < 0) {
+            printf("[Data Injection] spi write failed at offset=%u len=%u total=%u\n",
+                   (unsigned)offset, (unsigned)pkt, (unsigned)size);
+            return;
+        }
         offset += pkt;
 
         step++;
@@ -3369,15 +3634,35 @@ void do_data_injection(const uint8_t *data, uint32_t size, bool first_time) {
 
 void stop_data_injection(void) {
     uint32_t val;
-    imx500_res_read(IMX500_COMMAND_AFTER_DATA_INJECTION, &val, 10);
+    imx500_err_t err = imx500_res_read(IMX500_COMMAND_AFTER_DATA_INJECTION, &val, 10);
+    if (err != IMX500_CMD_OK) {
+        printf("[Data Injection] stop injection command failed: err=%d(%s)\n",
+               (int)err, get_imx500_cmd_error_name(err));
+    }
 }
 
 void get_fw_ver(uint32_t* v) {
-    g_i2c_driver.read(DEVICE_VERSION_REG, v, 4);
+    if (!v || !g_i2c_driver.read) {
+        printf("get_fw_ver failed: output=%p i2c_read=%s\n",
+               (void *)v, g_i2c_driver.read ? "set" : "NULL");
+        return;
+    }
+    int ret = g_i2c_driver.read(DEVICE_VERSION_REG, v, 4);
+    if (ret < 0) {
+        printf("get_fw_ver failed: reg=0x%04X ret=%d\n", DEVICE_VERSION_REG, ret);
+    }
 }
 
 void get_pid(uint32_t* v) {
-    g_i2c_driver.read(DEVICE_ID_REG, v, 4);
+    if (!v || !g_i2c_driver.read) {
+        printf("get_pid failed: output=%p i2c_read=%s\n",
+               (void *)v, g_i2c_driver.read ? "set" : "NULL");
+        return;
+    }
+    int ret = g_i2c_driver.read(DEVICE_ID_REG, v, 4);
+    if (ret < 0) {
+        printf("get_pid failed: reg=0x%04X ret=%d\n", DEVICE_ID_REG, ret);
+    }
 }
 
 bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status) {
@@ -3400,29 +3685,48 @@ bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status) {
 
 int sensor_i2c_write_16_8(uint16_t reg_addr, uint8_t data) {
     if (!g_i2c_driver.write) {
+        printf("sensor_i2c_write_16_8 failed: i2c write driver not registered reg=0x%04X data=0x%02X\n",
+               reg_addr, data);
         return -1;
     }
     uint32_t packed = SENSOR_I2C_16_8_PACK(reg_addr, data);
     int ret = g_i2c_driver.write(SENSOR_WR_REG, packed, 4);
-    g_i2c_driver.slp_ms(1);
+    if (g_i2c_driver.slp_ms) {
+        g_i2c_driver.slp_ms(1);
+    }
+    if (ret < 0) {
+        printf("sensor_i2c_write_16_8 failed: reg=0x%04X data=0x%02X bridge_reg=0x%04X packed=0x%08" PRIX32 " ret=%d\n",
+               reg_addr, data, SENSOR_WR_REG, packed, ret);
+    }
     return (ret < 0) ? -1 : 0;
 }
 
 int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data) {
     if (!data || !g_i2c_driver.write || !g_i2c_driver.read) {
+        printf("sensor_i2c_read_16_8 failed: data=%p i2c_write=%s i2c_read=%s reg=0x%04X\n",
+               (void *)data,
+               g_i2c_driver.write ? "set" : "NULL",
+               g_i2c_driver.read ? "set" : "NULL",
+               reg_addr);
         return -1;
     }
 
     uint32_t req = SENSOR_I2C_16_8_ADDR(reg_addr);
     int ret = g_i2c_driver.write(SENSOR_RD_REG, req, 4);
-    g_i2c_driver.slp_ms(1);
+    if (g_i2c_driver.slp_ms) {
+        g_i2c_driver.slp_ms(1);
+    }
     if (ret < 0) {
+        printf("sensor_i2c_read_16_8 failed: write read-request reg=0x%04X bridge_reg=0x%04X req=0x%08" PRIX32 " ret=%d\n",
+               reg_addr, SENSOR_RD_REG, req, ret);
         return -1;
     }
 
     uint32_t rsp = 0;
     ret = g_i2c_driver.read(SENSOR_RD_REG, &rsp, 4);
     if (ret < 0) {
+        printf("sensor_i2c_read_16_8 failed: read response reg=0x%04X bridge_reg=0x%04X ret=%d\n",
+               reg_addr, SENSOR_RD_REG, ret);
         return -1;
     }
 
@@ -3432,9 +3736,13 @@ int sensor_i2c_read_16_8(uint16_t reg_addr, uint8_t *data) {
 
 int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data) {
     if (sensor_i2c_write_16_8(reg_addr, (uint8_t)((data >> 8) & 0xFFu)) < 0) {
+        printf("sensor_i2c_write_16_16 failed: high byte reg=0x%04X data=0x%04X\n",
+               reg_addr, data);
         return -1;
     }
     if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)(data & 0xFFu)) < 0) {
+        printf("sensor_i2c_write_16_16 failed: low byte reg=0x%04X data=0x%04X\n",
+               reg_addr, data);
         return -1;
     }
     return 0;
@@ -3442,14 +3750,17 @@ int sensor_i2c_write_16_16(uint16_t reg_addr, uint16_t data) {
 
 int sensor_i2c_read_16_16(uint16_t reg_addr, uint16_t *data) {
     if (!data) {
+        printf("sensor_i2c_read_16_16 failed: data=NULL reg=0x%04X\n", reg_addr);
         return -1;
     }
     uint8_t msb = 0;
     uint8_t lsb = 0;
     if (sensor_i2c_read_16_8(reg_addr, &msb) < 0) {
+        printf("sensor_i2c_read_16_16 failed: high byte reg=0x%04X\n", reg_addr);
         return -1;
     }
     if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &lsb) < 0) {
+        printf("sensor_i2c_read_16_16 failed: low byte reg=0x%04X\n", reg_addr);
         return -1;
     }
     *data = (uint16_t)(((uint16_t)msb << 8) | (uint16_t)lsb);
@@ -3458,15 +3769,23 @@ int sensor_i2c_read_16_16(uint16_t reg_addr, uint16_t *data) {
 
 int sensor_i2c_write_16_32(uint16_t reg_addr, uint32_t data) {
     if (sensor_i2c_write_16_8(reg_addr, (uint8_t)((data >> 24) & 0xFFu)) < 0) {
+        printf("sensor_i2c_write_16_32 failed: byte[0] reg=0x%04X data=0x%08" PRIX32 "\n",
+               reg_addr, data);
         return -1;
     }
     if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 1u), (uint8_t)((data >> 16) & 0xFFu)) < 0) {
+        printf("sensor_i2c_write_16_32 failed: byte[1] reg=0x%04X data=0x%08" PRIX32 "\n",
+               reg_addr, data);
         return -1;
     }
     if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 2u), (uint8_t)((data >> 8) & 0xFFu)) < 0) {
+        printf("sensor_i2c_write_16_32 failed: byte[2] reg=0x%04X data=0x%08" PRIX32 "\n",
+               reg_addr, data);
         return -1;
     }
     if (sensor_i2c_write_16_8((uint16_t)(reg_addr + 3u), (uint8_t)(data & 0xFFu)) < 0) {
+        printf("sensor_i2c_write_16_32 failed: byte[3] reg=0x%04X data=0x%08" PRIX32 "\n",
+               reg_addr, data);
         return -1;
     }
     return 0;
@@ -3474,6 +3793,7 @@ int sensor_i2c_write_16_32(uint16_t reg_addr, uint32_t data) {
 
 int sensor_i2c_read_16_32(uint16_t reg_addr, uint32_t *data) {
     if (!data) {
+        printf("sensor_i2c_read_16_32 failed: data=NULL reg=0x%04X\n", reg_addr);
         return -1;
     }
     uint8_t b3 = 0;
@@ -3481,15 +3801,19 @@ int sensor_i2c_read_16_32(uint16_t reg_addr, uint32_t *data) {
     uint8_t b1 = 0;
     uint8_t b0 = 0;
     if (sensor_i2c_read_16_8(reg_addr, &b3) < 0) {
+        printf("sensor_i2c_read_16_32 failed: byte[0] reg=0x%04X\n", reg_addr);
         return -1;
     }
     if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 1u), &b2) < 0) {
+        printf("sensor_i2c_read_16_32 failed: byte[1] reg=0x%04X\n", reg_addr);
         return -1;
     }
     if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 2u), &b1) < 0) {
+        printf("sensor_i2c_read_16_32 failed: byte[2] reg=0x%04X\n", reg_addr);
         return -1;
     }
     if (sensor_i2c_read_16_8((uint16_t)(reg_addr + 3u), &b0) < 0) {
+        printf("sensor_i2c_read_16_32 failed: byte[3] reg=0x%04X\n", reg_addr);
         return -1;
     }
     *data = ((uint32_t)b3 << 24) |
