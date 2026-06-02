@@ -39,6 +39,7 @@ git clone --recursive https://github.com/ArduCAM/imx500-mcu-sdk.git
 cd imx500-mcu-sdk
 git submodule update --init --recursive
 cd python_bindings
+python3 -m pip install pybind11
 python3 -m pip install -e . --no-build-isolation
 ```
 
