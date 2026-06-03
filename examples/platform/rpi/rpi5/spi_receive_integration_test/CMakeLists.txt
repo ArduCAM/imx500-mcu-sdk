@@ -16,9 +16,14 @@ include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_mcu_sdk.cmake)
 set(INTEGRATION_TEST_BOOT_MODE "FLASH" CACHE STRING "integration_test boot mode: FLASH or DIRECT")
 set_property(CACHE INTEGRATION_TEST_BOOT_MODE PROPERTY STRINGS FLASH DIRECT)
 set(INTEGRATION_TEST_SPI_BAUDRATE_HZ "5000000" CACHE STRING "integration_test SPI baudrate in Hz")
+set(INTEGRATION_TEST_DUMP_FRAME_COUNT "2" CACHE STRING "number of successful pre-injection frames to dump; 0 disables frame dump")
 
 if(NOT INTEGRATION_TEST_SPI_BAUDRATE_HZ MATCHES "^[0-9]+$")
     message(FATAL_ERROR "INTEGRATION_TEST_SPI_BAUDRATE_HZ must be an integer Hz value")
+endif()
+
+if(NOT INTEGRATION_TEST_DUMP_FRAME_COUNT MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "INTEGRATION_TEST_DUMP_FRAME_COUNT must be a non-negative integer")
 endif()
 
 add_executable(spi_receive_integration_test
@@ -52,4 +57,5 @@ endif()
 
 target_compile_definitions(spi_receive_integration_test PRIVATE
     RPI5_SPI_SPEED_HZ=${INTEGRATION_TEST_SPI_BAUDRATE_HZ}
+    INTEGRATION_TEST_DUMP_FRAME_COUNT=${INTEGRATION_TEST_DUMP_FRAME_COUNT}
 )

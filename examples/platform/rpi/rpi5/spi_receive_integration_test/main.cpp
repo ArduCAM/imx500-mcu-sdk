@@ -25,6 +25,10 @@
 #define INTEGRATION_TEST_BOOT_MODE INTEGRATION_TEST_BOOT_MODE_FLASH
 #endif
 
+#ifndef INTEGRATION_TEST_DUMP_FRAME_COUNT
+#define INTEGRATION_TEST_DUMP_FRAME_COUNT 2
+#endif
+
 static uint8_t frame_buf[MAX_FRAME_SIZE];
 
 typedef struct {
@@ -58,14 +62,15 @@ static void print_benchmark_row(const char *metric, const char *value)
     std::printf("| %-39s | %-23s |\n", metric, value);
 }
 
-static void print_frame_hex_dump(const uint8_t *buf, uint32_t len)
+static void print_frame_hex_dump(const uint8_t *buf, uint32_t len, uint32_t frame_index)
 {
     if (!buf || len == 0) {
-        std::printf("[FIRST FRAME DUMP] empty frame\n");
+        std::printf("[FRAME %lu DUMP] empty frame\n", (unsigned long)frame_index);
         return;
     }
 
-    std::printf("\n========== FIRST FRAME FULL DATA DUMP (%lu bytes) ==========\n",
+    std::printf("\n========== FRAME %lu FULL DATA DUMP (%lu bytes) ==========\n",
+                (unsigned long)frame_index,
                 (unsigned long)len);
     for (uint32_t offset = 0; offset < len; offset += 16) {
         uint32_t line_len = len - offset;
@@ -79,7 +84,8 @@ static void print_frame_hex_dump(const uint8_t *buf, uint32_t len)
         }
         std::printf("\n");
     }
-    std::printf("========== FIRST FRAME FULL DATA DUMP END ==========\n\n");
+    std::printf("========== FRAME %lu FULL DATA DUMP END ==========\n\n",
+                (unsigned long)frame_index);
 }
 
 static void print_benchmark_table(uint64_t open_cost_us,
@@ -143,11 +149,11 @@ uint32_t provider_fill_0x55(uint8_t *buf, uint32_t max_len, uint32_t offset)
 static FrameBenchmarkResult benchmark_read_frame(uint32_t count,
                                                  uint8_t *buf,
                                                  uint32_t max_buf_size,
-                                                 bool dump_first_success_frame)
+                                                 uint32_t dump_success_frame_count)
 {
     FrameBenchmarkResult result = {};
     result.requested_frames = count;
-    bool first_frame_dumped = false;
+    uint32_t dumped_success_frames = 0;
 
     for (uint32_t i = 0; i < count; ++i) {
         std::printf("\n=== Frame %lu/%lu ===\n",
@@ -168,9 +174,11 @@ static FrameBenchmarkResult benchmark_read_frame(uint32_t count,
             std::printf("Successfully read %ld bytes, read cost=%.2f ms\n",
                         (long)bytes_read,
                         bench_us_to_ms(read_end_us - read_start_us));
-            if (dump_first_success_frame && !first_frame_dumped) {
-                print_frame_hex_dump(buf, (uint32_t)bytes_read);
-                first_frame_dumped = true;
+            if (dumped_success_frames < dump_success_frame_count) {
+                print_frame_hex_dump(buf,
+                                     (uint32_t)bytes_read,
+                                     result.success_frames);
+                dumped_success_frames++;
             }
         } else {
             result.failed_frames++;
@@ -261,6 +269,8 @@ int main()
                 RPI5_SPI_DEVICE,
                 (unsigned long)RPI5_SPI_SPEED_HZ,
                 (unsigned)RPI5_SPI_MODE);
+    std::printf("Dump first %lu successful pre-injection frame(s)\n",
+                (unsigned long)INTEGRATION_TEST_DUMP_FRAME_COUNT);
 
     if (!init_peripherals()) {
         return 1;
@@ -292,7 +302,7 @@ int main()
         BENCHMARK_FRAME_COUNT_PRE_INJECT,
         frame_buf,
         MAX_FRAME_SIZE,
-        true);
+        INTEGRATION_TEST_DUMP_FRAME_COUNT);
 
     uint64_t first_frame_latency_us = 0;
     uint64_t startup_total_us = 0;
@@ -314,7 +324,7 @@ int main()
         BENCHMARK_FRAME_COUNT_POST_INJECT,
         frame_buf,
         MAX_FRAME_SIZE,
-        false);
+        0);
 
     print_benchmark_table(open_end_us - open_start_us,
                           stream_on_end_us - stream_on_start_us,
