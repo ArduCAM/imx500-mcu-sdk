@@ -9,6 +9,7 @@ IMX500 camera module:
 The same pin mapping is used by:
 
 - `spi_receive_integration_test`
+- `micropython_imx500_spi_receive`
 
 ## Goal
 
@@ -33,6 +34,11 @@ cmake --build build
 ```
 
 Flash `build/spi_receive_integration_test.uf2` to Pico.
+
+For the MicroPython version, build a custom RP2 MicroPython firmware with the
+SDK user module, then copy its `main.py`:
+
+- [micropython_imx500_spi_receive](micropython_imx500_spi_receive/README.md)
 
 ## Expected Feedback
 
@@ -173,3 +179,4 @@ The current Pico example uses:
 These definitions are in:
 
 - `examples/platform/rpi/pico/spi_receive_integration_test/g_config.h`
+- `examples/platform/rpi/pico/micropython_imx500_spi_receive/usermod/imx500_mcu_sdk/g_config.h`

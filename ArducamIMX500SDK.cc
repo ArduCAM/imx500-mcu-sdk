@@ -1,10 +1,7 @@
 #include "ArducamIMX500SDK.h"
 #include "ArducamIMX500SDK.h"
-#include <algorithm>
 #include <inttypes.h>
 #include <stdarg.h>
-#include <vector>
-#include <string>
 #include "flatbuffers/flatbuffers.h"
 #include "stdio.h"
 #include "string.h"
@@ -28,6 +25,14 @@
 #define ALIGN_UP(size, align)   (ALIGN_DOWN((size) + (align) - 1, (align)))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+
+static size_t imx500_min_size(size_t a, size_t b) {
+    return a < b ? a : b;
+}
+
+static uint32_t imx500_min_u32(uint32_t a, uint32_t b) {
+    return a < b ? a : b;
+}
 
 typedef enum {
     IMX500_CMD_OK = 0,
@@ -279,27 +284,17 @@ static uint32_t calc_crc32_local(const uint8_t *data, uint32_t size) {
     return ~crc32_update_local(0xFFFFFFFFu, data, size);
 }
 
-static std::vector<uint8_t> byteswap_u32_words(const uint8_t *src, uint32_t size) {
-    std::vector<uint8_t> out;
+static uint8_t *byteswap_u32_words_alloc(const uint8_t *src, uint32_t size) {
     if (!src || size == 0u) {
-        return out;
+        return NULL;
     }
-    out.assign(src, src + size);
-    for (uint32_t i = 0; i + 4u <= size; i += 4u) {
-        out[i + 0] = src[i + 3];
-        out[i + 1] = src[i + 2];
-        out[i + 2] = src[i + 1];
-        out[i + 3] = src[i + 0];
-    }
-    return out;
-}
 
-[[maybe_unused]] static std::vector<uint8_t> byteswap_model_payload_4byte(const uint8_t *src, uint32_t size) {
-    std::vector<uint8_t> out;
-    if (!src || size == 0) {
-        return out;
+    uint8_t *out = (uint8_t *)malloc(size);
+    if (!out) {
+        return NULL;
     }
-    out.assign(src, src + size);
+
+    memcpy(out, src, size);
     for (uint32_t i = 0; i + 4u <= size; i += 4u) {
         out[i + 0] = src[i + 3];
         out[i + 1] = src[i + 2];
@@ -492,7 +487,7 @@ static void imx500_copy_fb_string(char *dst, size_t dst_size, const flatbuffers:
     if (!src) {
         return;
     }
-    size_t copy_len = std::min<size_t>(dst_size - 1, static_cast<size_t>(src->size()));
+    size_t copy_len = imx500_min_size(dst_size - 1, static_cast<size_t>(src->size()));
     memcpy(dst, src->c_str(), copy_len);
     dst[copy_len] = '\0';
 }
@@ -526,7 +521,7 @@ static bool imx500_tensor_parse_dimensions(IMX500ParsedTensor *dst, const flatbu
         return false;
     }
 
-    dst->dimension_count = (uint8_t)std::min<size_t>(IMX500_MAX_TENSOR_DIMS, static_cast<size_t>(dims->size()));
+    dst->dimension_count = (uint8_t)imx500_min_size(IMX500_MAX_TENSOR_DIMS, static_cast<size_t>(dims->size()));
     dst->element_count = 1;
     for (uint8_t i = 0; i < dst->dimension_count; ++i) {
         const auto *dim = dims->Get(i);
@@ -599,7 +594,7 @@ static bool imx500_parse_networks_from_ap_params(const uint8_t *ap_buf, uint32_t
         return false;
     }
 
-    parsed_metadata->network_count = (uint8_t)std::min<size_t>(IMX500_MAX_NETWORKS, static_cast<size_t>(networks->size()));
+    parsed_metadata->network_count = (uint8_t)imx500_min_size(IMX500_MAX_NETWORKS, static_cast<size_t>(networks->size()));
     parsed_metadata->selected_network_index = 0;
     for (uint8_t network_index = 0; network_index < parsed_metadata->network_count; ++network_index) {
         auto *dst_network = &parsed_metadata->networks[network_index];
@@ -617,7 +612,7 @@ static bool imx500_parse_networks_from_ap_params(const uint8_t *ap_buf, uint32_t
         const auto *output_tensors = src_network->outputTensors();
 
         if (input_tensors) {
-            dst_network->input_tensor_count = (uint8_t)std::min<size_t>(IMX500_MAX_INPUT_TENSORS, static_cast<size_t>(input_tensors->size()));
+            dst_network->input_tensor_count = (uint8_t)imx500_min_size(IMX500_MAX_INPUT_TENSORS, static_cast<size_t>(input_tensors->size()));
             for (uint8_t i = 0; i < dst_network->input_tensor_count; ++i) {
                 const auto *src_tensor = input_tensors->Get(i);
                 if (!src_tensor) {
@@ -637,7 +632,7 @@ static bool imx500_parse_networks_from_ap_params(const uint8_t *ap_buf, uint32_t
         }
 
         if (output_tensors) {
-            dst_network->output_tensor_count = (uint8_t)std::min<size_t>(IMX500_MAX_OUTPUT_TENSORS, static_cast<size_t>(output_tensors->size()));
+            dst_network->output_tensor_count = (uint8_t)imx500_min_size(IMX500_MAX_OUTPUT_TENSORS, static_cast<size_t>(output_tensors->size()));
             for (uint8_t i = 0; i < dst_network->output_tensor_count; ++i) {
                 const auto *src_tensor = output_tensors->Get(i);
                 if (!src_tensor) {
@@ -1854,10 +1849,13 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
 
     const uint8_t* output_tensor_data = data + data_offset;
 
-    std::vector<const uint8_t*> output_tensor_ptrs;
-    std::vector<uint32_t> output_tensor_sizes;
-    output_tensor_ptrs.reserve(output_tensors->size());
-    output_tensor_sizes.reserve(output_tensors->size());
+    if (output_tensors->size() > MAX_OUTPUT_TENSOR_NUM) {
+        printf("OutputTensor num is too large: %lu\n", (unsigned long)output_tensors->size());
+        return false;
+    }
+
+    const uint8_t *output_tensor_ptrs[MAX_OUTPUT_TENSOR_NUM] = {};
+    uint32_t output_tensor_sizes[MAX_OUTPUT_TENSOR_NUM] = {};
 
     uint32_t output_data_offset = 0;
 
@@ -1904,8 +1902,8 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
             return false;
         }
 
-        output_tensor_ptrs.push_back(output_tensor_data + output_data_offset);
-        output_tensor_sizes.push_back(tensor_elements);
+        output_tensor_ptrs[i] = output_tensor_data + output_data_offset;
+        output_tensor_sizes[i] = tensor_elements;
         output_data_offset += tensor_bytes_aligned;
     }
 
@@ -1928,7 +1926,10 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
     uint32_t class_elements = output_tensor_sizes[2];
     uint32_t detect_num = detect_num_data ? (uint32_t)detect_num_data[0] : 0;
 
-    uint32_t max_items = std::min({bbox_stride, score_elements, class_elements, detect_num, (uint32_t)MAX_DETECT_ITEM_NUM});
+    uint32_t max_items = imx500_min_u32(bbox_stride, score_elements);
+    max_items = imx500_min_u32(max_items, class_elements);
+    max_items = imx500_min_u32(max_items, detect_num);
+    max_items = imx500_min_u32(max_items, (uint32_t)MAX_DETECT_ITEM_NUM);
 
     auto bboxs = detection_result->bboxs;
     detection_result->valid_num = 0;
@@ -2551,21 +2552,22 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
     }
 
     const uint8_t *transfer_payload = payload;
-    std::vector<uint8_t> prepared_payload;
+    uint8_t *prepared_payload = NULL;
+#define RUN_SPI_BLOB_RETURN(value) do { free(prepared_payload); return (value); } while (0)
     if (byteswap_u32_payload) {
-        prepared_payload = byteswap_u32_words(payload, payload_size);
-        if (prepared_payload.size() != payload_size) {
+        prepared_payload = byteswap_u32_words_alloc(payload, payload_size);
+        if (!prepared_payload) {
             printf("%s byteswap payload failed size=%u\n",
                    label, (unsigned)payload_size);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
-        transfer_payload = prepared_payload.data();
+        transfer_payload = prepared_payload;
     }
 
     spi_flash_status_t flash_status = {};
     if (!get_spi_flash_status(&flash_status)) {
         printf("%s read initial flash status failed\n", label);
-        return false;
+        RUN_SPI_BLOB_RETURN(false);
     }
     if (flash_status.status != SPI_FLASH_OP_IDLE &&
         flash_status.status != SPI_FLASH_OP_SUCCESS &&
@@ -2584,26 +2586,26 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
                    (unsigned)flash_status.result,
                    (unsigned)flash_status.bytes_done,
                    (unsigned)flash_status.bytes_total);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
         if (!wait_for_spi_data_forward_mode(SPI_DATA_FORWARDING_NONE,
                                             SPI_FLASH_WAIT_IDLE_TIMEOUT_MS)) {
             printf("%s previous flash op finished but spi forwarding did not return to idle\n",
                    label);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
     }
 
     if (!switch_spi_data_forward_mode(mode)) {
         printf("%s switch spi forwarding mode failed\n", label);
-        return false;
+        RUN_SPI_BLOB_RETURN(false);
     }
     if (!wait_for_spi_flash_status(SPI_FLASH_OP_WAIT_HEADER,
                                    SPI_FLASH_WAIT_IDLE_TIMEOUT_MS,
                                    &flash_status)) {
         printf("%s wait flash receiver ready timeout, status=%u result=%u\n",
                label, (unsigned)flash_status.status, (unsigned)flash_status.result);
-        return false;
+        RUN_SPI_BLOB_RETURN(false);
     }
 
     SpiBlobWireHeader header = {};
@@ -2614,7 +2616,7 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
 
     if (sdk_spi_write_once(reinterpret_cast<const uint8_t *>(&header), sizeof(header)) < 0) {
         printf("%s send header failed\n", label);
-        return false;
+        RUN_SPI_BLOB_RETURN(false);
     }
     if (g_i2c_driver.slp_ms) {
         g_i2c_driver.slp_ms(SPI_FLASH_HEADER_GAP_MS);
@@ -2629,7 +2631,7 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
                (unsigned)flash_status.result,
                (unsigned)flash_status.bytes_done,
                (unsigned)flash_status.bytes_total);
-        return false;
+        RUN_SPI_BLOB_RETURN(false);
     }
     printf("%s receiver ready: offset=0/%u status=%u(%s) result=%u(%s)\n",
            label,
@@ -2650,7 +2652,7 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
                                        SPI_FW_BRIDGE_BLOCK_GAP_US) < 0) {
             printf("%s send payload failed at offset=%u len=%u\n",
                    label, (unsigned)sent, (unsigned)chunk);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
         sent += chunk;
         printf("%s sent chunk: %u/%u\n",
@@ -2671,7 +2673,7 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
                    (unsigned)flash_status.result,
                    (unsigned)flash_status.bytes_done,
                    (unsigned)flash_status.bytes_total);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
         printf("%s ack chunk: %u/%u status=%u(%s) result=%u(%s)\n",
                label,
@@ -2687,7 +2689,7 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
                    (unsigned)flash_status.result,
                    (unsigned)flash_status.bytes_done,
                    (unsigned)flash_status.bytes_total);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
         if (sent < payload_size &&
             !wait_for_spi_flash_receiver(sent,
@@ -2702,7 +2704,7 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
                    (unsigned)flash_status.result,
                    (unsigned)flash_status.bytes_done,
                    (unsigned)flash_status.bytes_total);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
         if (sent < payload_size) {
             printf("%s receiver rearmed: next_offset=%u/%u status=%u(%s) result=%u(%s)\n",
@@ -2743,14 +2745,14 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
             if (flash_status.result != SPI_FLASH_RESULT_OK) {
                 printf("%s success state with unexpected result=%u\n",
                        label, (unsigned)flash_status.result);
-                return false;
+                RUN_SPI_BLOB_RETURN(false);
             }
             if (!wait_for_spi_data_forward_mode(SPI_DATA_FORWARDING_NONE,
                                                 SPI_FLASH_WAIT_IDLE_TIMEOUT_MS)) {
                 printf("%s wait mode back to idle timeout\n", label);
-                return false;
+                RUN_SPI_BLOB_RETURN(false);
             }
-            return true;
+            RUN_SPI_BLOB_RETURN(true);
         }
         if (flash_status.status == SPI_FLASH_OP_FAILED) {
             printf("%s failed: result=%u bytes=%u/%u\n",
@@ -2758,7 +2760,7 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
                    (unsigned)flash_status.result,
                    (unsigned)flash_status.bytes_done,
                    (unsigned)flash_status.bytes_total);
-            return false;
+            RUN_SPI_BLOB_RETURN(false);
         }
         if (g_i2c_driver.slp_ms) {
             g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
@@ -2768,7 +2770,8 @@ static bool run_spi_blob_transfer(spi_data_forwarding_mode_t mode,
 
     printf("%s timeout waiting flash result after %u ms\n",
            label, (unsigned)timeout_ms);
-    return false;
+    RUN_SPI_BLOB_RETURN(false);
+#undef RUN_SPI_BLOB_RETURN
 }
 
 bool write_model_to_cam_flash(const uint8_t *model, uint32_t model_size) {
@@ -2914,13 +2917,15 @@ int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type) {
         return -1;
     }
 
-    std::vector<uint8_t> swapped_fw = byteswap_u32_words(fw, size);
-    if (swapped_fw.size() != size) {
+    uint8_t *swapped_fw = byteswap_u32_words_alloc(fw, size);
+    if (!swapped_fw) {
         printf("prepare byteswapped firmware failed size=%u\n", (unsigned)size);
         return -1;
     }
 
-    if (rp2350_send_fw_to_imx500_sspi(swapped_fw.data(), size) != 0) {
+    int send_ret = rp2350_send_fw_to_imx500_sspi(swapped_fw, size);
+    free(swapped_fw);
+    if (send_ret != 0) {
         printf("send firmware by SSPI failed\n");
         return -1;
     }
