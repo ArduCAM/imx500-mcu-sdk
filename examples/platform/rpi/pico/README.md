@@ -10,6 +10,7 @@ The same pin mapping is used by:
 
 - `spi_receive_integration_test`
 - `micropython_imx500_spi_receive`
+- `micropython_imx500_metadata_parse`
 
 ## Goal
 
@@ -36,9 +37,10 @@ cmake --build build
 Flash `build/spi_receive_integration_test.uf2` to Pico.
 
 For the MicroPython version, build a custom RP2 MicroPython firmware with the
-SDK user module, then copy its `main.py`:
+SDK user module, then copy or run the matching `main.py`:
 
 - [micropython_imx500_spi_receive](micropython_imx500_spi_receive/README.md)
+- [micropython_imx500_metadata_parse](micropython_imx500_metadata_parse/README.md)
 
 ## Expected Feedback
 
