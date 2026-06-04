@@ -124,22 +124,14 @@ Pico flash is too small to store both the forwarding firmware and an IMX500
 `.fpk` package, so the model must be programmed onto the camera module
 separately.
 
-For camera firmware `0x00000010` or newer, use the Python binding USB bridge
-tool from the SDK root:
+Flash the model directory that matches the `--task` value before running the
+host receiver. The supported model directories are listed in the table above.
 
-```bash
-python python_bindings/tools/imx500_usb_flash.py \
-  --model <selected_network.fpk> \
-  --network-info <selected_network_info.txt>
-```
-
-For camera firmware older than `0x00000010`, use the legacy USB flashing tool:
-
-```bash
-python tools/imx500_usb_flash.py \
-  --model <selected_network.fpk> \
-  --network-info <selected_network_info.txt>
-```
+Use the USB flashing guide in
+[../../../../../tools/README.md#flash-imx500-models-over-usb](../../../../../tools/README.md#flash-imx500-models-over-usb).
+It includes the recommended Python binding flasher, the legacy
+`tools/imx500_usb_flash.py` flow, `--status`, `--port`, and concrete SSD
+MobileNet command examples.
 
 ## Next Unlock
 

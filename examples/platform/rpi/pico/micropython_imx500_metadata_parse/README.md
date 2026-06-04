@@ -14,7 +14,42 @@ The MicroPython script prints:
 - ApParams and output payload offsets
 - network name and type
 - input and output tensor dimensions
-- output tensor payload offsets and short byte previews
+- output tensor payload offsets and short byte previews on the first parsed frame
+- SSD MobileNet valid detection boxes for every parsed frame
+
+The SSD MobileNet post-processing follows
+`examples/platform/rpi/pico2/camera_serial_stream_multitask/common/renderers.py`.
+It expects four output tensors in this order:
+
+1. boxes: normalized `(y1, x1, y2, x2)`
+2. scores
+3. class IDs
+4. valid detection count
+
+Detections with score greater than `SCORE_THRESHOLD` are printed with normalized
+box coordinates and input-tensor pixel coordinates.
+
+## Model Requirement
+
+This example is designed for the SSD MobileNet object-detection model. Before
+running `main.py`, write the `ssdmobilenet` model and its network information to
+the IMX500 module Flash first.
+
+Use the SSD MobileNet flashing commands in:
+
+- [../../../../../tools/README.md#flash-imx500-models-over-usb](../../../../../tools/README.md#flash-imx500-models-over-usb)
+
+The required model files are:
+
+```text
+tools/assets/models/ssd_mobilenetv2_fpnlite/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.fpk
+tools/assets/models/ssd_mobilenetv2_fpnlite/network_info.txt
+```
+
+The Pico 2 multitask example uses the same SSD MobileNet post-processing
+convention. If another model is loaded, the script may still parse metadata
+successfully, but detection box parsing will be skipped or the printed values
+will not be meaningful.
 
 ## Build Firmware
 
@@ -82,7 +117,7 @@ imx500.open(
 )
 imx500.stream_on()
 imx500.read_metadata(buf)
-imx500.parse_metadata(buf, length=n, spi_format=..., preview_len=16)
+imx500.parse_metadata(buf, length=n, spi_format=..., preview_len=4096)
 ```
 
 `open(...)`, `probe_imx500_module()`, and `read_metadata(buffer)` are aligned
@@ -93,6 +128,12 @@ fixed Pico I2C/SPI pins before calling the SDK.
 number of bytes written. `parse_metadata(...)` returns `None` on parse failure.
 On success it returns a dictionary with `primary_header`, `networks`,
 `input_tensors`, `output_tensors`, offset fields, and payload previews.
+
+The example uses a larger `preview_len` because MicroPython receives tensor
+payload bytes through each tensor's `preview` field. SSD MobileNet's
+post-processed output tensors are small enough for this. If a tensor payload is
+larger than `preview_len`, the script skips detection parsing for that frame and
+prints the truncation reason.
 
 ## Wiring
 
