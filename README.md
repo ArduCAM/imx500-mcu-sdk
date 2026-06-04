@@ -34,6 +34,10 @@ If you just received a B0642 module, validate the camera from a PC before wiring
 an MCU. The optional Python host tools can exercise the USB bridge,
 `imx500_mcu_sdk.open()`, metadata reads, JPEG preview, and model flashing flows.
 
+Before connecting the module to the host PC, hold down the module `MODE` button,
+then plug in the host-side USB cable. Keep `MODE` button pressed until the USB bridge is
+detected by the host.
+
 ```bash
 git clone --recursive https://github.com/ArduCAM/imx500-mcu-sdk.git
 cd imx500-mcu-sdk
