@@ -1,6 +1,6 @@
 set(IMX500_MICROPY_MODULE_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(IMX500_MCU_SDK_ROOT
-    "${CMAKE_CURRENT_LIST_DIR}/../../../../../../.."
+    "${CMAKE_CURRENT_LIST_DIR}/../../../.."
     CACHE PATH "Path to the imx500-mcu-sdk repository root")
 
 set(IMX500_MICROPY_BUILD_MODE "full" CACHE STRING "Build mode for the IMX500 MicroPython module")

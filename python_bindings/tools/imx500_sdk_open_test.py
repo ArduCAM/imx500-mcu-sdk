@@ -58,6 +58,17 @@ def save_metadata_frame(data: bytes, output_dir: pathlib.Path, index: int) -> pa
     return path
 
 
+def metadata_read_size(max_bytes: int) -> int:
+    if max_bytes > 0:
+        return max_bytes
+    size = imx500_mcu_sdk.get_metadata_size()
+    if size <= 0:
+        raise RuntimeError(
+            "metadata size is 0; start the stream first or pass --metadata-max-bytes"
+        )
+    return size
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", help="USB bridge CDC serial port")
@@ -101,7 +112,7 @@ def parse_args() -> argparse.Namespace:
         "--metadata-max-bytes",
         type=int,
         default=0,
-        help="Maximum bytes for imx500_mcu_sdk.read_metadata(). 0 means use SDK metadata size.",
+        help="Metadata read buffer capacity. 0 means use SDK metadata size.",
     )
     parser.add_argument(
         "--metadata-output-dir",
@@ -172,8 +183,13 @@ def main() -> int:
 
         for index in range(args.metadata_frames):
             print(f"reading metadata frame {index + 1}/{args.metadata_frames}", flush=True)
-            frame = imx500_mcu_sdk.read_metadata(args.metadata_max_bytes)
-            print(f"metadata frame size: {len(frame)}", flush=True)
+            read_size = metadata_read_size(args.metadata_max_bytes)
+            buffer = bytearray(read_size)
+            n = imx500_mcu_sdk.read_metadata(buffer)
+            print(f"metadata frame size: {n}", flush=True)
+            if n <= 0:
+                raise RuntimeError(f"read_metadata(buffer[{read_size}]) returned {n}")
+            frame = bytes(memoryview(buffer)[:n])
             path = save_metadata_frame(frame, args.metadata_output_dir, index)
             print(f"saved {path}", flush=True)
 

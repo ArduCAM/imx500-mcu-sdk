@@ -3,11 +3,9 @@ import time
 import imx500_mcu_sdk as imx500
 
 
-I2C_BAUDRATE_HZ = 100_000
-SPI_BAUDRATE_HZ = 5_000_000
 METADATA_BUFFER_SIZE = 64 * 1024
 FRAME_COUNT = 10
-SPI_FORMAT = imx500.SPI_METADATA_OUTPUT_TENSOR
+SPI_FORMAT = imx500.SpiDataFormat.METADATA_OUTPUT_TENSOR
 
 
 def _dims_text(tensor):
@@ -90,16 +88,14 @@ def print_parsed_metadata(parsed):
 def main():
     print("IMX500 MicroPython metadata parse example")
 
-    imx500.init(i2c_baudrate=I2C_BAUDRATE_HZ, spi_baudrate=SPI_BAUDRATE_HZ)
-
     print("module fw version:", hex(imx500.get_fw_ver()))
     print("module pid:", hex(imx500.get_pid()))
 
-    ok, device_id, boot_status = imx500.probe()
+    ok, device_id, boot_status = imx500.probe_imx500_module()
     print("probe:", ok, "device_id:", hex(device_id), "boot_status:", hex(boot_status))
 
-    if not imx500.open_flash(spi_format=SPI_FORMAT, fps=10):
-        raise RuntimeError("imx500 open_flash() failed")
+    if not imx500.open(None, None, imx500.MipiDataFormat.IMAGE, SPI_FORMAT, 10):
+        raise RuntimeError("imx500 open() failed")
 
     imx500.stream_on()
 
@@ -110,7 +106,7 @@ def main():
 
     while parsed_frames < FRAME_COUNT and attempts < max_attempts:
         attempts += 1
-        n = imx500.read_metadata_into(buf)
+        n = imx500.read_metadata(buf)
         if n <= 0:
             print("attempt", attempts, "no metadata frame")
             time.sleep_ms(10)

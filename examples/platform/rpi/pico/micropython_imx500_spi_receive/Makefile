@@ -1,7 +1,7 @@
 SDK_ROOT := $(abspath ../../../../..)
 MICROPYTHON_DIR := $(SDK_ROOT)/third_party/micropython
 RP2_DIR := $(MICROPYTHON_DIR)/ports/rp2
-USER_C_MODULES := $(abspath usermod/imx500_mcu_sdk/micropython.cmake)
+USER_C_MODULES := $(SDK_ROOT)/python_bindings/micropython/usermod/imx500_mcu_sdk/micropython.cmake
 
 BOARD ?= RPI_PICO
 MODULE_MODE ?= full

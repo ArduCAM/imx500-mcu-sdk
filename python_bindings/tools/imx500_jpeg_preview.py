@@ -190,6 +190,7 @@ def main() -> int:
     read_frames = 0
     last_report = time.monotonic()
     last_report_frames = 0
+    metadata_buffer = bytearray(args.max_bytes)
 
     try:
         print(f"bridge port: {bridge.port}", flush=True)
@@ -223,11 +224,12 @@ def main() -> int:
 
         print("reading JPEG metadata frames; press q or Esc to quit.", flush=True)
         while args.max_frames == 0 or decoded_frames < args.max_frames:
-            frame = imx500_mcu_sdk.read_metadata(args.max_bytes)
+            n = imx500_mcu_sdk.read_metadata(metadata_buffer)
             read_frames += 1
-            if not frame:
+            if n <= 0:
                 print("empty metadata frame; waiting for next frame...", flush=True)
                 continue
+            frame = bytes(memoryview(metadata_buffer)[:n])
 
             jpeg, info = extract_jpeg_from_metadata(frame)
             if not jpeg:

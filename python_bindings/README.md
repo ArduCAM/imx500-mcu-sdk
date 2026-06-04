@@ -43,6 +43,32 @@ python3 setup.py build_ext --inplace
 PYTHONPATH=python python3 -c "import imx500_mcu_sdk; print(imx500_mcu_sdk)"
 ```
 
+## Metadata Reads
+
+`imx500_mcu_sdk.read_metadata(buffer)` follows the C++ SDK API: pass a writable
+buffer, and the function returns the number of bytes written. The buffer must be
+large enough for the next metadata frame.
+
+```python
+size = imx500_mcu_sdk.get_metadata_size()
+buf = bytearray(size)
+n = imx500_mcu_sdk.read_metadata(buf)
+frame = bytes(memoryview(buf)[:n])
+```
+
+## MicroPython User Module
+
+The MicroPython user C module lives in:
+
+```text
+micropython/usermod/imx500_mcu_sdk
+```
+
+It exposes the same core SDK function names as the pybind module, including
+`open(...)`, `probe_imx500_module()`, `stream_on()`, `get_metadata_size()`, and
+`read_metadata(buffer)`. On Pico MicroPython, `open(...)` also initializes the
+fixed I2C/SPI pins from `g_config.h` before calling the SDK.
+
 ## Tools
 
 Run the following tools from this directory. If you installed the package in

@@ -63,8 +63,8 @@ You should see:
   module is present at I2C address `0x0c`.
 - If the module powers up but data transfer fails, check whether `SPI_TX` and
   `SPI_RX` were crossed correctly.
-- If you changed the wiring, update the corresponding `g_config.h` file in the
-  example you are building.
+- If you changed the wiring, update the corresponding `g_config.h` file for the
+  example or shared MicroPython user module you are building.
 - The example expects both `I2C` and `SPI` to be connected. I2C alone is not enough.
 
 ## Next Unlock
@@ -163,7 +163,8 @@ Before powering the board:
 - If the bus is still unreliable, add external pull-ups from `SDA` and `SCL` to
   `3.3 V`, typically around `4.7k`.
 - If the module powers up but SPI reads fail, confirm the SPI TX/RX cross-over.
-- If you changed the wiring, update the corresponding `g_config.h` file in the example.
+- If you changed the wiring, update the corresponding `g_config.h` file for the
+  example or shared MicroPython user module.
 
 ### 7. Pin Definitions Used by the Current Code
 
@@ -181,4 +182,4 @@ The current Pico example uses:
 These definitions are in:
 
 - `examples/platform/rpi/pico/spi_receive_integration_test/g_config.h`
-- `examples/platform/rpi/pico/micropython_imx500_spi_receive/usermod/imx500_mcu_sdk/g_config.h`
+- `python_bindings/micropython/usermod/imx500_mcu_sdk/g_config.h`

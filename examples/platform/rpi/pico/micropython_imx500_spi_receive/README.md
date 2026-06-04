@@ -11,13 +11,12 @@ compiled into the MicroPython RP2 firmware, then imported from `main.py`.
 - Pico `I2C0` and `SPI0` initialization with the same pins as the C++ example.
 - `import imx500_mcu_sdk` from MicroPython.
 - Basic module bring-up:
-  - `init(...)`
   - `get_fw_ver()`
   - `get_pid()`
-  - `probe()`
-  - `open_flash(...)`
+  - `probe_imx500_module()`
+  - `open(...)`
   - `stream_on()`
-  - `read_metadata_into(...)`
+  - `read_metadata(buffer)`
 
 The example defaults to Flash boot. It assumes the model and network info have
 already been programmed into the IMX500 module flash by a native SDK example or
@@ -96,8 +95,9 @@ flash process before debugging the IMX500 module.
 ## Run
 
 After flashing the custom MicroPython firmware and copying `main.py`, open the
-USB serial REPL. The script initializes I2C/SPI, opens the IMX500 module from
-module Flash, starts streaming, and prints metadata frame lengths.
+USB serial REPL. The script opens the IMX500 module from module Flash, starts
+streaming, and prints metadata frame lengths. On Pico MicroPython, `open(...)`
+initializes the fixed Pico I2C/SPI pins before calling the SDK.
 
 ### Run With mpremote
 
@@ -178,10 +178,10 @@ If `mpremote devs` does not show a `/dev/cu.usbmodem*` device after flashing:
 
 ## Memory Notes
 
-Pico has limited RAM. The native C++ example can reserve a large static frame
-buffer, but MicroPython also needs heap space. Start with a smaller `bytearray`
-in `main.py`, then increase it if `read_metadata_into(...)` reports that the
-buffer is too small.
+Pico has limited RAM. `read_metadata(buffer)` follows the C++ SDK API and writes
+into a caller-provided `bytearray`, then returns the number of bytes written.
+Start with a smaller buffer in `main.py`, then increase it if `read_metadata(...)`
+reports that the buffer is too small.
 
 ## Wiring
 
@@ -189,6 +189,6 @@ Use the shared Pico wiring guide:
 
 - [../README.md](../README.md)
 
-The default pin definitions are in:
+The shared MicroPython user module and default pin definitions are in:
 
-- `usermod/imx500_mcu_sdk/g_config.h`
+- `../../../../../python_bindings/micropython/usermod/imx500_mcu_sdk`

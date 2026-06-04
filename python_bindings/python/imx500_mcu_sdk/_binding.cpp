@@ -365,18 +365,29 @@ void bind_sdk_functions(py::module_& m) {
   m.def("get_metadata_size", &::get_metadata_size);
 
   m.def("read_metadata",
-        [](uint32_t max_size) {
-          if (max_size == 0) {
-            max_size = ::get_metadata_size();
+        [](py::buffer buffer) {
+          py::buffer_info info = buffer.request();
+          if (info.readonly) {
+            throw py::value_error("read_metadata buffer must be writable");
           }
-          std::vector<uint8_t> buf(max_size);
-          int32_t ret = ::read_metadata(buf.data(), max_size);
-          if (ret <= 0) {
-            return py::bytes();
+          if (info.ptr == nullptr || info.size <= 0 || info.itemsize <= 0) {
+            throw py::value_error("read_metadata buffer length must be > 0");
           }
-          return py::bytes(reinterpret_cast<const char*>(buf.data()), ret);
+          if (info.ndim != 1 || info.strides.empty() ||
+              info.strides[0] != info.itemsize) {
+            throw py::value_error("read_metadata buffer must be one-dimensional and contiguous");
+          }
+
+          size_t capacity = static_cast<size_t>(info.size) *
+                            static_cast<size_t>(info.itemsize);
+          if (capacity > UINT32_MAX) {
+            throw py::value_error("read_metadata buffer is too large");
+          }
+
+          return ::read_metadata(reinterpret_cast<uint8_t*>(info.ptr),
+                                 static_cast<uint32_t>(capacity));
         },
-        py::arg("max_size") = 0);
+        py::arg("buffer"));
 
   m.def("get_spi_flash_status", []() {
     spi_flash_status_t status = {};

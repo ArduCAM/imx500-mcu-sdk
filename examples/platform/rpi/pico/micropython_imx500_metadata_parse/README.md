@@ -4,9 +4,9 @@ This example reads IMX500 SPI metadata frames from MicroPython and parses them
 with the SDK `parse_metadata(...)` API exposed through the `imx500_mcu_sdk` user
 C module.
 
-It uses the same firmware module as:
+It uses the shared MicroPython user module in:
 
-- `../micropython_imx500_spi_receive`
+- `../../../../../python_bindings/micropython/usermod/imx500_mcu_sdk`
 
 The MicroPython script prints:
 
@@ -73,16 +73,26 @@ mpremote reset
 The script uses:
 
 ```python
-imx500.init(...)
-imx500.open_flash(spi_format=imx500.SPI_METADATA_OUTPUT_TENSOR, fps=10)
+imx500.open(
+    None,
+    None,
+    imx500.MipiDataFormat.IMAGE,
+    imx500.SpiDataFormat.METADATA_OUTPUT_TENSOR,
+    10,
+)
 imx500.stream_on()
-imx500.read_metadata_into(buf)
+imx500.read_metadata(buf)
 imx500.parse_metadata(buf, length=n, spi_format=..., preview_len=16)
 ```
 
-`parse_metadata(...)` returns `None` on parse failure. On success it returns a
-dictionary with `primary_header`, `networks`, `input_tensors`, `output_tensors`,
-offset fields, and payload previews.
+`open(...)`, `probe_imx500_module()`, and `read_metadata(buffer)` are aligned
+with the pybind Python API. On Pico MicroPython, `open(...)` also initializes the
+fixed Pico I2C/SPI pins before calling the SDK.
+
+`read_metadata(buffer)` writes into the supplied `bytearray` and returns the
+number of bytes written. `parse_metadata(...)` returns `None` on parse failure.
+On success it returns a dictionary with `primary_header`, `networks`,
+`input_tensors`, `output_tensors`, offset fields, and payload previews.
 
 ## Wiring
 

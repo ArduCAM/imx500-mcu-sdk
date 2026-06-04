@@ -132,6 +132,16 @@ def save_bytes(data: bytes, output_dir: pathlib.Path, prefix: str, suffix: str) 
     return path
 
 
+def read_metadata_bytes(read_size: int) -> bytes:
+    if read_size <= 0:
+        raise RuntimeError("metadata read buffer size must be > 0")
+    buffer = bytearray(read_size)
+    n = imx500_mcu_sdk.read_metadata(buffer)
+    if n <= 0:
+        return b""
+    return bytes(memoryview(buffer)[:n])
+
+
 def bridge_status_summary(response: object) -> str:
     return (
         f"boot_state={getattr(response, 'value0', 0)} "
@@ -176,8 +186,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help=(
-            "Maximum bytes for read_metadata(). 0 means wait for the SDK "
-            "metadata size, except --jpeg-preview defaults to 2 MiB."
+            "Metadata read buffer capacity. 0 means wait for the SDK metadata "
+            "size, except --jpeg-preview defaults to 2 MiB."
         ),
     )
     parser.add_argument(
@@ -326,9 +336,9 @@ def main() -> int:
 
     def read_metadata_frame() -> str:
         read_size = metadata_read_size()
-        frame = imx500_mcu_sdk.read_metadata(read_size)
+        frame = read_metadata_bytes(read_size)
         if not frame:
-            raise RuntimeError(f"read_metadata({read_size}) returned an empty frame")
+            raise RuntimeError(f"read_metadata(buffer[{read_size}]) returned an empty frame")
         state.metadata_frame = frame
         state.metadata_path = save_bytes(frame, args.output_dir, "metadata", ".bin")
         return f"bytes={len(frame)} read_size={read_size} saved={state.metadata_path}"
@@ -345,9 +355,9 @@ def main() -> int:
             jpeg, info = extract_jpeg_from_metadata(frame)
             if jpeg:
                 break
-            frame = imx500_mcu_sdk.read_metadata(metadata_max_bytes)
+            frame = read_metadata_bytes(metadata_max_bytes)
             if not frame:
-                raise RuntimeError("read_metadata() returned an empty frame while searching for JPEG")
+                raise RuntimeError("read_metadata(buffer) returned an empty frame while searching for JPEG")
         else:
             raise RuntimeError(info or "no JPEG found")
 
