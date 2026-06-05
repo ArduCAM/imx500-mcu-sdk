@@ -247,6 +247,17 @@ static mp_obj_t imx500_sdk_get_pid(void) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(imx500_sdk_get_pid_obj, imx500_sdk_get_pid);
 
+static mp_obj_t imx500_sdk_get_sensor_device_id(void) {
+    imx500_ensure_hardware_initialized();
+    char id[36] = {};
+    int ret = get_sensor_device_id(id, sizeof(id));
+    if (ret != 0) {
+        mp_raise_msg_varg(&mp_type_RuntimeError, MP_ERROR_TEXT("get_sensor_device_id failed: %d"), ret);
+    }
+    return mp_obj_new_str(id, strlen(id));
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(imx500_sdk_get_sensor_device_id_obj, imx500_sdk_get_sensor_device_id);
+
 static mp_obj_t imx500_sdk_probe(void) {
     imx500_ensure_hardware_initialized();
     uint32_t device_id = 0;
@@ -700,6 +711,7 @@ static const mp_rom_map_elem_t imx500_sdk_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_spi_read), MP_ROM_PTR(&imx500_sdk_spi_read_obj) },
     { MP_ROM_QSTR(MP_QSTR_get_fw_ver), MP_ROM_PTR(&imx500_sdk_get_fw_ver_obj) },
     { MP_ROM_QSTR(MP_QSTR_get_pid), MP_ROM_PTR(&imx500_sdk_get_pid_obj) },
+    { MP_ROM_QSTR(MP_QSTR_get_sensor_device_id), MP_ROM_PTR(&imx500_sdk_get_sensor_device_id_obj) },
     { MP_ROM_QSTR(MP_QSTR_probe_imx500_module), MP_ROM_PTR(&imx500_sdk_probe_obj) },
     { MP_ROM_QSTR(MP_QSTR_open), MP_ROM_PTR(&imx500_sdk_open_obj) },
     { MP_ROM_QSTR(MP_QSTR_load_imx500_fw), MP_ROM_PTR(&imx500_sdk_load_imx500_fw_obj) },

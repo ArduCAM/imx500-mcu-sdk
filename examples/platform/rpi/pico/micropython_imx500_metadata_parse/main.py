@@ -2,6 +2,18 @@ import time
 
 import imx500_mcu_sdk as imx500
 
+try:
+    import ujson as json
+except ImportError:
+    import json
+
+try:
+    import ustruct as struct
+except ImportError:
+    import struct
+
+from machine import Pin, UART
+
 
 METADATA_BUFFER_SIZE = 64 * 1024
 FRAME_COUNT = 10
@@ -9,7 +21,26 @@ SCORE_THRESHOLD = 0.3
 TENSOR_CAPTURE_BYTES = 4096
 DISPLAY_PREVIEW_BYTES = 16
 PRINT_TENSOR_SUMMARY_ON_FIRST_FRAME = True
-SPI_FORMAT = imx500.SpiDataFormat.METADATA_OUTPUT_TENSOR
+SPI_FORMAT = imx500.SpiDataFormat.METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
+
+UART_ID = 1
+UART_TX_PIN = 4
+UART_RX_PIN = 5
+UART_BAUDRATE = 921600
+UART_WRITE_CHUNK = 512
+
+UART_MAGIC = b"IMX5"
+UART_VERSION = 1
+UART_HEADER_FORMAT = "<4sBBBBIIII"
+UART_HEADER_SIZE = struct.calcsize(UART_HEADER_FORMAT)
+UART_MSG_AI = 1
+UART_MSG_AI_JPEG = 2
+UART_STATUS_PASS = 0
+UART_STATUS_NG = 1
+UART_STATUS_ERROR = 2
+
+MAX_UART_DETECTIONS = 8
+NG_ON_ANY_DETECTION = True
 
 
 def _tensor_dims(tensor):
@@ -36,6 +67,134 @@ def _score_percent(score):
     if value <= 1.0:
         value *= 100.0
     return value
+
+
+def _device_uid_hex():
+    return imx500.get_sensor_device_id()
+
+
+def _exception_name(exc):
+    try:
+        return type(exc).__name__
+    except Exception:
+        return "Exception"
+
+
+def _checksum32(parts):
+    checksum = 0
+    for data in parts:
+        if data is None:
+            continue
+        for b in data:
+            checksum = (checksum + b) & 0xFFFFFFFF
+    return checksum
+
+
+def _uart_write_all(uart, data):
+    total = 0
+    length = len(data)
+    while total < length:
+        end = total + UART_WRITE_CHUNK
+        if end > length:
+            end = length
+        chunk = data[total:end]
+        written = uart.write(chunk)
+        if written is None:
+            written = 0
+        if written <= 0:
+            time.sleep_ms(1)
+            continue
+        total += written
+
+
+def _scaled_box(box, scale):
+    return [
+        int(_clip01(box[0]) * scale + 0.5),
+        int(_clip01(box[1]) * scale + 0.5),
+        int(_clip01(box[2]) * scale + 0.5),
+        int(_clip01(box[3]) * scale + 0.5),
+    ]
+
+
+def _detection_for_uart(detection):
+    item = {
+        "class_id": detection["class_id"],
+        "score_permille": int(_clip01(detection["score"]) * 1000 + 0.5),
+        "box_norm_10000": _scaled_box(detection["box"], 10000),
+    }
+    if "box_input_px" in detection:
+        item["box_input_px"] = list(detection["box_input_px"])
+    return item
+
+
+def _jpeg_payload(buf, parsed, metadata_len):
+    offset = parsed.get("jpeg_data_offset", 0)
+    length = parsed.get("jpeg_data_len", 0)
+    if offset < 0 or length <= 0 or offset >= metadata_len:
+        return None, 0
+    if offset + length > metadata_len:
+        length = metadata_len - offset
+    return memoryview(buf)[offset:offset + length], length
+
+
+def _build_ai_result(
+    parsed,
+    detections,
+    err,
+    sequence,
+    device_uid,
+    imx500_device_id,
+    status_text,
+    jpeg_len,
+):
+    header = parsed.get("primary_header") or {}
+    result = {
+        "device_uid": device_uid,
+        "imx500_device_id": imx500_device_id,
+        "sequence": sequence,
+        "frame_count": header.get("frame_count"),
+        "status": status_text,
+        "score_threshold_permille": int(SCORE_THRESHOLD * 1000 + 0.5),
+        "detection_count": 0 if detections is None else len(detections),
+        "detections": [],
+        "jpeg_bytes": jpeg_len,
+    }
+    if err:
+        result["error"] = err
+        return result
+
+    for detection in detections[:MAX_UART_DETECTIONS]:
+        result["detections"].append(_detection_for_uart(detection))
+    if detections and len(detections) > MAX_UART_DETECTIONS:
+        result["truncated"] = True
+    return result
+
+
+def _send_uart_frame(uart, ai_result, jpeg_payload=None, jpeg_len=0):
+    ai_bytes = json.dumps(ai_result).encode()
+    has_jpeg = jpeg_payload is not None and jpeg_len > 0
+    status = UART_STATUS_NG if ai_result.get("status") == "NG" else UART_STATUS_PASS
+    if ai_result.get("status") == "ERROR":
+        status = UART_STATUS_ERROR
+    msg_type = UART_MSG_AI_JPEG if has_jpeg else UART_MSG_AI
+    checksum = _checksum32((ai_bytes, jpeg_payload if has_jpeg else None))
+    header = struct.pack(
+        UART_HEADER_FORMAT,
+        UART_MAGIC,
+        UART_VERSION,
+        msg_type,
+        status,
+        0,
+        ai_result["sequence"],
+        len(ai_bytes),
+        jpeg_len if has_jpeg else 0,
+        checksum,
+    )
+    _uart_write_all(uart, header)
+    _uart_write_all(uart, ai_bytes)
+    if has_jpeg:
+        _uart_write_all(uart, jpeg_payload)
+    return UART_HEADER_SIZE + len(ai_bytes) + (jpeg_len if has_jpeg else 0)
 
 
 def print_tensor(kind, index, tensor):
@@ -242,8 +401,9 @@ def parse_ssd_mobilenet_detections(parsed, score_threshold=SCORE_THRESHOLD):
     return detections, None
 
 
-def print_detections(parsed):
-    detections, err = parse_ssd_mobilenet_detections(parsed, SCORE_THRESHOLD)
+def print_detections(parsed, detections=None, err=None):
+    if detections is None and err is None:
+        detections, err = parse_ssd_mobilenet_detections(parsed, SCORE_THRESHOLD)
     if err:
         print("  detections: skipped:", err)
         return
@@ -272,6 +432,18 @@ def print_detections(parsed):
 def main():
     print("IMX500 MicroPython metadata parse example")
 
+    device_uid = _device_uid_hex()
+    uart = UART(
+        UART_ID,
+        baudrate=UART_BAUDRATE,
+        tx=Pin(UART_TX_PIN),
+        rx=Pin(UART_RX_PIN),
+    )
+    print(
+        "uart protocol: id=%d tx=GPIO%d rx=GPIO%d baud=%d uid=%s"
+        % (UART_ID, UART_TX_PIN, UART_RX_PIN, UART_BAUDRATE, device_uid)
+    )
+
     print("module fw version:", hex(imx500.get_fw_ver()))
     print("module pid:", hex(imx500.get_pid()))
 
@@ -296,12 +468,24 @@ def main():
             time.sleep_ms(10)
             continue
 
-        parsed = imx500.parse_metadata(
-            buf,
-            length=n,
-            spi_format=SPI_FORMAT,
-            preview_len=TENSOR_CAPTURE_BYTES,
-        )
+        try:
+            parsed = imx500.parse_metadata(
+                buf,
+                length=n,
+                spi_format=SPI_FORMAT,
+                preview_len=TENSOR_CAPTURE_BYTES,
+            )
+        except Exception as exc:
+            print(
+                "attempt",
+                attempts,
+                "parse_metadata exception:",
+                _exception_name(exc),
+                "bytes:",
+                n,
+            )
+            time.sleep_ms(10)
+            continue
         if parsed is None:
             print("attempt", attempts, "parse_metadata failed bytes:", n)
             time.sleep_ms(10)
@@ -311,7 +495,33 @@ def main():
         print("\n=== parsed frame %d/%d bytes=%d ===" % (parsed_frames, FRAME_COUNT, n))
         if PRINT_TENSOR_SUMMARY_ON_FIRST_FRAME and parsed_frames == 1:
             print_parsed_metadata(parsed)
-        print_detections(parsed)
+
+        detections, err = parse_ssd_mobilenet_detections(parsed, SCORE_THRESHOLD)
+        if err:
+            status_text = "ERROR"
+            jpeg, jpeg_len = None, 0
+        else:
+            has_detection = len(detections) > 0
+            is_ng = has_detection if NG_ON_ANY_DETECTION else not has_detection
+            status_text = "NG" if is_ng else "PASS"
+            jpeg, jpeg_len = _jpeg_payload(buf, parsed, n) if is_ng else (None, 0)
+
+        ai_result = _build_ai_result(
+            parsed,
+            detections,
+            err,
+            parsed_frames,
+            device_uid,
+            device_id,
+            status_text,
+            jpeg_len,
+        )
+        sent = _send_uart_frame(uart, ai_result, jpeg, jpeg_len)
+        print(
+            "  uart: status=%s jpeg=%d bytes sent=%d"
+            % (status_text, jpeg_len, sent)
+        )
+        print_detections(parsed, detections, err)
         time.sleep_ms(100)
 
     print("done parsed=%d attempts=%d" % (parsed_frames, attempts))

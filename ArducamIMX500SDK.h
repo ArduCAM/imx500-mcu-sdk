@@ -462,6 +462,17 @@ void get_fw_ver(uint32_t* v);
 void get_pid(uint32_t* v);
 
 /**
+ * @brief Read the sensor device ID used by imx500_dump_basic_info().
+ * @param out Destination buffer for the formatted ID string.
+ * @param out_size Size of @p out in bytes. Must be at least 36.
+ * @return 0 on success, negative on command or argument failure.
+ *
+ * The formatted ID matches imx500_dump_basic_info():
+ * XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX
+ */
+int get_sensor_device_id(char *out, size_t out_size);
+
+/**
  * @brief Probe the module and read device ID plus boot status.
  * @return `true` if both registers were read successfully.
  */

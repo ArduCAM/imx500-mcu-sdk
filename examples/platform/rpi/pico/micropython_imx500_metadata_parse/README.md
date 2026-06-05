@@ -16,6 +16,7 @@ The MicroPython script prints:
 - input and output tensor dimensions
 - output tensor payload offsets and short byte previews on the first parsed frame
 - SSD MobileNet valid detection boxes for every parsed frame
+- UART product frames containing AI results and optional JPEG bytes
 
 The SSD MobileNet post-processing follows
 `examples/platform/rpi/pico2/camera_serial_stream_multitask/common/renderers.py`.
@@ -28,6 +29,62 @@ It expects four output tensors in this order:
 
 Detections with score greater than `SCORE_THRESHOLD` are printed with normalized
 box coordinates and input-tensor pixel coordinates.
+
+## UART Product Protocol
+
+`main.py` also sends each parsed frame over hardware UART:
+
+```text
+UART1 TX = GPIO4
+UART1 RX = GPIO5
+Baudrate = 921600
+```
+
+These pins do not overlap the IMX500 `I2C0` and `SPI0` pins used by this
+example. The USB serial `print(...)` logs remain available for debugging.
+
+The default PASS/NG rule is:
+
+- `NG`: at least one detection is above `SCORE_THRESHOLD`
+- `PASS`: no detections are above `SCORE_THRESHOLD`
+- `ERROR`: metadata parsed, but SSD MobileNet detection post-processing failed
+
+For `NG`, the UART frame contains AI JSON followed by the JPEG bytes extracted
+from the metadata frame. For `PASS`, it contains only the AI JSON.
+
+Each UART frame has a 24-byte little-endian binary header:
+
+```text
+offset  size  field
+0       4     magic: "IMX5"
+4       1     version: 1
+5       1     message type: 1=AI only, 2=AI + JPEG
+6       1     status: 0=PASS, 1=NG, 2=ERROR
+7       1     reserved
+8       4     sequence
+12      4     AI JSON byte length
+16      4     JPEG byte length
+20      4     checksum32 of AI JSON + optional JPEG bytes
+```
+
+The payload immediately follows the header:
+
+```text
+AI JSON bytes
+optional JPEG bytes
+```
+
+The AI JSON includes `device_uid` from `imx500.get_sensor_device_id()`, which
+uses the same sensor-device-ID commands printed by `imx500_dump_basic_info()`.
+It also includes the probed `imx500_device_id`, frame sequence, frame count,
+result status, threshold, and up to eight detections. Detection scores are sent
+as `score_permille`, and normalized boxes are sent as `box_norm_10000` in
+`(y1, x1, y2, x2)` order.
+
+If `parse_metadata(...)` raises `UnicodeError`, the script treats that metadata
+frame as invalid and skips it. This can happen when a partial or noisy SPI
+metadata frame passes the header checks but contains non-UTF-8 bytes in
+network/tensor name fields.
 
 ## Model Requirement
 
@@ -112,7 +169,7 @@ imx500.open(
     None,
     None,
     imx500.MipiDataFormat.IMAGE,
-    imx500.SpiDataFormat.METADATA_OUTPUT_TENSOR,
+    imx500.SpiDataFormat.METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
     10,
 )
 imx500.stream_on()

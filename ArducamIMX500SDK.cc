@@ -2206,6 +2206,50 @@ static int imx500_set_crop_rect_xyxy(uint32_t xmin_abs,
                              ymax_abs - ymin_abs);
 }
 
+int get_sensor_device_id(char *out, size_t out_size)
+{
+    if (!out || out_size < 36) {
+        return IMX500_CMD_ERR_INVALID_ARG;
+    }
+
+    uint32_t dev_id[4] = {};
+    const uint32_t commands[4] = {
+        IMX500_COMMAND_GET_SENSOR_DEVICE_ID_1,
+        IMX500_COMMAND_GET_SENSOR_DEVICE_ID_2,
+        IMX500_COMMAND_GET_SENSOR_DEVICE_ID_3,
+        IMX500_COMMAND_GET_SENSOR_DEVICE_ID_4,
+    };
+
+    for (size_t i = 0; i < 4; ++i) {
+        imx500_err_t ret = imx500_res_read(commands[i], &dev_id[i], 10);
+        if (ret != IMX500_CMD_OK) {
+            out[0] = '\0';
+            return ret;
+        }
+    }
+
+    snprintf(out,
+             out_size,
+             "%02X%02X%02X%02X-%02X%02X%02X%02X-%02X%02X%02X%02X-%02X%02X%02X%02X",
+             (unsigned int)((dev_id[0] >> 24) & 0xFFu),
+             (unsigned int)((dev_id[0] >> 16) & 0xFFu),
+             (unsigned int)((dev_id[0] >>  8) & 0xFFu),
+             (unsigned int)((dev_id[0] >>  0) & 0xFFu),
+             (unsigned int)((dev_id[1] >> 24) & 0xFFu),
+             (unsigned int)((dev_id[1] >> 16) & 0xFFu),
+             (unsigned int)((dev_id[1] >>  8) & 0xFFu),
+             (unsigned int)((dev_id[1] >>  0) & 0xFFu),
+             (unsigned int)((dev_id[2] >> 24) & 0xFFu),
+             (unsigned int)((dev_id[2] >> 16) & 0xFFu),
+             (unsigned int)((dev_id[2] >>  8) & 0xFFu),
+             (unsigned int)((dev_id[2] >>  0) & 0xFFu),
+             (unsigned int)((dev_id[3] >> 24) & 0xFFu),
+             (unsigned int)((dev_id[3] >> 16) & 0xFFu),
+             (unsigned int)((dev_id[3] >>  8) & 0xFFu),
+             (unsigned int)((dev_id[3] >>  0) & 0xFFu));
+    return 0;
+}
+
 void imx500_dump_basic_info()
 {
     uint32_t val = 0;
@@ -2241,26 +2285,12 @@ void imx500_dump_basic_info()
         int ret = imx500_res_read(cmd_list[i].cmd, &val, 10);
         printf("%-22s : 0x%08" PRIX32 " (%" PRIu32 ") ec: %d\n", cmd_list[i].name, val, val, ret);
     }
-    uint32_t dev_id[4];
-    imx500_res_read(IMX500_COMMAND_GET_SENSOR_DEVICE_ID_1, &dev_id[0], 10);
-    imx500_res_read(IMX500_COMMAND_GET_SENSOR_DEVICE_ID_2, &dev_id[1], 10);
-    imx500_res_read(IMX500_COMMAND_GET_SENSOR_DEVICE_ID_3, &dev_id[2], 10);
-    imx500_res_read(IMX500_COMMAND_GET_SENSOR_DEVICE_ID_4, &dev_id[3], 10);
-    printf("sensor device id: ");
-    for (int i = 0; i < 4; i++) {
-        uint32_t v = dev_id[i];
-
-        printf("%02X%02X%02X%02X",
-               (unsigned int)((v >> 24) & 0xFFu),
-               (unsigned int)((v >> 16) & 0xFFu),
-               (unsigned int)((v >>  8) & 0xFFu),
-               (unsigned int)((v >>  0) & 0xFFu));
-
-        if (i != 3) {
-            printf("-");
-        }
+    char sensor_id[36] = {};
+    if (get_sensor_device_id(sensor_id, sizeof(sensor_id)) == 0) {
+        printf("sensor device id: %s\n", sensor_id);
+    } else {
+        printf("sensor device id: read failed\n");
     }
-    printf("\n");
 }
 
 bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m) {
