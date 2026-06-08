@@ -16,28 +16,35 @@ from machine import Pin, UART
 
 
 METADATA_BUFFER_SIZE = 64 * 1024
-FRAME_COUNT = 10
 SCORE_THRESHOLD = 0.3
 TENSOR_CAPTURE_BYTES = 4096
 DISPLAY_PREVIEW_BYTES = 16
 PRINT_TENSOR_SUMMARY_ON_FIRST_FRAME = True
+DATA_READ_TIMEOUT_MS = 1000
 SPI_FORMAT = imx500.SpiDataFormat.METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
 
 UART_ID = 1
 UART_TX_PIN = 4
 UART_RX_PIN = 5
-UART_BAUDRATE = 921600
+UART_BAUDRATE = 115200
 UART_WRITE_CHUNK = 512
+UART_READ_TIMEOUT_MS = 200
+UART_MAX_COMMAND_JSON_BYTES = 1024
+UART_MAX_COMMAND_BINARY_BYTES = 0
+UART_IDLE_SLEEP_MS = 10
 
 UART_MAGIC = b"IMX5"
-UART_VERSION = 1
+UART_VERSION = 2
 UART_HEADER_FORMAT = "<4sBBBBIIII"
 UART_HEADER_SIZE = struct.calcsize(UART_HEADER_FORMAT)
-UART_MSG_AI = 1
-UART_MSG_AI_JPEG = 2
-UART_STATUS_PASS = 0
-UART_STATUS_NG = 1
-UART_STATUS_ERROR = 2
+UART_MSG_STATUS_REQUEST = 0x10
+UART_MSG_DATA_REQUEST = 0x11
+UART_MSG_STATUS_RESPONSE = 0x90
+UART_MSG_DATA_RESPONSE = 0x91
+UART_MSG_ERROR_RESPONSE = 0x92
+UART_CODE_OK = 0
+UART_CODE_NG = 1
+UART_CODE_ERROR = 2
 
 MAX_UART_DETECTIONS = 8
 NG_ON_ANY_DETECTION = True
@@ -73,11 +80,38 @@ def _device_uid_hex():
     return imx500.get_sensor_device_id()
 
 
+def _refresh_device_uid(state):
+    if state.get("device_uid"):
+        return True
+
+    try:
+        state["device_uid"] = _device_uid_hex()
+        state["device_uid_error"] = None
+        return True
+    except Exception as exc:
+        state["device_uid_error"] = _exception_text("get sensor device id failed", exc)
+    return False
+
+
 def _exception_name(exc):
     try:
         return type(exc).__name__
     except Exception:
         return "Exception"
+
+
+def _exception_text(prefix, exc):
+    text = str(exc)
+    name = _exception_name(exc)
+    if text:
+        return "%s: %s: %s" % (prefix, name, text)
+    return "%s: %s" % (prefix, name)
+
+
+def _hex_or_none(value):
+    if value is None:
+        return "None"
+    return hex(value)
 
 
 def _checksum32(parts):
@@ -105,6 +139,127 @@ def _uart_write_all(uart, data):
             time.sleep_ms(1)
             continue
         total += written
+
+
+def _uart_read_exact(uart, length, timeout_ms):
+    data = bytearray()
+    start = time.ticks_ms()
+    while len(data) < length:
+        available = uart.any()
+        if available:
+            need = length - len(data)
+            if available < need:
+                need = available
+            chunk = uart.read(need)
+            if chunk:
+                data.extend(chunk)
+                continue
+        if time.ticks_diff(time.ticks_ms(), start) >= timeout_ms:
+            return None
+        time.sleep_ms(1)
+    return bytes(data)
+
+
+def _read_uart_packet(uart):
+    if uart.any() <= 0:
+        return None
+
+    window = b""
+    start = time.ticks_ms()
+    while True:
+        chunk = uart.read(1)
+        if chunk:
+            window = (window + chunk)[-len(UART_MAGIC):]
+            if window == UART_MAGIC:
+                break
+        elif time.ticks_diff(time.ticks_ms(), start) >= UART_READ_TIMEOUT_MS:
+            return None
+        else:
+            time.sleep_ms(1)
+
+    rest = _uart_read_exact(uart, UART_HEADER_SIZE - len(UART_MAGIC), UART_READ_TIMEOUT_MS)
+    if rest is None:
+        return {"error": "incomplete header", "sequence": 0}
+
+    header = UART_MAGIC + rest
+    magic, version, msg_type, code, flags, sequence, json_len, binary_len, checksum = struct.unpack(
+        UART_HEADER_FORMAT,
+        header,
+    )
+    if magic != UART_MAGIC:
+        return None
+    if version != UART_VERSION:
+        return {
+            "error": "unsupported protocol version %d" % version,
+            "sequence": sequence,
+        }
+    if json_len > UART_MAX_COMMAND_JSON_BYTES:
+        return {"error": "command JSON too large", "sequence": sequence}
+    if binary_len > UART_MAX_COMMAND_BINARY_BYTES:
+        return {"error": "command binary payload is not supported", "sequence": sequence}
+
+    json_bytes = _uart_read_exact(uart, json_len, UART_READ_TIMEOUT_MS) if json_len else b""
+    if json_bytes is None:
+        return {"error": "incomplete JSON payload", "sequence": sequence}
+    binary_payload = _uart_read_exact(uart, binary_len, UART_READ_TIMEOUT_MS) if binary_len else b""
+    if binary_payload is None:
+        return {"error": "incomplete binary payload", "sequence": sequence}
+
+    expected = _checksum32((json_bytes, binary_payload))
+    if expected != checksum:
+        return {"error": "checksum mismatch", "sequence": sequence}
+
+    request = {}
+    if json_bytes:
+        try:
+            request = json.loads(json_bytes.decode())
+        except Exception as exc:
+            return {"error": _exception_text("invalid command JSON", exc), "sequence": sequence}
+        if request is None:
+            request = {}
+
+    return {
+        "msg_type": msg_type,
+        "code": code,
+        "flags": flags,
+        "sequence": sequence,
+        "json": request,
+    }
+
+
+def _send_uart_packet(
+    uart,
+    msg_type,
+    code,
+    sequence,
+    json_payload=None,
+    binary_payload=None,
+    binary_len=0,
+    flags=0,
+):
+    json_bytes = b""
+    if json_payload is not None:
+        json_bytes = json.dumps(json_payload).encode()
+    has_binary = binary_payload is not None and binary_len > 0
+    checksum = _checksum32((json_bytes, binary_payload if has_binary else None))
+    header = struct.pack(
+        UART_HEADER_FORMAT,
+        UART_MAGIC,
+        UART_VERSION,
+        msg_type,
+        code,
+        flags,
+        sequence,
+        len(json_bytes),
+        binary_len if has_binary else 0,
+        checksum,
+    )
+    _uart_write_all(uart, header)
+    if json_bytes:
+        _uart_write_all(uart, json_bytes)
+    if has_binary:
+        _uart_write_all(uart, binary_payload)
+    return UART_HEADER_SIZE + len(json_bytes) + (binary_len if has_binary else 0)
 
 
 def _scaled_box(box, scale):
@@ -146,12 +301,14 @@ def _build_ai_result(
     imx500_device_id,
     status_text,
     jpeg_len,
+    sample_index,
 ):
     header = parsed.get("primary_header") or {}
     result = {
         "device_uid": device_uid,
         "imx500_device_id": imx500_device_id,
         "sequence": sequence,
+        "sample_index": sample_index,
         "frame_count": header.get("frame_count"),
         "status": status_text,
         "score_threshold_permille": int(SCORE_THRESHOLD * 1000 + 0.5),
@@ -170,31 +327,12 @@ def _build_ai_result(
     return result
 
 
-def _send_uart_frame(uart, ai_result, jpeg_payload=None, jpeg_len=0):
-    ai_bytes = json.dumps(ai_result).encode()
-    has_jpeg = jpeg_payload is not None and jpeg_len > 0
-    status = UART_STATUS_NG if ai_result.get("status") == "NG" else UART_STATUS_PASS
-    if ai_result.get("status") == "ERROR":
-        status = UART_STATUS_ERROR
-    msg_type = UART_MSG_AI_JPEG if has_jpeg else UART_MSG_AI
-    checksum = _checksum32((ai_bytes, jpeg_payload if has_jpeg else None))
-    header = struct.pack(
-        UART_HEADER_FORMAT,
-        UART_MAGIC,
-        UART_VERSION,
-        msg_type,
-        status,
-        0,
-        ai_result["sequence"],
-        len(ai_bytes),
-        jpeg_len if has_jpeg else 0,
-        checksum,
-    )
-    _uart_write_all(uart, header)
-    _uart_write_all(uart, ai_bytes)
-    if has_jpeg:
-        _uart_write_all(uart, jpeg_payload)
-    return UART_HEADER_SIZE + len(ai_bytes) + (jpeg_len if has_jpeg else 0)
+def _result_code(status_text):
+    if status_text == "NG":
+        return UART_CODE_NG
+    if status_text == "ERROR":
+        return UART_CODE_ERROR
+    return UART_CODE_OK
 
 
 def print_tensor(kind, index, tensor):
@@ -429,42 +567,225 @@ def print_detections(parsed, detections=None, err=None):
         print(text)
 
 
-def main():
-    print("IMX500 MicroPython metadata parse example")
+def _make_camera_state():
+    state = {
+        "device_uid": "",
+        "fw_version": None,
+        "pid": None,
+        "probe_ok": False,
+        "imx500_device_id": 0,
+        "boot_status": 0,
+        "opened": False,
+        "streaming": False,
+        "ready": False,
+        "startup_state": "BOOTING",
+        "startup_message": "waiting for first status request",
+        "startup_attempts": 0,
+        "device_uid_error": None,
+        "last_error": None,
+        "last_result": None,
+        "parsed_frames": 0,
+        "buf": bytearray(METADATA_BUFFER_SIZE),
+    }
+    return state
 
-    device_uid = _device_uid_hex()
-    uart = UART(
-        UART_ID,
-        baudrate=UART_BAUDRATE,
-        tx=Pin(UART_TX_PIN),
-        rx=Pin(UART_RX_PIN),
-    )
-    print(
-        "uart protocol: id=%d tx=GPIO%d rx=GPIO%d baud=%d uid=%s"
-        % (UART_ID, UART_TX_PIN, UART_RX_PIN, UART_BAUDRATE, device_uid)
-    )
 
-    print("module fw version:", hex(imx500.get_fw_ver()))
-    print("module pid:", hex(imx500.get_pid()))
+def _probe_camera(state):
+    state["startup_state"] = "PROBING"
+    state["startup_message"] = "probing imx500 module"
+    try:
+        state["fw_version"] = imx500.get_fw_ver()
+        state["pid"] = imx500.get_pid()
+        ok, device_id, boot_status = imx500.probe_imx500_module()
+        state["probe_ok"] = bool(ok)
+        state["imx500_device_id"] = device_id
+        state["boot_status"] = boot_status
+        if not ok:
+            state["ready"] = False
+            state["last_error"] = "probe_imx500_module failed"
+        else:
+            state["startup_state"] = "PROBED"
+            state["startup_message"] = "imx500 module probed"
+        return bool(ok)
+    except Exception as exc:
+        state["probe_ok"] = False
+        state["ready"] = False
+        state["startup_state"] = "ERROR"
+        state["startup_message"] = "probe failed"
+        state["last_error"] = _exception_text("probe failed", exc)
+        return False
 
-    ok, device_id, boot_status = imx500.probe_imx500_module()
-    print("probe:", ok, "device_id:", hex(device_id), "boot_status:", hex(boot_status))
 
-    if not imx500.open(None, None, imx500.MipiDataFormat.IMAGE, SPI_FORMAT, 10):
-        raise RuntimeError("imx500 open() failed")
+def _ensure_camera_ready(state):
+    if not _probe_camera(state):
+        return False
 
-    imx500.stream_on()
+    if not state["opened"]:
+        if not _open_camera(state):
+            return False
 
-    buf = bytearray(METADATA_BUFFER_SIZE)
-    parsed_frames = 0
+    if not state["streaming"]:
+        if not _start_camera_stream(state):
+            return False
+
+    return _mark_camera_ready(state)
+
+
+def _open_camera(state):
+    state["startup_state"] = "OPENING"
+    state["startup_message"] = "opening imx500 stream path"
+    try:
+        state["opened"] = bool(
+            imx500.open(None, None, imx500.MipiDataFormat.IMAGE, SPI_FORMAT, 10)
+        )
+    except Exception as exc:
+        state["opened"] = False
+        state["last_error"] = _exception_text("imx500 open failed", exc)
+        state["ready"] = False
+        state["startup_state"] = "ERROR"
+        state["startup_message"] = "imx500 open failed"
+        return False
+    if not state["opened"]:
+        state["last_error"] = "imx500 open() returned false"
+        state["ready"] = False
+        state["startup_state"] = "ERROR"
+        state["startup_message"] = "imx500 open returned false"
+        return False
+    state["startup_state"] = "OPENED"
+    state["startup_message"] = "imx500 stream path opened"
+    return True
+
+
+def _start_camera_stream(state):
+    state["startup_state"] = "STREAMING"
+    state["startup_message"] = "starting imx500 stream"
+    try:
+        imx500.stream_on()
+        state["streaming"] = True
+    except Exception as exc:
+        state["streaming"] = False
+        state["last_error"] = _exception_text("imx500 stream_on failed", exc)
+        state["ready"] = False
+        state["startup_state"] = "ERROR"
+        state["startup_message"] = "imx500 stream_on failed"
+        return False
+    state["startup_state"] = "STREAM_ON"
+    state["startup_message"] = "imx500 stream started"
+    return True
+
+
+def _mark_camera_ready(state):
+    state["ready"] = True
+    state["startup_state"] = "READY"
+    state["startup_message"] = "camera ready"
+    state["last_error"] = None
+    _refresh_device_uid(state)
+    return True
+
+
+def _advance_camera_startup(state):
+    if state.get("ready"):
+        _refresh_device_uid(state)
+        return True
+
+    state["startup_attempts"] = state.get("startup_attempts", 0) + 1
+    if not state.get("probe_ok"):
+        return _probe_camera(state)
+    if not state.get("opened"):
+        return _open_camera(state)
+    if not state.get("streaming"):
+        return _start_camera_stream(state)
+    return _mark_camera_ready(state)
+
+
+def _status_payload(state):
+    startup_state = state.get("startup_state", "BOOTING")
+    poll_after_ms = 200
+    if startup_state == "PROBED":
+        poll_after_ms = 5000
+    elif startup_state in ("BOOTING", "OPENED", "STREAM_ON"):
+        poll_after_ms = 500
+    elif startup_state in ("READY", "ERROR"):
+        poll_after_ms = 0
+
+    return {
+        "protocol_version": UART_VERSION,
+        "device_uid": state.get("device_uid", ""),
+        "device_uid_error": state.get("device_uid_error"),
+        "fw_version": state.get("fw_version"),
+        "pid": state.get("pid"),
+        "probe_ok": state.get("probe_ok", False),
+        "imx500_device_id": state.get("imx500_device_id", 0),
+        "boot_status": state.get("boot_status", 0),
+        "opened": state.get("opened", False),
+        "streaming": state.get("streaming", False),
+        "ready": state.get("ready", False),
+        "startup_state": startup_state,
+        "startup_message": state.get("startup_message", ""),
+        "startup_attempts": state.get("startup_attempts", 0),
+        "poll_after_ms": poll_after_ms,
+        "last_error": state.get("last_error"),
+        "last_result": state.get("last_result"),
+        "parsed_frames": state.get("parsed_frames", 0),
+        "uart_baudrate": UART_BAUDRATE,
+        "data_timeout_ms": DATA_READ_TIMEOUT_MS,
+    }
+
+
+def _request_timeout_ms(request):
+    value = request.get("timeout_ms", DATA_READ_TIMEOUT_MS)
+    try:
+        value = int(value)
+    except Exception:
+        value = DATA_READ_TIMEOUT_MS
+    if value < 50:
+        value = 50
+    if value > 5000:
+        value = 5000
+    return value
+
+
+def _request_jpeg_mode(request):
+    value = request.get("include_jpeg", "on_ng")
+    if value is True:
+        return "always"
+    if value is False:
+        return "never"
+    if value in ("always", "never", "on_ng"):
+        return value
+    return "on_ng"
+
+
+def _read_ai_frame(state, sequence, request):
+    if not state.get("ready"):
+        return {
+            "device_uid": state.get("device_uid", ""),
+            "imx500_device_id": state.get("imx500_device_id", 0),
+            "sequence": sequence,
+            "sample_index": state.get("parsed_frames", 0),
+            "status": "ERROR",
+            "startup_state": state.get("startup_state", "BOOTING"),
+            "startup_message": state.get("startup_message", ""),
+            "error": state.get("last_error") or "camera is still starting",
+            "jpeg_bytes": 0,
+        }, None, 0
+
+    timeout_ms = _request_timeout_ms(request)
+    jpeg_mode = _request_jpeg_mode(request)
+    start = time.ticks_ms()
     attempts = 0
-    max_attempts = FRAME_COUNT * 20
+    last_error = None
+    buf = state["buf"]
 
-    while parsed_frames < FRAME_COUNT and attempts < max_attempts:
+    while time.ticks_diff(time.ticks_ms(), start) < timeout_ms:
         attempts += 1
-        n = imx500.read_metadata(buf)
+        try:
+            n = imx500.read_metadata(buf)
+        except Exception as exc:
+            last_error = _exception_text("read_metadata exception", exc)
+            time.sleep_ms(10)
+            continue
         if n <= 0:
-            print("attempt", attempts, "no metadata frame")
             time.sleep_ms(10)
             continue
 
@@ -476,55 +797,169 @@ def main():
                 preview_len=TENSOR_CAPTURE_BYTES,
             )
         except Exception as exc:
-            print(
-                "attempt",
-                attempts,
-                "parse_metadata exception:",
-                _exception_name(exc),
-                "bytes:",
-                n,
-            )
+            last_error = _exception_text("parse_metadata exception", exc)
             time.sleep_ms(10)
             continue
         if parsed is None:
-            print("attempt", attempts, "parse_metadata failed bytes:", n)
+            last_error = "parse_metadata returned None for %d bytes" % n
             time.sleep_ms(10)
             continue
 
-        parsed_frames += 1
-        print("\n=== parsed frame %d/%d bytes=%d ===" % (parsed_frames, FRAME_COUNT, n))
-        if PRINT_TENSOR_SUMMARY_ON_FIRST_FRAME and parsed_frames == 1:
+        state["parsed_frames"] += 1
+        sample_index = state["parsed_frames"]
+        print("\n=== requested frame %d seq=%d bytes=%d ===" % (sample_index, sequence, n))
+        if PRINT_TENSOR_SUMMARY_ON_FIRST_FRAME and sample_index == 1:
             print_parsed_metadata(parsed)
 
-        detections, err = parse_ssd_mobilenet_detections(parsed, SCORE_THRESHOLD)
+        jpeg, jpeg_len = None, 0
+        detections, err = None, None
+        status_text = "ERROR"
+        try:
+            detections, err = parse_ssd_mobilenet_detections(parsed, SCORE_THRESHOLD)
+        except Exception as exc:
+            err = _exception_text("detection post-processing exception", exc)
         if err:
             status_text = "ERROR"
-            jpeg, jpeg_len = None, 0
         else:
             has_detection = len(detections) > 0
             is_ng = has_detection if NG_ON_ANY_DETECTION else not has_detection
             status_text = "NG" if is_ng else "PASS"
-            jpeg, jpeg_len = _jpeg_payload(buf, parsed, n) if is_ng else (None, 0)
+            want_jpeg = jpeg_mode == "always" or (jpeg_mode == "on_ng" and is_ng)
+            jpeg, jpeg_len = _jpeg_payload(buf, parsed, n) if want_jpeg else (None, 0)
 
         ai_result = _build_ai_result(
             parsed,
             detections,
             err,
-            parsed_frames,
-            device_uid,
-            device_id,
+            sequence,
+            state.get("device_uid", ""),
+            state.get("imx500_device_id", 0),
             status_text,
             jpeg_len,
+            sample_index,
         )
-        sent = _send_uart_frame(uart, ai_result, jpeg, jpeg_len)
+        ai_result["attempts"] = attempts
+        ai_result["timeout_ms"] = timeout_ms
+        ai_result["jpeg_mode"] = jpeg_mode
+        state["last_result"] = status_text
         print(
-            "  uart: status=%s jpeg=%d bytes sent=%d"
-            % (status_text, jpeg_len, sent)
+            "  response: status=%s jpeg=%d attempts=%d"
+            % (status_text, jpeg_len, attempts)
         )
         print_detections(parsed, detections, err)
-        time.sleep_ms(100)
+        return ai_result, jpeg, jpeg_len
 
-    print("done parsed=%d attempts=%d" % (parsed_frames, attempts))
+    state["last_result"] = "ERROR"
+    state["last_error"] = last_error or "metadata read timeout"
+    return {
+        "device_uid": state.get("device_uid", ""),
+        "imx500_device_id": state.get("imx500_device_id", 0),
+        "sequence": sequence,
+        "sample_index": state.get("parsed_frames", 0),
+        "status": "ERROR",
+        "error": state["last_error"],
+        "attempts": attempts,
+        "timeout_ms": timeout_ms,
+        "jpeg_bytes": 0,
+    }, None, 0
+
+
+def _send_error_response(uart, sequence, message):
+    payload = {
+        "status": "ERROR",
+        "error": message,
+        "sequence": sequence,
+    }
+    sent = _send_uart_packet(
+        uart,
+        UART_MSG_ERROR_RESPONSE,
+        UART_CODE_ERROR,
+        sequence,
+        payload,
+    )
+    print("  protocol error seq=%d bytes=%d: %s" % (sequence, sent, message))
+
+
+def _handle_uart_packet(uart, state, packet):
+    if packet is None:
+        return
+    sequence = packet.get("sequence", 0)
+    if packet.get("error"):
+        _send_error_response(uart, sequence, packet["error"])
+        return
+
+    msg_type = packet.get("msg_type")
+    request = packet.get("json") or {}
+    if msg_type == UART_MSG_STATUS_REQUEST:
+        payload = _status_payload(state)
+        code = UART_CODE_ERROR if payload["startup_state"] == "ERROR" else UART_CODE_OK
+        sent = _send_uart_packet(uart, UART_MSG_STATUS_RESPONSE, code, sequence, payload)
+        print(
+            "  status response seq=%d state=%s ready=%s bytes=%d"
+            % (sequence, payload["startup_state"], payload["ready"], sent)
+        )
+        if not payload["ready"]:
+            _advance_camera_startup(state)
+        return
+
+    if msg_type == UART_MSG_DATA_REQUEST:
+        ai_result, jpeg, jpeg_len = _read_ai_frame(state, sequence, request)
+        sent = _send_uart_packet(
+            uart,
+            UART_MSG_DATA_RESPONSE,
+            _result_code(ai_result.get("status")),
+            sequence,
+            ai_result,
+            jpeg,
+            jpeg_len,
+        )
+        print(
+            "  data response seq=%d status=%s bytes=%d"
+            % (sequence, ai_result.get("status"), sent)
+        )
+        return
+
+    _send_error_response(uart, sequence, "unsupported message type %s" % msg_type)
+
+
+def main():
+    print("IMX500 MicroPython metadata parse example")
+
+    uart = UART(
+        UART_ID,
+        baudrate=UART_BAUDRATE,
+        tx=Pin(UART_TX_PIN),
+        rx=Pin(UART_RX_PIN),
+    )
+    print(
+        "uart protocol v%d: id=%d tx=GPIO%d rx=GPIO%d baud=%d"
+        % (UART_VERSION, UART_ID, UART_TX_PIN, UART_RX_PIN, UART_BAUDRATE)
+    )
+
+    state = _make_camera_state()
+    print(
+        "camera startup_state=%s uid=%s fw=%s pid=%s device_id=%s boot_status=%s"
+        % (
+            state["startup_state"],
+            state["device_uid"],
+            _hex_or_none(state["fw_version"]),
+            _hex_or_none(state["pid"]),
+            _hex_or_none(state["imx500_device_id"]),
+            _hex_or_none(state["boot_status"]),
+        )
+    )
+    if state["last_error"]:
+        print("camera error:", state["last_error"])
+    if state["device_uid_error"]:
+        print("device uid error:", state["device_uid_error"])
+    print("waiting for STATUS or GET_DATA requests from host")
+
+    while True:
+        packet = _read_uart_packet(uart)
+        if packet is None:
+            time.sleep_ms(UART_IDLE_SLEEP_MS)
+            continue
+        _handle_uart_packet(uart, state, packet)
 
 
 main()

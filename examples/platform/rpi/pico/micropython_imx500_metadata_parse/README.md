@@ -16,7 +16,8 @@ The MicroPython script prints:
 - input and output tensor dimensions
 - output tensor payload offsets and short byte previews on the first parsed frame
 - SSD MobileNet valid detection boxes for every parsed frame
-- UART product frames containing AI results and optional JPEG bytes
+- UART request/response product frames containing camera status, AI results, and
+  optional JPEG bytes
 
 The SSD MobileNet post-processing follows
 `examples/platform/rpi/pico2/camera_serial_stream_multitask/common/renderers.py`.
@@ -32,16 +33,22 @@ box coordinates and input-tensor pixel coordinates.
 
 ## UART Product Protocol
 
-`main.py` also sends each parsed frame over hardware UART:
+`main.py` runs as a hardware UART request/response service:
 
 ```text
 UART1 TX = GPIO4
 UART1 RX = GPIO5
-Baudrate = 921600
+Baudrate = 115200
 ```
 
 These pins do not overlap the IMX500 `I2C0` and `SPI0` pins used by this
 example. The USB serial `print(...)` logs remain available for debugging.
+
+The Pico does not push AI frames by itself. The host should:
+
+1. Send `STATUS_REQUEST`.
+2. Check that the `STATUS_RESPONSE` JSON has `ready: true`.
+3. Send `GET_DATA_REQUEST` whenever one parsed AI result is needed.
 
 The default PASS/NG rule is:
 
@@ -49,37 +56,193 @@ The default PASS/NG rule is:
 - `PASS`: no detections are above `SCORE_THRESHOLD`
 - `ERROR`: metadata parsed, but SSD MobileNet detection post-processing failed
 
-For `NG`, the UART frame contains AI JSON followed by the JPEG bytes extracted
-from the metadata frame. For `PASS`, it contains only the AI JSON.
+For `GET_DATA_REQUEST`, JPEG transfer is controlled by request JSON. The default
+is `include_jpeg: "on_ng"`, so `NG` responses contain AI JSON followed by the
+JPEG bytes extracted from the metadata frame, while `PASS` responses contain only
+AI JSON.
 
-Each UART frame has a 24-byte little-endian binary header:
+Every request and response has a 24-byte little-endian binary header:
 
 ```text
 offset  size  field
 0       4     magic: "IMX5"
-4       1     version: 1
-5       1     message type: 1=AI only, 2=AI + JPEG
-6       1     status: 0=PASS, 1=NG, 2=ERROR
-7       1     reserved
-8       4     sequence
-12      4     AI JSON byte length
-16      4     JPEG byte length
-20      4     checksum32 of AI JSON + optional JPEG bytes
+4       1     version: 2
+5       1     message type
+6       1     code: request=0, response 0=OK/PASS, 1=NG, 2=ERROR
+7       1     flags: reserved, send 0
+8       4     sequence, echoed by the response
+12      4     JSON byte length
+16      4     binary byte length
+20      4     checksum32 byte sum of JSON + optional binary bytes
 ```
 
 The payload immediately follows the header:
 
 ```text
-AI JSON bytes
-optional JPEG bytes
+JSON bytes
+optional binary bytes
 ```
 
-The AI JSON includes `device_uid` from `imx500.get_sensor_device_id()`, which
-uses the same sensor-device-ID commands printed by `imx500_dump_basic_info()`.
-It also includes the probed `imx500_device_id`, frame sequence, frame count,
-result status, threshold, and up to eight detections. Detection scores are sent
-as `score_permille`, and normalized boxes are sent as `box_norm_10000` in
-`(y1, x1, y2, x2)` order.
+Message types:
+
+```text
+0x10  STATUS_REQUEST
+0x11  GET_DATA_REQUEST
+0x90  STATUS_RESPONSE
+0x91  DATA_RESPONSE
+0x92  ERROR_RESPONSE
+```
+
+`STATUS_REQUEST` normally has no JSON payload. The response JSON includes:
+
+```json
+{
+  "protocol_version": 2,
+  "device_uid": "...",
+  "device_uid_error": null,
+  "fw_version": 0,
+  "pid": 0,
+  "probe_ok": true,
+  "imx500_device_id": 0,
+  "boot_status": 0,
+  "opened": true,
+  "streaming": true,
+  "ready": true,
+  "startup_state": "READY",
+  "startup_message": "camera ready",
+  "startup_attempts": 3,
+  "poll_after_ms": 0,
+  "last_error": null,
+  "last_result": null,
+  "parsed_frames": 0,
+  "uart_baudrate": 115200,
+  "data_timeout_ms": 1000
+}
+```
+
+Immediately after power-on, `STATUS_RESPONSE` can return `ready: false` with a
+startup state such as `"BOOTING"`, `"PROBED"`, `"OPENED"`, or `"STREAM_ON"`.
+This is not a transport error; the host should wait `poll_after_ms`, then poll
+`STATUS_REQUEST` again until `ready: true`. Sensor UID is optional during
+startup, and `device_uid_error` does not prevent `ready: true`.
+
+`GET_DATA_REQUEST` accepts optional JSON:
+
+```json
+{
+  "timeout_ms": 1000,
+  "include_jpeg": "on_ng"
+}
+```
+
+`timeout_ms` is clamped to `50..5000`. `include_jpeg` can be `"on_ng"`,
+`"always"`, or `"never"`. Boolean `true` is treated as `"always"` and `false`
+as `"never"`.
+
+`DATA_RESPONSE` JSON includes `device_uid` from
+`imx500.get_sensor_device_id()`, the probed `imx500_device_id`, echoed request
+`sequence`, local `sample_index`, IMX500 `frame_count`, result status,
+threshold, read attempts, JPEG mode, and up to eight detections. Detection
+scores are sent as `score_permille`, and normalized boxes are sent as
+`box_norm_10000` in `(y1, x1, y2, x2)` order. If the response header has a
+non-zero binary length, those bytes are the JPEG payload.
+
+Minimal host-side packet flow:
+
+```python
+import json
+import struct
+import time
+
+import serial
+
+
+MAGIC = b"IMX5"
+VERSION = 2
+HEADER = "<4sBBBBIIII"
+HEADER_SIZE = struct.calcsize(HEADER)
+STATUS_REQUEST = 0x10
+GET_DATA_REQUEST = 0x11
+STATUS_RESPONSE = 0x90
+DATA_RESPONSE = 0x91
+
+
+def checksum32(*parts):
+    value = 0
+    for data in parts:
+        if data:
+            value = (value + sum(data)) & 0xFFFFFFFF
+    return value
+
+
+def send_packet(port, msg_type, sequence, payload=None):
+    body = json.dumps(payload or {}).encode() if payload else b""
+    header = struct.pack(
+        HEADER,
+        MAGIC,
+        VERSION,
+        msg_type,
+        0,
+        0,
+        sequence,
+        len(body),
+        0,
+        checksum32(body),
+    )
+    port.write(header + body)
+
+
+def read_exact(port, length):
+    data = bytearray()
+    while len(data) < length:
+        chunk = port.read(length - len(data))
+        if not chunk:
+            raise TimeoutError("serial read timeout")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def recv_packet(port):
+    header = read_exact(port, HEADER_SIZE)
+    magic, version, msg_type, code, flags, seq, json_len, bin_len, checksum = struct.unpack(
+        HEADER,
+        header,
+    )
+    if magic != MAGIC or version != VERSION:
+        raise RuntimeError("bad IMX5 packet")
+    json_bytes = read_exact(port, json_len) if json_len else b""
+    binary = read_exact(port, bin_len) if bin_len else b""
+    if checksum32(json_bytes, binary) != checksum:
+        raise RuntimeError("bad IMX5 checksum")
+    payload = json.loads(json_bytes.decode()) if json_bytes else {}
+    return msg_type, code, seq, payload, binary
+
+
+with serial.Serial("/dev/tty.usbserial-XXXX", 115200, timeout=30) as port:
+    sequence = 1
+    for _ in range(20):
+        send_packet(port, STATUS_REQUEST, sequence)
+        msg_type, code, seq, status, _ = recv_packet(port)
+        if msg_type != STATUS_RESPONSE:
+            raise RuntimeError("unexpected response type: 0x%02x" % msg_type)
+        print(status.get("startup_state"), status.get("startup_message"))
+        if status.get("ready"):
+            break
+        if code != 0 and status.get("startup_state") == "ERROR":
+            raise RuntimeError(status.get("last_error") or "camera startup failed")
+        sequence += 1
+        time.sleep(max(status.get("poll_after_ms", 200), 100) / 1000.0)
+    else:
+        raise TimeoutError("camera did not become ready")
+
+    send_packet(port, GET_DATA_REQUEST, sequence, {"timeout_ms": 1000, "include_jpeg": "on_ng"})
+    msg_type, code, seq, result, jpeg = recv_packet(port)
+    if msg_type != DATA_RESPONSE:
+        raise RuntimeError("unexpected response type: 0x%02x" % msg_type)
+    print(result)
+    if jpeg:
+        print("jpeg bytes:", len(jpeg))
+```
 
 If `parse_metadata(...)` raises `UnicodeError`, the script treats that metadata
 frame as invalid and skips it. This can happen when a partial or noisy SPI
