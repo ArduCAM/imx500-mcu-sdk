@@ -8,6 +8,7 @@ All Pico 2 examples in this directory use the same hardware interface to the IMX
 The same pin mapping is used by:
 
 - `integration_test`
+- `spi_receive_integration_test`
 - `camera_serial_stream_multitask`
 - `production_test`
 
@@ -29,6 +30,8 @@ After wiring, choose the mission that matches your goal:
 
 | Mission | Start with |
 | --- | --- |
+| Run the low-level SDK integration test | [integration_test](integration_test) |
+| Validate native C++ SPI metadata reads | [spi_receive_integration_test](spi_receive_integration_test) |
 | Stream metadata to a PC for parsing | [camera_serial_stream_multitask](camera_serial_stream_multitask/README.md) |
 | Run a repeatable production check | [production_test](production_test/README.md) |
 | Port the same interface to your own MCU product | [SPI metadata to MCU product path](../../../../docs/paths/spi-mcu-product-path.md) |
@@ -164,5 +167,6 @@ The current Pico 2 examples all use:
 These definitions are consistent across:
 
 - `examples/platform/rpi/pico2/integration_test/g_config.h`
+- `examples/platform/rpi/pico2/spi_receive_integration_test/g_config.h`
 - `examples/platform/rpi/pico2/camera_serial_stream_multitask/g_config.h`
 - `examples/platform/rpi/pico2/production_test/g_config.h`

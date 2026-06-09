@@ -32,7 +32,7 @@ After wiring, choose the mission that matches your goal:
 | Mission | Start with |
 | --- | --- |
 | Build a product-like person-detection ROI web demo | [imx500_person_detect_roi_mvp](imx500_person_detect_roi_mvp/README.md) |
-| Validate SPI metadata receive behavior | `spi_receive_integration_test` |
+| Validate SPI metadata receive behavior | [spi_receive_integration_test](spi_receive_integration_test) |
 | Turn metadata into an MCU product event | [SPI metadata to MCU product path](../../../../docs/paths/spi-mcu-product-path.md) |
 
 ## Expected Feedback

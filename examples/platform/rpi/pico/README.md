@@ -26,7 +26,15 @@ control the module over `I2C0` and receive metadata over `SPI0`.
 
 ## Run
 
-After wiring, build and flash the SPI receive integration test:
+After wiring, choose the mission that matches your goal:
+
+| Mission | Start with |
+| --- | --- |
+| Validate native C++ SPI metadata reads | [spi_receive_integration_test](spi_receive_integration_test) |
+| Smoke-test the SDK from MicroPython | [micropython_imx500_spi_receive](micropython_imx500_spi_receive/README.md) |
+| Parse AI metadata from MicroPython | [micropython_imx500_metadata_parse](micropython_imx500_metadata_parse/README.md) |
+
+For the native C++ SPI receive integration test:
 
 ```sh
 cd examples/platform/rpi/pico/spi_receive_integration_test
@@ -36,7 +44,7 @@ cmake --build build
 
 Flash `build/spi_receive_integration_test.uf2` to Pico.
 
-For the MicroPython version, build a custom RP2 MicroPython firmware with the
+For the MicroPython versions, build a custom RP2 MicroPython firmware with the
 SDK user module, then copy or run the matching `main.py`:
 
 - [micropython_imx500_spi_receive](micropython_imx500_spi_receive/README.md)
