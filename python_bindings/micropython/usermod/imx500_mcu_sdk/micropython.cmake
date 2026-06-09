@@ -37,8 +37,6 @@ elseif(IMX500_MICROPY_BUILD_MODE STREQUAL "full")
         ${IMX500_MCU_SDK_ROOT}
         ${IMX500_MCU_SDK_ROOT}/examples/platform/rpi/pico
         ${CMAKE_CURRENT_BINARY_DIR}/generated
-        ${IMX500_MCU_SDK_ROOT}/imx500_firmware_cpp
-        ${IMX500_MCU_SDK_ROOT}/imx500_firmware_cpp/imx500_firmware
         ${IMX500_MCU_SDK_ROOT}/third_party/flatbuffers/include
     )
 

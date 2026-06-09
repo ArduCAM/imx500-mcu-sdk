@@ -11,13 +11,11 @@
 #include "string.h"
 #include "ArducamIMX500SDK.h"
 #include "peripherals_adapter.h"
-#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_NoID.h"
-#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_network_info.h"
 
-#define NN_FW_DATA              InputTensorOnly_NoID_data
-#define NN_FW_SIZE              InputTensorOnly_NoID_size
-#define NN_NETOWRK_INFO_DATA    InputTensorOnly_network_info_data
-#define NN_NETOWRK_INFO_SIZE    InputTensorOnly_network_info_size
+#define NN_FW_DATA              nullptr
+#define NN_FW_SIZE              0
+#define NN_NETOWRK_INFO_DATA    nullptr
+#define NN_NETOWRK_INFO_SIZE    0
 #define MAX_FRAME_SIZE          (1024 * 10)
 #define BENCHMARK_FRAME_COUNT_PRE_INJECT   30
 #define BENCHMARK_FRAME_COUNT_POST_INJECT  30

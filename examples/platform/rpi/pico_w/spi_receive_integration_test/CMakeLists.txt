@@ -27,7 +27,6 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
-include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_mcu_sdk.cmake)
 
 
@@ -47,7 +46,6 @@ endif()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(spi_receive_integration_test
-        ${IMX500_FIRMWARE_CPP_FILES}
         ${IMX500_MCU_SDK_SRC_FILES}
         ${CMAKE_CURRENT_LIST_DIR}/../peripherals_adapter.c
         main.cpp
@@ -57,8 +55,6 @@ target_include_directories(spi_receive_integration_test PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/../
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/imx500_firmware
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 

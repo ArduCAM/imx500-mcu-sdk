@@ -10,7 +10,6 @@ set(priv_include_dirs
 
 if(AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK)
     get_filename_component(IMX500_SDK_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../../.." ABSOLUTE)
-    set(IMX500_FIRMWARE_CPP_DIR "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware")
     set(IMX500_FILE2CPP_SCRIPT "${IMX500_SDK_DIR}/tools/file2cpp.py")
     if(DEFINED INTEGRATION_TEST_BOOT_MODE AND NOT DEFINED AI_CAMERA_MULTITASK_BOOT_MODE)
         set(AI_CAMERA_MULTITASK_BOOT_MODE "${INTEGRATION_TEST_BOOT_MODE}" CACHE STRING
@@ -91,8 +90,6 @@ if(AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK)
         "peripherals_adapter.c"
         "${IMX500_SDK_DIR}/ArducamIMX500SDK.cc"
         "${IMX500_SDK_DIR}/ai_driver.c"
-        "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware/firmware.cpp"
-        "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware/loader.cpp"
         ${IMX500_GENERATED_ASSET_SRCS})
 
     set(ai_camera_multitask_srcs
@@ -106,8 +103,6 @@ if(AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK)
     list(APPEND priv_include_dirs
         "${IMX500_SDK_DIR}"
         "${CMAKE_CURRENT_BINARY_DIR}"
-        "${IMX500_SDK_DIR}/imx500_firmware_cpp"
-        "${IMX500_SDK_DIR}/imx500_firmware_cpp/imx500_firmware"
         "${IMX500_SDK_DIR}/third_party/flatbuffers/include")
 endif()
 

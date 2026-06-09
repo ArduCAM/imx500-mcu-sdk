@@ -22,7 +22,6 @@ endif()
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 
 include(${CMAKE_CURRENT_LIST_DIR}/../integration_test/pico_sdk_import.cmake)
-include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_mcu_sdk.cmake)
 
 project(imx500_production_test C CXX ASM)
@@ -43,7 +42,6 @@ if(DEFINED PRODUCTION_TEST_CONTINUOUS_LED_MODE AND PRODUCTION_TEST_BOOT_TRIGGER_
 endif()
 
 add_executable(imx500_production_test
-        ${IMX500_FIRMWARE_CPP_FILES}
         ${IMX500_MCU_SDK_SRC_FILES}
         ${CMAKE_CURRENT_LIST_DIR}/../peripherals_adapter.c
         main.cpp
@@ -54,8 +52,6 @@ target_include_directories(imx500_production_test PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../
     ${CMAKE_CURRENT_LIST_DIR}/../integration_test
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/imx500_firmware
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 

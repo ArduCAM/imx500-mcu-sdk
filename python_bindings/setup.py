@@ -40,8 +40,6 @@ ext_modules = [
         ],
         include_dirs=[
             str(SDK_ROOT),
-            str(SDK_ROOT / "imx500_firmware_cpp"),
-            str(SDK_ROOT / "imx500_firmware_cpp" / "imx500_firmware"),
             str(SDK_ROOT / "third_party" / "flatbuffers" / "include"),
             str(GENERATED_INCLUDE_DIR),
         ],

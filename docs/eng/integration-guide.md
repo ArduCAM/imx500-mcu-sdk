@@ -50,8 +50,6 @@ Path differences compared with Raspberry Pi AI Camera:
 | `ArducamIMX500SDK.h/.cc` | Public SDK API and core implementation |
 | `ai_driver.h/.c` | Low-level driver abstraction and registration |
 | `imx500_mcu_sdk.cmake` | Collects SDK source files and compile-time configuration |
-| `imx500_firmware.cmake` | Collects generated firmware C++ sources |
-| `imx500_firmware_cpp/imx500_firmware/` | Generated firmware/network-info blobs |
 | `examples/` | Platform reference projects |
 | `third_party/flatbuffers/` | FlatBuffers dependency used by network-info parsing |
 
@@ -76,17 +74,15 @@ initialized.
 
 ## CMake Integration
 
-Include the SDK and firmware source collections in your platform CMake project:
+Include the SDK source collection in your platform CMake project:
 
 ```cmake
 include(path/to/imx500_mcu_sdk.cmake)
-include(path/to/imx500_firmware.cmake)
 ```
 
 Add these source groups to your target:
 
 - `${IMX500_MCU_SDK_SRC_FILES}`
-- `${IMX500_FIRMWARE_CPP_FILES}`
 
 Apply the SDK compile-time configuration to your target:
 
@@ -97,7 +93,6 @@ imx500_mcu_sdk_apply_config(your_target)
 Typical include directories:
 
 - SDK root
-- `imx500_firmware_cpp/`
 - `third_party/flatbuffers/include`
 
 ## Select MIPI Output Resolution

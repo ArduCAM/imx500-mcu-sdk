@@ -44,9 +44,9 @@ function(imx500_mcu_sdk_apply_config target)
     )
 endfunction()
 
-file(GLOB IMX500_MCU_SDK_SRC_FILES 
-    ${CMAKE_CURRENT_LIST_DIR}/*.c
-    ${CMAKE_CURRENT_LIST_DIR}/*.cc
+set(IMX500_MCU_SDK_SRC_FILES
+    ${CMAKE_CURRENT_LIST_DIR}/ArducamIMX500SDK.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ai_driver.c
 )
 
 configure_file(

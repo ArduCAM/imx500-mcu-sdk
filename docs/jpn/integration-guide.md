@@ -51,8 +51,6 @@ Raspberry Pi AI Camera とのパスの違い:
 | `ArducamIMX500SDK.h/.cc` | Public SDK API and core implementation |
 | `ai_driver.h/.c` | Low-level driver abstraction and registration |
 | `imx500_mcu_sdk.cmake` | Collects SDK source files and compile-time configuration |
-| `imx500_firmware.cmake` | Collects generated firmware C++ sources |
-| `imx500_firmware_cpp/imx500_firmware/` | Generated firmware/network-info blobs |
 | `examples/` | Platform reference projects |
 | `third_party/flatbuffers/` | FlatBuffers dependency used by network-info parsing |
 
@@ -81,13 +79,11 @@ git submodule update --init --recursive
 
 ```cmake
 include(path/to/imx500_mcu_sdk.cmake)
-include(path/to/imx500_firmware.cmake)
 ```
 
 次の source group を target に追加します。
 
 - `${IMX500_MCU_SDK_SRC_FILES}`
-- `${IMX500_FIRMWARE_CPP_FILES}`
 
 SDK のコンパイル時設定を target に適用します。
 
@@ -98,7 +94,6 @@ imx500_mcu_sdk_apply_config(your_target)
 典型的な include directory:
 
 - SDK root
-- `imx500_firmware_cpp/`
 - `third_party/flatbuffers/include`
 
 ## MIPI 出力解像度の選択

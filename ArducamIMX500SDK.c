@@ -4,8 +4,6 @@
 #include "apParams_verifier.h"
 #include "stdio.h"
 #include "string.h"
-#include "loader.h"
-#include "firmware.h"
 #include "version.h"
 
 #ifndef IMX500_MCU_SDK_SENSOR_MIPI_COMMAND

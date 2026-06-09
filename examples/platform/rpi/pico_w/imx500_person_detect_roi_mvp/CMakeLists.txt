@@ -160,8 +160,6 @@ target_include_directories(imx500_person_detect_roi_mvp PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../
     ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../imx500_firmware_cpp/imx500_firmware
     ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/flatbuffers/include
 )
 

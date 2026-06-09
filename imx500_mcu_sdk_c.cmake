@@ -61,8 +61,6 @@ set(IMX500_MCU_SDK_C_INCLUDE_DIRS
     ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_LIST_DIR}/apParams_c
     ${CMAKE_CURRENT_LIST_DIR}/tools/third_party/flatcc/include
-    ${CMAKE_CURRENT_LIST_DIR}/imx500_firmware_c
-    ${CMAKE_CURRENT_LIST_DIR}/imx500_firmware_c/imx500_firmware
 )
 
 include_directories(

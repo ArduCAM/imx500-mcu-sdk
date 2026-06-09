@@ -140,8 +140,8 @@ Then follow the board wiring and project-specific notes in
 
 Most ports follow the same sequence:
 
-1. Add `imx500_mcu_sdk.cmake` and `imx500_firmware.cmake` to your CMake project.
-2. Add `${IMX500_MCU_SDK_SRC_FILES}` and `${IMX500_FIRMWARE_CPP_FILES}` to your target.
+1. Add `imx500_mcu_sdk.cmake` to your CMake project.
+2. Add `${IMX500_MCU_SDK_SRC_FILES}` to your target.
 3. Apply `imx500_mcu_sdk_apply_config(your_target)`.
 4. Implement platform `I2C`, `SPI`, delay, and optional log callbacks.
 5. Register callbacks with `register_i2c_driver(...)`, `register_spi_driver(...)`, and optionally `register_printf(...)`.
@@ -174,8 +174,6 @@ Example events include `person_count = 3`, `zone_occupied = true`,
 | `ArducamIMX500SDK.h/.cc` | Public SDK API and core implementation |
 | `ai_driver.h/.c` | Platform callback registration interfaces |
 | `imx500_mcu_sdk.cmake` | SDK source collection and compile-time configuration |
-| `imx500_firmware.cmake` | Generated firmware and network-info source collection |
-| `imx500_firmware_cpp/imx500_firmware/` | Generated firmware and network-info blobs |
 | `python_bindings/` | Optional Python host tools for quick USB bridge validation |
 | `docs/` | API landing page and integration documentation |
 | `examples/` | Platform reference projects |

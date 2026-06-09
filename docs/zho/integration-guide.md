@@ -48,8 +48,6 @@
 | `ArducamIMX500SDK.h/.cc` | Public SDK API and core implementation |
 | `ai_driver.h/.c` | Low-level driver abstraction and registration |
 | `imx500_mcu_sdk.cmake` | Collects SDK source files and compile-time configuration |
-| `imx500_firmware.cmake` | Collects generated firmware C++ sources |
-| `imx500_firmware_cpp/imx500_firmware/` | Generated firmware/network-info blobs |
 | `examples/` | Platform reference projects |
 | `third_party/flatbuffers/` | FlatBuffers dependency used by network-info parsing |
 
@@ -76,13 +74,11 @@ git submodule update --init --recursive
 
 ```cmake
 include(path/to/imx500_mcu_sdk.cmake)
-include(path/to/imx500_firmware.cmake)
 ```
 
 将以下 source group 添加到你的 target：
 
 - `${IMX500_MCU_SDK_SRC_FILES}`
-- `${IMX500_FIRMWARE_CPP_FILES}`
 
 对 target 应用 SDK 的编译期配置：
 
@@ -93,7 +89,6 @@ imx500_mcu_sdk_apply_config(your_target)
 典型 include directory 包括：
 
 - SDK root
-- `imx500_firmware_cpp/`
 - `third_party/flatbuffers/include`
 
 ## 选择 MIPI 输出分辨率
