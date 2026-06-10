@@ -20,6 +20,47 @@
 
 static uint32_t s_i2c_recovered_log_count = 0;
 
+static void configure_spi_output_pin(uint pin) {
+    gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_12MA);
+    gpio_set_slew_rate(pin, GPIO_SLEW_RATE_FAST);
+}
+
+static void imx500_i2c_master_init(uint32_t baudrate) {
+    i2c_init(I2C_HW_ADDR, baudrate);
+
+    gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_SDA_PIN);
+    gpio_pull_up(I2C_SCL_PIN);
+}
+
+static void imx500_spi_master_init(uint32_t baudrate) {
+    spi_init(SPI_HW_ADDR, baudrate);
+    gpio_set_function(SPI_RX_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(SPI_SCK_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(SPI_TX_PIN, GPIO_FUNC_SPI);
+
+    gpio_init(SPI_CSN_PIN);
+    gpio_set_dir(SPI_CSN_PIN, GPIO_OUT);
+    gpio_put(SPI_CSN_PIN, 1);
+
+    configure_spi_output_pin(SPI_SCK_PIN);
+    configure_spi_output_pin(SPI_TX_PIN);
+    configure_spi_output_pin(SPI_CSN_PIN);
+
+    spi_set_format(SPI_HW_ADDR, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
+}
+
+bool imx500_micropython_platform_hardware_init(uint32_t i2c_baudrate, uint32_t spi_baudrate) {
+    imx500_i2c_master_init(i2c_baudrate);
+    imx500_spi_master_init(spi_baudrate);
+    return bind_peripherals_api();
+}
+
+void imx500_micropython_platform_sleep_ms(uint32_t ms) {
+    sleep_ms(ms);
+}
+
 static uint16_t i2c_reg_value(const uint8_t *reg, uint8_t reg_num)
 {
     uint16_t value = 0;

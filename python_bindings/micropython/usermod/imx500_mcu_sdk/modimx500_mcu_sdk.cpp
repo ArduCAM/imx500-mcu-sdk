@@ -9,62 +9,28 @@ extern "C" {
 #include "py/mperrno.h"
 }
 
-#include "pico/stdlib.h"
-#include "hardware/i2c.h"
-#include "hardware/spi.h"
-
 #include "ArducamIMX500SDK.h"
 #include "ai_driver.h"
+#include "imx500_micropython_platform.h"
 #include "peripherals_adapter.h"
-#include "g_config.h"
 
 static bool s_hardware_initialized = false;
 static uint32_t s_i2c_baudrate = 100000;
 static uint32_t s_spi_baudrate = 5000000;
 static const char *s_last_driver_error = "";
 
-static void configure_spi_output_pin(uint pin) {
-    gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_12MA);
-    gpio_set_slew_rate(pin, GPIO_SLEW_RATE_FAST);
-}
-
-static void imx500_i2c_master_init(uint32_t baudrate) {
-    i2c_init(I2C_HW_ADDR, baudrate);
-
-    gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(I2C_SDA_PIN);
-    gpio_pull_up(I2C_SCL_PIN);
-}
-
-static void imx500_spi_master_init(uint32_t baudrate) {
-    spi_init(SPI_HW_ADDR, baudrate);
-    gpio_set_function(SPI_RX_PIN, GPIO_FUNC_SPI);
-    gpio_set_function(SPI_SCK_PIN, GPIO_FUNC_SPI);
-    gpio_set_function(SPI_TX_PIN, GPIO_FUNC_SPI);
-
-    gpio_init(SPI_CSN_PIN);
-    gpio_set_dir(SPI_CSN_PIN, GPIO_OUT);
-    gpio_put(SPI_CSN_PIN, 1);
-
-    configure_spi_output_pin(SPI_SCK_PIN);
-    configure_spi_output_pin(SPI_TX_PIN);
-    configure_spi_output_pin(SPI_CSN_PIN);
-
-    spi_set_format(SPI_HW_ADDR, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
-}
-
 static void imx500_hardware_init(uint32_t i2c_baudrate, uint32_t spi_baudrate, uint32_t settle_ms) {
-    imx500_i2c_master_init(i2c_baudrate);
-    imx500_spi_master_init(spi_baudrate);
-    bind_peripherals_api();
+    if (!imx500_micropython_platform_hardware_init(i2c_baudrate, spi_baudrate)) {
+        s_last_driver_error = "platform hardware init failed";
+        mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("IMX500 platform hardware init failed"));
+    }
 
     s_i2c_baudrate = i2c_baudrate;
     s_spi_baudrate = spi_baudrate;
     s_hardware_initialized = true;
 
     if (settle_ms > 0) {
-        sleep_ms(settle_ms);
+        imx500_micropython_platform_sleep_ms(settle_ms);
     }
 }
 
