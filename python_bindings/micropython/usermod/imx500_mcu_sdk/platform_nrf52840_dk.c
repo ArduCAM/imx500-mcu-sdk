@@ -1,1 +1,1 @@
-#include "../../../../examples/platform/nordic/nrf52840_dk/micropython_imx500_metadata_parse/peripherals_adapter.c"
+#include "../../../../examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive/peripherals_adapter.c"

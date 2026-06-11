@@ -5,7 +5,7 @@ USER_C_MODULES := $(SDK_ROOT)/python_bindings/micropython/usermod
 
 BOARD ?= PCA10056
 MODULE_MODE ?= full
-BUILD_DIR ?= build-$(BOARD)-imx500-nrf52840-$(MODULE_MODE)
+BUILD_DIR ?= build-$(BOARD)-imx500-nrf52840-spi-receive-$(MODULE_MODE)
 FLASHER ?= jlink
 IMX500_MICROPY_PLATFORM ?= nrf52840_dk
 LTO ?= 0

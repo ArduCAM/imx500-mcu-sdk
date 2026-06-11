@@ -9,7 +9,7 @@ CFLAGS_USERMOD += -I$(IMX500_MICROPY_MODULE_DIR)
 CFLAGS_USERMOD += -DMODULE_IMX500_MCU_SDK_ENABLED=1
 else ifeq ($(IMX500_MICROPY_BUILD_MODE),full)
 ifeq ($(IMX500_MICROPY_PLATFORM),nrf52840_dk)
-IMX500_NRF52840_DK_EXAMPLE_DIR := $(IMX500_MCU_SDK_ROOT)/examples/platform/nordic/nrf52840_dk/micropython_imx500_metadata_parse
+IMX500_NRF52840_DK_EXAMPLE_DIR := $(IMX500_MCU_SDK_ROOT)/examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive
 
 SRC_USERMOD_CXX += $(IMX500_MICROPY_MODULE_DIR)/modimx500_mcu_sdk.cpp
 SRC_USERMOD_LIB_CXX += $(IMX500_MICROPY_MODULE_DIR)/sdk_arducam.cpp

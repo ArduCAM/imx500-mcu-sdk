@@ -1,16 +1,16 @@
-# nRF52840 DK MicroPython IMX500 Metadata Parse
+# nRF52840 DK MicroPython IMX500 SPI Receive
 
-这个示例为 Nordic nRF52840 DK（MicroPython board `PCA10056`）构建带
-`imx500_mcu_sdk` user C module 的 MicroPython 固件，并运行一个轻量
-metadata 解析脚本。
+This example builds MicroPython for the Nordic nRF52840 DK board
+(`PCA10056`) with the `imx500_mcu_sdk` user C module, then runs a small SPI
+receive smoke test from `main.py`.
 
-实现思路参考：
+It mirrors the Raspberry Pi Pico example:
 
-- `examples/platform/rpi/pico/micropython_imx500_metadata_parse`
+- `examples/platform/rpi/pico/micropython_imx500_spi_receive`
 
-区别是 nRF52840 DK 只有 256 KB RAM，示例默认使用
-`SPI_METADATA_OUTPUT_TENSOR`，不默认抓 JPEG/input tensor，以降低
-`bytearray` 和解析对象的内存压力。
+The example initializes the IMX500 module over `TWI1`, starts streaming, reads
+metadata over `SPIM3`, and prints the frame byte count plus a short byte preview.
+It does not parse tensors or model metadata.
 
 ## Wiring Details
 
@@ -52,8 +52,12 @@ pins while still avoiding the board UART pins.
 | `4` | `SPI_RX_3v3` | `P1.13` | `SPIM3 MOSI / TX` |
 | `3` | `SPI_TX_3v3` | `P1.14` | `SPIM3 MISO / RX` |
 | `2` | `SPI_CS_3v3` | `P1.12` | `SPI chip select` |
-| `7` | `+3v3` | `3V3` | `3.3 V power` |
+| `7` | `+3v3` | `VDD` | DK VDD, 3.0 V by default from USB |
 | `6` | `DGND` | `GND` | Ground |
+
+Do not connect the camera `+3v3` pad to any `5V` or `VIN 3-5V` pin. If your
+camera setup requires exactly `3.3 V`, power the camera from an external
+regulated `3.3 V` supply and keep grounds common.
 
 ### 3. Why `SPI_TX` and `SPI_RX` Can Be Confusing
 
@@ -81,7 +85,7 @@ P1.15  (SPIM3 SCK)        ->   Pad 5  (SPI_SCK_3v3)
 P1.13  (SPIM3 MOSI / TX)  ->   Pad 4  (SPI_RX_3v3)
 P1.14  (SPIM3 MISO / RX)  <-   Pad 3  (SPI_TX_3v3)
 P1.12  (SPI CS)           ->   Pad 2  (SPI_CS_3v3)
-3V3                       ->   Pad 7  (+3v3)
+VDD                       ->   Pad 7  (+3v3)
 GND                       ->   Pad 6  (DGND)
 ```
 
@@ -101,7 +105,7 @@ Port 1 pins, the code number is `32 + pin`, so `P1.15` is `47`.
 
 These definitions are in:
 
-- `examples/platform/nordic/nrf52840_dk/micropython_imx500_metadata_parse/g_config.h`
+- `examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive/g_config.h`
 
 ## Prerequisites
 
@@ -116,7 +120,7 @@ python3 -m pip install mpremote
 Initialize MicroPython and nrfx submodules:
 
 ```sh
-cd examples/platform/nordic/nrf52840_dk/micropython_imx500_metadata_parse
+cd examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive
 make submodules
 ```
 
@@ -136,7 +140,7 @@ warnings promoted to errors.
 Generated files are under:
 
 ```text
-../../../../../third_party/micropython/ports/nrf/build-PCA10056-imx500-nrf52840-full/
+../../../../../third_party/micropython/ports/nrf/build-PCA10056-imx500-nrf52840-spi-receive-full/
 ```
 
 The main image is:
@@ -179,7 +183,7 @@ make deploy FLASHER=openocd
 
 After flashing, reconnect the board if the USB CDC serial device does not appear.
 
-## Deploy and Run `main.py`
+## Run
 
 Check the MicroPython serial port:
 
@@ -190,6 +194,7 @@ mpremote devs
 Run the example once without copying it:
 
 ```sh
+cd examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive
 mpremote run main.py
 ```
 
@@ -219,17 +224,3 @@ information. Use the model flashing flow in:
 metadata, increase `METADATA_BUFFER_SIZE` carefully and watch `gc.mem_free()` in
 the logs. If the board resets or raises `MemoryError`, reduce the SPI format or
 avoid JPEG/input tensor payloads on nRF52840.
-
-To enable JPEG/input tensor parsing for experiments, change:
-
-```python
-SPI_FORMAT = imx500.SpiDataFormat.METADATA_OUTPUT_TENSOR
-```
-
-to a larger format such as:
-
-```python
-SPI_FORMAT = imx500.SpiDataFormat.METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
-```
-
-Then increase `METADATA_BUFFER_SIZE`.
