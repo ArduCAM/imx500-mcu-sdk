@@ -12,23 +12,96 @@ metadata 解析脚本。
 `SPI_METADATA_OUTPUT_TENSOR`，不默认抓 JPEG/input tensor，以降低
 `bytearray` 和解析对象的内存压力。
 
-## 默认引脚
+## Wiring Details
 
-默认引脚在 `g_config.h` 中配置：
+### 1. Read the Camera Header First
 
-| IMX500 signal | nRF52840 DK pin number | PCA10056 header hint |
-| --- | ---: | --- |
-| I2C SDA | 26 | P0.26 |
-| I2C SCL | 27 | P0.27 |
-| SPI SCK | 47 | P1.15 |
-| SPI MOSI / TX | 45 | P1.13 |
-| SPI MISO / RX | 46 | P1.14 |
-| SPI CSN | 44 | P1.12 |
-| 3V3 | 3V3 | external power rail |
-| GND | GND | common ground |
+![](../../../../pics/B0642_connector.png)
 
-The adapter uses `TWI1` and `SPIM3`, so it avoids the board UART pins and the
-default MicroPython SPI0 pins.
+Based on the hardware image, the camera board exposes an 8-pin header. In the
+image orientation, the pins appear in this order from left to right:
+
+| Camera pad | Signal on camera board |
+| --- | --- |
+| `8` | `I2C SDA` |
+| `7` | `+3v3` |
+| `6` | `DGND` |
+| `5` | `SPI_SCK_3v3` |
+| `4` | `SPI_RX_3v3` |
+| `3` | `SPI_TX_3v3` |
+| `2` | `SPI_CS_3v3` |
+| `1` | `I2C SCL` |
+
+Important:
+
+- This left-to-right order is only valid for the same viewing direction as the image.
+- If you flip the board or view it from the opposite side, the physical order will appear reversed.
+- When wiring by hand, always confirm both the pad number and the signal name on the PCB silk.
+
+### 2. Recommended nRF52840 DK Wiring
+
+Use the following mapping between the camera board and nRF52840 DK. The adapter
+uses `TWI1` and `SPIM3`; the SPI pins match the PCA10056 default SPI0 header
+pins while still avoiding the board UART pins.
+
+| Camera pad | Camera signal | nRF52840 DK connection | nRF52840 DK function |
+| --- | --- | --- | --- |
+| `8` | `I2C SDA` | `P0.26` | `TWI1 SDA` |
+| `1` | `I2C SCL` | `P0.27` | `TWI1 SCL` |
+| `5` | `SPI_SCK_3v3` | `P1.15` | `SPIM3 SCK` |
+| `4` | `SPI_RX_3v3` | `P1.13` | `SPIM3 MOSI / TX` |
+| `3` | `SPI_TX_3v3` | `P1.14` | `SPIM3 MISO / RX` |
+| `2` | `SPI_CS_3v3` | `P1.12` | `SPI chip select` |
+| `7` | `+3v3` | `3V3` | `3.3 V power` |
+| `6` | `DGND` | `GND` | Ground |
+
+### 3. Why `SPI_TX` and `SPI_RX` Can Be Confusing
+
+The camera board silk uses `SPI_TX` and `SPI_RX` from the camera side. The
+nRF52840 DK uses `MOSI/TX` and `MISO/RX` from the MCU side. Because of that:
+
+- nRF52840 `MOSI/TX` must connect to camera `RX`
+- nRF52840 `MISO/RX` must connect to camera `TX`
+
+So the correct SPI cross-connection is:
+
+- `P1.13 (SPIM3 MOSI / TX)` -> `camera pad 4 (SPI_RX_3v3)`
+- `P1.14 (SPIM3 MISO / RX)` <- `camera pad 3 (SPI_TX_3v3)`
+
+If you instead connect `TX -> TX` and `RX -> RX`, SPI communication will not work.
+
+### 4. Wiring Diagram
+
+```text
+nRF52840 DK                    IMX500 camera board
+-----------------------------------------------------------
+P0.26  (TWI1 SDA)         ->   Pad 8  (I2C SDA)
+P0.27  (TWI1 SCL)         ->   Pad 1  (I2C SCL)
+P1.15  (SPIM3 SCK)        ->   Pad 5  (SPI_SCK_3v3)
+P1.13  (SPIM3 MOSI / TX)  ->   Pad 4  (SPI_RX_3v3)
+P1.14  (SPIM3 MISO / RX)  <-   Pad 3  (SPI_TX_3v3)
+P1.12  (SPI CS)           ->   Pad 2  (SPI_CS_3v3)
+3V3                       ->   Pad 7  (+3v3)
+GND                       ->   Pad 6  (DGND)
+```
+
+### 5. Pin Definitions Used by the Current Code
+
+The current nRF52840 DK example uses the nrfx encoded pin numbers below. For
+Port 1 pins, the code number is `32 + pin`, so `P1.15` is `47`.
+
+```c
+#define I2C_SDA_PIN 26
+#define I2C_SCL_PIN 27
+#define SPI_SCK_PIN 47
+#define SPI_TX_PIN 45
+#define SPI_RX_PIN 46
+#define SPI_CSN_PIN 44
+```
+
+These definitions are in:
+
+- `examples/platform/nordic/nrf52840_dk/micropython_imx500_metadata_parse/g_config.h`
 
 ## Prerequisites
 

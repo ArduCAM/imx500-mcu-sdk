@@ -80,8 +80,7 @@ def main():
 
     if not imx500.open(spi_format=SPI_FORMAT, fps=FPS):
         raise RuntimeError("IMX500 open failed")
-    if not imx500.stream_on():
-        raise RuntimeError("IMX500 stream_on failed")
+    imx500.stream_on()
 
     buffer = bytearray(METADATA_BUFFER_SIZE)
     print("metadata buffer:", len(buffer), "free heap:", gc.mem_free())

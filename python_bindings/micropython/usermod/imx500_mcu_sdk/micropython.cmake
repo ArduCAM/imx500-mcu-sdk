@@ -9,6 +9,17 @@ if(DEFINED ENV{IMX500_MICROPY_BUILD_MODE} AND NOT "$ENV{IMX500_MICROPY_BUILD_MOD
 endif()
 set_property(CACHE IMX500_MICROPY_BUILD_MODE PROPERTY STRINGS full minimal)
 
+set(IMX500_MICROPY_PLATFORM "pico" CACHE STRING "Target platform for the IMX500 MicroPython module")
+if(DEFINED ENV{IMX500_MICROPY_PLATFORM} AND NOT "$ENV{IMX500_MICROPY_PLATFORM}" STREQUAL "")
+    set(IMX500_MICROPY_PLATFORM "$ENV{IMX500_MICROPY_PLATFORM}" CACHE STRING "Target platform for the IMX500 MicroPython module" FORCE)
+endif()
+set_property(CACHE IMX500_MICROPY_PLATFORM PROPERTY STRINGS pico)
+
+set(IMX500_MICROPY_CONFIG_DIR "" CACHE PATH "Example directory containing g_config.h")
+if(DEFINED ENV{IMX500_MICROPY_CONFIG_DIR} AND NOT "$ENV{IMX500_MICROPY_CONFIG_DIR}" STREQUAL "")
+    set(IMX500_MICROPY_CONFIG_DIR "$ENV{IMX500_MICROPY_CONFIG_DIR}" CACHE PATH "Example directory containing g_config.h" FORCE)
+endif()
+
 add_library(usermod_imx500_mcu_sdk INTERFACE)
 
 if(IMX500_MICROPY_BUILD_MODE STREQUAL "minimal")
@@ -26,6 +37,19 @@ if(IMX500_MICROPY_BUILD_MODE STREQUAL "minimal")
 elseif(IMX500_MICROPY_BUILD_MODE STREQUAL "full")
     include(${IMX500_MCU_SDK_ROOT}/imx500_mcu_sdk.cmake)
 
+    if(NOT IMX500_MICROPY_PLATFORM STREQUAL "pico")
+        message(FATAL_ERROR "Unsupported IMX500_MICROPY_PLATFORM='${IMX500_MICROPY_PLATFORM}' for CMake builds. Use 'pico'.")
+    endif()
+
+    if(IMX500_MICROPY_CONFIG_DIR STREQUAL "")
+        set(IMX500_MICROPY_CONFIG_DIR
+            ${IMX500_MCU_SDK_ROOT}/examples/platform/rpi/pico/micropython_imx500_metadata_parse
+            CACHE PATH "Example directory containing g_config.h" FORCE)
+    endif()
+    if(NOT EXISTS "${IMX500_MICROPY_CONFIG_DIR}/g_config.h")
+        message(FATAL_ERROR "IMX500_MICROPY_CONFIG_DIR='${IMX500_MICROPY_CONFIG_DIR}' does not contain g_config.h.")
+    endif()
+
     target_sources(usermod_imx500_mcu_sdk INTERFACE
         ${IMX500_MICROPY_MODULE_DIR}/modimx500_mcu_sdk.cpp
         ${IMX500_MCU_SDK_SRC_FILES}
@@ -33,6 +57,7 @@ elseif(IMX500_MICROPY_BUILD_MODE STREQUAL "full")
     )
 
     target_include_directories(usermod_imx500_mcu_sdk INTERFACE
+        ${IMX500_MICROPY_CONFIG_DIR}
         ${IMX500_MICROPY_MODULE_DIR}
         ${IMX500_MCU_SDK_ROOT}
         ${IMX500_MCU_SDK_ROOT}/examples/platform/rpi/pico

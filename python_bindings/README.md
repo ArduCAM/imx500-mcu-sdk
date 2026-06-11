@@ -67,7 +67,7 @@ micropython/usermod/imx500_mcu_sdk
 It exposes the same core SDK function names as the pybind module, including
 `open(...)`, `probe_imx500_module()`, `stream_on()`, `get_metadata_size()`, and
 `read_metadata(buffer)`. On Pico MicroPython, `open(...)` also initializes the
-fixed I2C/SPI pins from `g_config.h` before calling the SDK.
+fixed I2C/SPI pins from the example-local `g_config.h` before calling the SDK.
 
 ## Tools
 
