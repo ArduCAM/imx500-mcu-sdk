@@ -25,6 +25,8 @@
 /* Operation IDs 1 and 2 are retired and must not be reused. */
 #define I2C_PAYLOAD_OP_NN_INFO_TO_MEMORY  3
 #define I2C_PAYLOAD_OP_MODEL_TO_MEMORY    4
+#define I2C_PAYLOAD_OP_MODEL_TO_FLASH     5
+#define I2C_PAYLOAD_OP_NN_INFO_TO_FLASH   6
 
 #define IMX500_COMMAND_GET_ES_VER                                                       (IMX500_COMMAND_BASE | 1)
 #define IMX500_COMMAND_GET_LOADER_FW_VER                                                (IMX500_COMMAND_BASE | 2)

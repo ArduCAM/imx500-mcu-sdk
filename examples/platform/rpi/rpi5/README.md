@@ -50,8 +50,8 @@ in [GPIO Wiring](#gpio-wiring). This provides:
 
 Do not connect any camera signal pin to `5 V`.
 
-The I2C-only payload direct-load test does not use this 8-pin header wiring;
-it talks through the MIPI CSI/FPC connector I2C bus instead.
+The I2C-only payload direct-load and flash test does not use this 8-pin header
+wiring; it talks through the MIPI CSI/FPC connector I2C bus instead.
 
 ## Get Image
 
@@ -202,7 +202,7 @@ Run it on the Raspberry Pi 5:
 sudo ./build/spi_receive_integration_test
 ```
 
-Build the I2C-only payload direct-load test:
+Build the I2C-only payload direct-load and flash test:
 
 ```sh
 cd examples/platform/rpi/rpi5/i2c_payload_flash_test
@@ -225,20 +225,25 @@ cmake -S . -B build -DI2C_PAYLOAD_I2C_DEVICE=/dev/i2c-X
 cmake --build build -j
 ```
 
-Run individual I2C payload direct-load operations:
+Run individual I2C payload direct-load and flash operations:
 
 ```sh
 sudo ./build/i2c_payload_flash_test reset
 sudo ./build/i2c_payload_flash_test model-direct
 sudo ./build/i2c_payload_flash_test nninfo-direct
 sudo ./build/i2c_payload_flash_test all-direct
+sudo ./build/i2c_payload_flash_test model-flash
+sudo ./build/i2c_payload_flash_test nninfo-flash
+sudo ./build/i2c_payload_flash_test all-flash
+sudo ./build/i2c_payload_flash_test flash-load
+sudo ./build/i2c_payload_flash_test flash-cycle
 ```
 
-The default action is `all-direct`. Other useful actions are `status` and
-`reset`. I2C payload no longer writes model or network-info blobs to module
-flash; use the SPI or USB flashing path for persistent model/network-info
-updates. The `model-direct` and `all-direct` actions run the SDK reset-only
-path before sending the model over I2C.
+The default action is `flash-cycle`, which writes the bundled model and
+`network_info` to module flash over PiVariety I2C payload, then requests a
+flash load through the normal `LOAD_MODEL_FROM_FLASH` flow. Other useful
+actions are `status` and `reset`. The `model-direct`, `all-direct`, and flash
+write actions run the SDK reset-only path before sending payload data over I2C.
 
 The default settings live in
 `examples/platform/rpi/rpi5/i2c_payload_flash_test/g_config.h`.

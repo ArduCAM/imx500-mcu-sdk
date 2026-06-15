@@ -16,7 +16,7 @@
 
 static void print_usage(const char *argv0)
 {
-    std::printf("Usage: %s [status|reset|model-direct|nninfo-direct|all-direct]\n",
+    std::printf("Usage: %s [status|reset|model-direct|nninfo-direct|all-direct|model-flash|nninfo-flash|all-flash|flash-load|flash-cycle]\n",
                 argv0);
 }
 
@@ -85,6 +85,10 @@ static const char *payload_op_name(uint32_t op)
         return "NN_INFO_TO_MEMORY";
     case I2C_PAYLOAD_OP_MODEL_TO_MEMORY:
         return "MODEL_TO_MEMORY";
+    case I2C_PAYLOAD_OP_MODEL_TO_FLASH:
+        return "MODEL_TO_FLASH";
+    case I2C_PAYLOAD_OP_NN_INFO_TO_FLASH:
+        return "NN_INFO_TO_FLASH";
     default:
         return "UNKNOWN";
     }
@@ -203,7 +207,7 @@ static void dump_module_snapshot(const char *label)
     std::printf("--------------------\n\n");
 }
 
-static bool reset_module_for_direct_load(const char *reason)
+static bool reset_module_for_payload_transfer(const char *reason)
 {
     std::printf("Reset module through SDK before %s...\n", reason);
     if (!abort_stale_payload_if_needed("module reset")) {
@@ -215,7 +219,7 @@ static bool reset_module_for_direct_load(const char *reason)
         dump_module_snapshot("reset failed");
         return false;
     }
-    if (!abort_stale_payload_if_needed("direct transfer")) {
+    if (!abort_stale_payload_if_needed("payload transfer")) {
         dump_module_snapshot("stale payload abort failed after reset");
         return false;
     }
@@ -231,7 +235,7 @@ static bool run_action(const char *action)
     }
 
     if (std::strcmp(action, "reset") == 0) {
-        return reset_module_for_direct_load("manual reset");
+        return reset_module_for_payload_transfer("manual reset");
     }
 
     if (std::strcmp(action, "nninfo-direct") == 0) {
@@ -252,7 +256,7 @@ static bool run_action(const char *action)
 
     if (std::strcmp(action, "model-direct") == 0) {
         dump_module_snapshot("before model-direct");
-        if (!reset_module_for_direct_load("model-direct")) {
+        if (!reset_module_for_payload_transfer("model-direct")) {
             return false;
         }
         std::printf("Direct-load model to IMX500 over I2C, size=%lu\n",
@@ -269,12 +273,89 @@ static bool run_action(const char *action)
         return run_action("model-direct") && run_action("nninfo-direct");
     }
 
+    if (std::strcmp(action, "model-flash") == 0) {
+        dump_module_snapshot("before model-flash");
+        if (!reset_module_for_payload_transfer("model-flash")) {
+            return false;
+        }
+        std::printf("Write model to module flash over I2C payload, size=%lu\n",
+                    (unsigned long)MODEL_SIZE);
+        bool ok = write_model_to_cam_flash_i2c(MODEL_DATA, MODEL_SIZE);
+        dump_payload_status("[MODEL FLASH I2C]");
+        if (!ok) {
+            dump_module_snapshot("model-flash failed");
+        }
+        return ok;
+    }
+
+    if (std::strcmp(action, "nninfo-flash") == 0) {
+        dump_module_snapshot("before nninfo-flash");
+        if (!reset_module_for_payload_transfer("nninfo-flash")) {
+            return false;
+        }
+        std::printf("Write network_info to module flash over I2C payload, size=%lu\n",
+                    (unsigned long)NNINFO_SIZE);
+        bool ok = write_nn_info_to_cam_flash_i2c(NNINFO_DATA, NNINFO_SIZE);
+        dump_payload_status("[NNINFO FLASH I2C]");
+        if (!ok) {
+            dump_module_snapshot("nninfo-flash failed");
+        }
+        return ok;
+    }
+
+    if (std::strcmp(action, "all-flash") == 0) {
+        dump_module_snapshot("before all-flash");
+        if (!reset_module_for_payload_transfer("all-flash")) {
+            return false;
+        }
+        std::printf("Write model to module flash over I2C payload, size=%lu\n",
+                    (unsigned long)MODEL_SIZE);
+        if (!write_model_to_cam_flash_i2c(MODEL_DATA, MODEL_SIZE)) {
+            dump_module_snapshot("all-flash model write failed");
+            return false;
+        }
+        dump_payload_status("[MODEL FLASH I2C]");
+
+        std::printf("Write network_info to module flash over I2C payload, size=%lu\n",
+                    (unsigned long)NNINFO_SIZE);
+        if (!write_nn_info_to_cam_flash_i2c(NNINFO_DATA, NNINFO_SIZE)) {
+            dump_module_snapshot("all-flash nninfo write failed");
+            return false;
+        }
+        dump_payload_status("[NNINFO FLASH I2C]");
+        return true;
+    }
+
+    if (std::strcmp(action, "flash-load") == 0) {
+        dump_module_snapshot("before flash-load");
+        std::printf("Load model and network_info from module flash...\n");
+        bool ok = open(nullptr,
+                       0,
+                       nullptr,
+                       0,
+                       MIPI_DATA_IMAGE,
+                       SPI_METADATA_OUTPUT_TENSOR,
+                       30);
+        if (ok) {
+            load_nn_info_to_sdk_cache(NNINFO_DATA, NNINFO_SIZE);
+            dump_network_info_list();
+            dump_module_snapshot("after flash-load");
+        } else {
+            dump_module_snapshot("flash-load failed");
+        }
+        return ok;
+    }
+
+    if (std::strcmp(action, "flash-cycle") == 0) {
+        return run_action("all-flash") && run_action("flash-load");
+    }
+
     return false;
 }
 
 int main(int argc, char **argv)
 {
-    const char *action = argc > 1 ? argv[1] : "all-direct";
+    const char *action = argc > 1 ? argv[1] : "flash-cycle";
 
     if (std::strcmp(action, "--help") == 0 || std::strcmp(action, "-h") == 0) {
         print_usage(argv[0]);

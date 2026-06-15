@@ -574,6 +574,22 @@ bool write_nn_info_to_cam_flash(const uint8_t *nn_info, uint32_t nn_info_size);
  * @return `true` if the module accepted the blob.
  */
 bool load_nn_info_to_cam_memory(const uint8_t *nn_info, uint32_t nn_info_size);
+/**
+ * @brief Stream a model blob to module flash over PiVariety I2C payload.
+ * @param model Pointer to the model payload.
+ * @param model_size Model size in bytes.
+ * @return `true` if the transfer and module-side validation succeeded.
+ */
+bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size);
+
+/**
+ * @brief Stream a network-info blob to module flash over PiVariety I2C payload.
+ * @param nn_info Pointer to the network-info payload.
+ * @param nn_info_size Network-info size in bytes.
+ * @return `true` if the transfer and module-side validation succeeded.
+ */
+bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
+
 bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
 bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size);
 

@@ -3303,6 +3303,22 @@ bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_siz
                                  "[I2C CAM MEMORY NN_INFO]");
 }
 
+bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size) {
+    return run_i2c_blob_transfer(I2C_PAYLOAD_OP_MODEL_TO_FLASH,
+                                 model,
+                                 model_size,
+                                 0,
+                                 "[I2C CAM FLASH MODEL]");
+}
+
+bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_size) {
+    return run_i2c_blob_transfer(I2C_PAYLOAD_OP_NN_INFO_TO_FLASH,
+                                 nn_info,
+                                 nn_info_size,
+                                 0,
+                                 "[I2C CAM FLASH NN_INFO]");
+}
+
 bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size) {
     if (!model || model_size == 0u) {
         printf("[I2C CAM MEMORY MODEL] invalid model input\n");
