@@ -112,6 +112,40 @@ static bool dump_payload_status(const char *label)
     return true;
 }
 
+static bool payload_status_is_terminal(uint32_t status)
+{
+    return status == SPI_FLASH_OP_IDLE ||
+           status == SPI_FLASH_OP_SUCCESS ||
+           status == SPI_FLASH_OP_FAILED;
+}
+
+static bool abort_stale_payload_if_needed(const char *stage)
+{
+    spi_flash_status_t status = {};
+    if (!get_spi_flash_status(&status)) {
+        std::printf("read payload status failed before stale-op cleanup (%s)\n",
+                    stage);
+        return false;
+    }
+    if (payload_status_is_terminal(status.status)) {
+        return true;
+    }
+
+    std::printf("Abort stale I2C payload before %s: status=%lu(%s) result=%lu(%s) bytes=%lu/%lu\n",
+                stage,
+                (unsigned long)status.status,
+                payload_status_name(status.status),
+                (unsigned long)status.result,
+                payload_result_name(status.result),
+                (unsigned long)status.bytes_done,
+                (unsigned long)status.bytes_total);
+    if (!abort_i2c_payload_operation()) {
+        std::printf("abort stale I2C payload failed before %s\n", stage);
+        return false;
+    }
+    return true;
+}
+
 static bool read_reg(uint16_t reg, uint32_t *value, const char *name = nullptr)
 {
     int ret = pivariety_i2c_bridge_read(reg, value, 4);
@@ -215,9 +249,17 @@ static bool request_load_flash(void)
 static bool reset_module_for_hotload(const char *reason)
 {
     std::printf("Reset module through SDK before %s...\n", reason);
+    if (!abort_stale_payload_if_needed("module reset")) {
+        dump_module_snapshot("stale payload abort failed before reset");
+        return false;
+    }
     if (!reset_imx500_module()) {
         std::printf("SDK reset failed before %s\n", reason);
         dump_module_snapshot("reset failed");
+        return false;
+    }
+    if (!abort_stale_payload_if_needed("hotload transfer")) {
+        dump_module_snapshot("stale payload abort failed after reset");
         return false;
     }
     dump_module_snapshot("after reset");

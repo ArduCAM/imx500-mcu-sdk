@@ -546,6 +546,12 @@ void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header
 bool get_spi_flash_status(spi_flash_status_t *status);
 
 /**
+ * @brief Abort any active I2C payload import session and wait until it returns to idle.
+ * @return `true` if the module acknowledged the abort and the payload state is idle.
+ */
+bool abort_i2c_payload_operation(void);
+
+/**
  * @brief Stream a model blob to module flash over SPI.
  * @param model Pointer to the model payload.
  * @param model_size Model size in bytes.

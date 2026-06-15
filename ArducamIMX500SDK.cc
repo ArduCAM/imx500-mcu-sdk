@@ -2535,6 +2535,76 @@ static bool wait_for_spi_flash_terminal(uint32_t timeout_ms,
     return false;
 }
 
+static bool wait_for_i2c_payload_idle(uint32_t timeout_ms,
+                                      const char *label,
+                                      spi_flash_status_t *status_out) {
+    spi_flash_status_t status = {};
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        uint32_t op = 0xFFFFFFFFu;
+        bool have_status = get_spi_flash_status(&status);
+        bool have_op = sdk_i2c_read_reg(I2C_PAYLOAD_OP_REG, &op);
+        if (have_status && status.status == SPI_FLASH_OP_IDLE &&
+            (!have_op || op == I2C_PAYLOAD_OP_ABORT)) {
+            if (status_out) {
+                *status_out = status;
+            }
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    if (status_out) {
+        *status_out = status;
+    }
+    printf("%s wait i2c payload idle timeout: status=%u(%s) result=%u(%s) bytes=%u/%u\n",
+           label,
+           (unsigned)status.status,
+           spi_flash_status_name(status.status),
+           (unsigned)status.result,
+           spi_flash_result_name(status.result),
+           (unsigned)status.bytes_done,
+           (unsigned)status.bytes_total);
+    return false;
+}
+
+static bool abort_i2c_payload_operation_with_label(const char *label,
+                                                   uint32_t timeout_ms,
+                                                   spi_flash_status_t *status_out) {
+    if (!g_i2c_driver.read || !g_i2c_driver.write) {
+        printf("%s abort i2c payload failed: missing i2c driver\n", label);
+        return false;
+    }
+    printf("%s abort stale i2c payload operation\n", label);
+    if (!sdk_i2c_write_reg(I2C_PAYLOAD_OP_REG, I2C_PAYLOAD_OP_ABORT)) {
+        printf("%s abort i2c payload request failed\n", label);
+        return false;
+    }
+    if (!wait_for_i2c_payload_idle(timeout_ms, label, status_out)) {
+        return false;
+    }
+    if (status_out) {
+        printf("%s i2c payload abort done: status=%u(%s) result=%u(%s) bytes=%u/%u\n",
+               label,
+               (unsigned)status_out->status,
+               spi_flash_status_name(status_out->status),
+               (unsigned)status_out->result,
+               spi_flash_result_name(status_out->result),
+               (unsigned)status_out->bytes_done,
+               (unsigned)status_out->bytes_total);
+    }
+    return true;
+}
+
+bool abort_i2c_payload_operation(void) {
+    spi_flash_status_t status = {};
+    return abort_i2c_payload_operation_with_label("[I2C PAYLOAD]",
+                                                 SPI_FLASH_WAIT_IDLE_TIMEOUT_MS,
+                                                 &status);
+}
+
 static bool wait_for_spi_flash_receiver(uint32_t bytes_done,
                                         uint32_t bytes_total,
                                         uint32_t timeout_ms,
@@ -2966,7 +3036,11 @@ static bool run_i2c_blob_transfer(uint32_t operation,
                    (unsigned)flash_status.result,
                    (unsigned)flash_status.bytes_done,
                    (unsigned)flash_status.bytes_total);
-            return false;
+            if (!abort_i2c_payload_operation_with_label(label,
+                                                        SPI_FLASH_WAIT_IDLE_TIMEOUT_MS,
+                                                        &flash_status)) {
+                return false;
+            }
         }
     }
 
