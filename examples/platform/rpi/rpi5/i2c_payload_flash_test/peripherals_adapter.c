@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "ai_driver.h"
+#include "ai_regs.h"
 #include "common_regs.h"
 #include "g_config.h"
 
@@ -80,6 +81,11 @@ static bool i2c_is_payload_status_reg(uint16_t reg)
            reg == 0x0918u;
 }
 
+static bool i2c_is_payload_flow_reg(uint16_t reg)
+{
+    return i2c_is_payload_status_reg(reg) || reg == I2C_PAYLOAD_DATA_REG;
+}
+
 static void i2c_note_xfer_success(uint16_t reg)
 {
     (void)reg;
@@ -87,7 +93,7 @@ static void i2c_note_xfer_success(uint16_t reg)
 
 static bool i2c_should_log_xfer_failure(uint16_t reg)
 {
-    if (!i2c_is_payload_status_reg(reg)) {
+    if (!i2c_is_payload_flow_reg(reg)) {
         return true;
     }
     ++s_i2c_status_poll_failure_log_count;
@@ -279,12 +285,14 @@ static int32_t i2c_w_raw_blocking(uint8_t addr,
         rpi5_sleep_us(I2C_XFER_RETRY_DELAY_US * (attempt + 1u));
     }
 
-    printf("[CSI-I2C] write-block failed dev=%s addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
-           s_i2c_device_path,
-           addr,
-           reg,
-           (unsigned long)nbytes,
-           strerror(last_errno));
+    if (i2c_should_log_xfer_failure(reg)) {
+        printf("[CSI-I2C] write-block failed dev=%s addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
+               s_i2c_device_path,
+               addr,
+               reg,
+               (unsigned long)nbytes,
+               strerror(last_errno));
+    }
     free(msg);
     return -1;
 }
