@@ -71,7 +71,7 @@ static const uint32_t I2C_PAYLOAD_FLASH_DRAIN_TIMEOUT_MS = 30000;
 static const uint32_t I2C_PAYLOAD_FLASH_FINALIZE_TIMEOUT_MS = 180000;
 static const uint32_t I2C_PAYLOAD_FLASH_CHUNK_GAP_MS = 20;
 static const uint32_t I2C_PAYLOAD_FLASH_SECTOR_LEN = 4096;
-static const uint32_t I2C_PAYLOAD_FLASH_SECTOR_SETTLE_MS = 150;
+static const uint32_t I2C_PAYLOAD_FLASH_SECTOR_SETTLE_MS = 500;
 static const uint32_t SPI_FORWARD_MODE_SETTLE_MS = 20;
 static const uint32_t DWP_AP_VC_HSIZE = 0x0FD8u;
 static const uint32_t DWP_AP_VC_VSIZE = 0x0BE0u;
@@ -2959,6 +2959,24 @@ static bool wait_for_i2c_payload_drained(uint32_t timeout_ms,
     return false;
 }
 
+static bool wait_for_i2c_payload_accepted_zero(uint32_t timeout_ms,
+                                               const char *label) {
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+        uint32_t accepted = 0xFFFFFFFFu;
+        if (sdk_i2c_read_reg(I2C_PAYLOAD_ACCEPTED_REG, &accepted) &&
+            accepted == 0u) {
+            return true;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+    }
+    printf("%s i2c payload accepted-zero timeout\n", label);
+    return false;
+}
+
 static int sdk_i2c_write_payload_chunk(const uint8_t *buf, uint32_t len) {
     if (!buf || len == 0u) {
         return -1;
@@ -2982,6 +3000,28 @@ static int sdk_i2c_write_payload_chunk(const uint8_t *buf, uint32_t len) {
                                  value,
                                  I2C_PAYLOAD_FALLBACK_CHUNK_LEN);
     return ret < 0 ? ret : (int)len;
+}
+
+static bool sdk_i2c_write_payload_chunk_retry(const uint8_t *buf,
+                                              uint32_t len,
+                                              uint32_t timeout_ms) {
+    uint32_t elapsed_ms = 0;
+    while (elapsed_ms <= timeout_ms) {
+        if (sdk_i2c_write_payload_chunk(buf, len) >= 0) {
+            return true;
+        }
+        if (elapsed_ms == timeout_ms) {
+            break;
+        }
+        if (g_i2c_driver.slp_ms) {
+            g_i2c_driver.slp_ms(SPI_FLASH_POLL_INTERVAL_MS);
+        }
+        elapsed_ms += SPI_FLASH_POLL_INTERVAL_MS;
+        if (elapsed_ms > timeout_ms) {
+            elapsed_ms = timeout_ms;
+        }
+    }
+    return false;
 }
 
 static void fill_i2c_stream_chunk(uint8_t *dst,
@@ -3130,7 +3170,11 @@ static bool run_i2c_blob_transfer(uint32_t operation,
                               payload,
                               payload_size);
 
-        if (sdk_i2c_write_payload_chunk(send_buf, chunk) < 0) {
+        if (!sdk_i2c_write_payload_chunk_retry(send_buf,
+                                               chunk,
+                                               writes_flash
+                                                   ? I2C_PAYLOAD_FLASH_DRAIN_TIMEOUT_MS
+                                                   : 0u)) {
             printf("%s send i2c payload failed stream_offset=%u len=%u\n",
                    label,
                    (unsigned)stream_sent,
@@ -3143,11 +3187,15 @@ static bool run_i2c_blob_transfer(uint32_t operation,
                                     ? I2C_PAYLOAD_FLASH_SECTOR_SETTLE_MS
                                     : I2C_PAYLOAD_FLASH_CHUNK_GAP_MS);
         }
-        if (!wait_for_i2c_payload_drained(writes_flash
-                                              ? I2C_PAYLOAD_FLASH_DRAIN_TIMEOUT_MS
-                                              : I2C_PAYLOAD_DRAIN_TIMEOUT_MS,
-                                          label,
-                                          &flash_status)) {
+        bool drained = writes_flash
+                           ? wait_for_i2c_payload_accepted_zero(
+                                 I2C_PAYLOAD_FLASH_DRAIN_TIMEOUT_MS,
+                                 label)
+                           : wait_for_i2c_payload_drained(
+                                 I2C_PAYLOAD_DRAIN_TIMEOUT_MS,
+                                 label,
+                                 &flash_status);
+        if (!drained) {
             if (flash_status.status == SPI_FLASH_OP_FAILED) {
                 printf("%s i2c payload failed while draining: status=%u(%s) result=%u(%s) bytes=%u/%u\n",
                        label,
@@ -3167,7 +3215,12 @@ static bool run_i2c_blob_transfer(uint32_t operation,
         uint32_t payload_sent = payload_after;
 
         if (payload_sent == 0u && stream_sent >= sizeof(SpiBlobWireHeader)) {
-            if (!wait_for_spi_flash_status(SPI_FLASH_OP_RECEIVING,
+            if (writes_flash) {
+                flash_status.status = SPI_FLASH_OP_RECEIVING;
+                flash_status.result = SPI_FLASH_RESULT_NONE;
+                flash_status.bytes_done = 0;
+                flash_status.bytes_total = payload_size;
+            } else if (!wait_for_spi_flash_status(SPI_FLASH_OP_RECEIVING,
                                            SPI_FLASH_WAIT_IDLE_TIMEOUT_MS,
                                            &flash_status)) {
                 printf("%s wait payload receiver after header timeout, status=%u result=%u\n",
@@ -3178,40 +3231,46 @@ static bool run_i2c_blob_transfer(uint32_t operation,
                 return false;
             }
         } else if (payload_sent > 0u) {
-            uint32_t chunk_timeout_ms =
-                SPI_FLASH_TRANSFER_BASE_TIMEOUT_MS +
-                ((chunk + 1023u) / 1024u) * SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS;
-            if (flash_sector_boundary) {
-                chunk_timeout_ms = I2C_PAYLOAD_FLASH_DRAIN_TIMEOUT_MS;
-            }
-            if (!wait_for_spi_flash_progress(payload_sent,
-                                             chunk_timeout_ms,
-                                             &flash_status)) {
-                if (flash_status.status == SPI_FLASH_OP_FAILED) {
-                    printf("%s i2c payload failed at %u/%u: status=%u(%s) result=%u(%s) done=%u total=%u\n",
-                           label,
-                           (unsigned)payload_sent,
-                           (unsigned)payload_size,
-                           (unsigned)flash_status.status,
-                           spi_flash_status_name(flash_status.status),
-                           (unsigned)flash_status.result,
-                           spi_flash_result_name(flash_status.result),
-                           (unsigned)flash_status.bytes_done,
-                           (unsigned)flash_status.bytes_total);
-                } else {
-                    printf("%s wait i2c progress timeout at %u/%u, status=%u(%s) result=%u(%s) done=%u total=%u\n",
-                           label,
-                           (unsigned)payload_sent,
-                           (unsigned)payload_size,
-                           (unsigned)flash_status.status,
-                           spi_flash_status_name(flash_status.status),
-                           (unsigned)flash_status.result,
-                           spi_flash_result_name(flash_status.result),
-                           (unsigned)flash_status.bytes_done,
-                           (unsigned)flash_status.bytes_total);
-                    sdk_i2c_write_reg(I2C_PAYLOAD_OP_REG, I2C_PAYLOAD_OP_ABORT);
+            if (writes_flash) {
+                flash_status.status = payload_sent >= payload_size
+                                          ? SPI_FLASH_OP_PARSING
+                                          : SPI_FLASH_OP_RECEIVING;
+                flash_status.result = SPI_FLASH_RESULT_NONE;
+                flash_status.bytes_done = payload_sent;
+                flash_status.bytes_total = payload_size;
+            } else {
+                uint32_t chunk_timeout_ms =
+                    SPI_FLASH_TRANSFER_BASE_TIMEOUT_MS +
+                    ((chunk + 1023u) / 1024u) * SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS;
+                if (!wait_for_spi_flash_progress(payload_sent,
+                                                 chunk_timeout_ms,
+                                                 &flash_status)) {
+                    if (flash_status.status == SPI_FLASH_OP_FAILED) {
+                        printf("%s i2c payload failed at %u/%u: status=%u(%s) result=%u(%s) done=%u total=%u\n",
+                               label,
+                               (unsigned)payload_sent,
+                               (unsigned)payload_size,
+                               (unsigned)flash_status.status,
+                               spi_flash_status_name(flash_status.status),
+                               (unsigned)flash_status.result,
+                               spi_flash_result_name(flash_status.result),
+                               (unsigned)flash_status.bytes_done,
+                               (unsigned)flash_status.bytes_total);
+                    } else {
+                        printf("%s wait i2c progress timeout at %u/%u, status=%u(%s) result=%u(%s) done=%u total=%u\n",
+                               label,
+                               (unsigned)payload_sent,
+                               (unsigned)payload_size,
+                               (unsigned)flash_status.status,
+                               spi_flash_status_name(flash_status.status),
+                               (unsigned)flash_status.result,
+                               spi_flash_result_name(flash_status.result),
+                               (unsigned)flash_status.bytes_done,
+                               (unsigned)flash_status.bytes_total);
+                        sdk_i2c_write_reg(I2C_PAYLOAD_OP_REG, I2C_PAYLOAD_OP_ABORT);
+                    }
+                    return false;
                 }
-                return false;
             }
         }
 
@@ -3249,6 +3308,9 @@ static bool run_i2c_blob_transfer(uint32_t operation,
     uint32_t timeout_ms = writes_flash
                               ? I2C_PAYLOAD_FLASH_FINALIZE_TIMEOUT_MS
                               : SPI_FLASH_FINALIZE_TIMEOUT_MS;
+    if (writes_flash && g_i2c_driver.slp_ms) {
+        g_i2c_driver.slp_ms(I2C_PAYLOAD_FLASH_SECTOR_SETTLE_MS);
+    }
     if (operation == I2C_PAYLOAD_OP_MODEL_TO_MEMORY) {
         timeout_ms += ((payload_size + 1023u) / 1024u) * SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS;
     }

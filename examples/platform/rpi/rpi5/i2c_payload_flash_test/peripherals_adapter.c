@@ -82,9 +82,7 @@ static bool i2c_is_payload_status_reg(uint16_t reg)
 
 static void i2c_note_xfer_success(uint16_t reg)
 {
-    if (i2c_is_payload_status_reg(reg)) {
-        s_i2c_status_poll_failure_log_count = 0;
-    }
+    (void)reg;
 }
 
 static bool i2c_should_log_xfer_failure(uint16_t reg)
@@ -93,8 +91,8 @@ static bool i2c_should_log_xfer_failure(uint16_t reg)
         return true;
     }
     ++s_i2c_status_poll_failure_log_count;
-    return s_i2c_status_poll_failure_log_count <= 8u ||
-           (s_i2c_status_poll_failure_log_count % 32u) == 0u;
+    return s_i2c_status_poll_failure_log_count <= 1u ||
+           (s_i2c_status_poll_failure_log_count % 128u) == 0u;
 }
 
 static int32_t i2c_w_blocking(uint8_t addr,
