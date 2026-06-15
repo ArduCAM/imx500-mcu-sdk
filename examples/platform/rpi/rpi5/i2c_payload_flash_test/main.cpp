@@ -16,7 +16,7 @@
 
 static void print_usage(const char *argv0)
 {
-    std::printf("Usage: %s [status|reset|model-flash|nninfo-flash|model-hotload|nninfo-hotload|all-flash|all-hotload|all|load-flash]\n",
+    std::printf("Usage: %s [status|reset|model-flash|nninfo-flash|model-direct|nninfo-direct|all-flash|all-direct|all|load-flash]\n",
                 argv0);
 }
 
@@ -246,7 +246,7 @@ static bool request_load_flash(void)
     return true;
 }
 
-static bool reset_module_for_hotload(const char *reason)
+static bool reset_module_for_direct_load(const char *reason)
 {
     std::printf("Reset module through SDK before %s...\n", reason);
     if (!abort_stale_payload_if_needed("module reset")) {
@@ -258,7 +258,7 @@ static bool reset_module_for_hotload(const char *reason)
         dump_module_snapshot("reset failed");
         return false;
     }
-    if (!abort_stale_payload_if_needed("hotload transfer")) {
+    if (!abort_stale_payload_if_needed("direct transfer")) {
         dump_module_snapshot("stale payload abort failed after reset");
         return false;
     }
@@ -274,7 +274,7 @@ static bool run_action(const char *action)
     }
 
     if (std::strcmp(action, "reset") == 0) {
-        return reset_module_for_hotload("manual reset");
+        return reset_module_for_direct_load("manual reset");
     }
 
     if (std::strcmp(action, "model-flash") == 0) {
@@ -302,33 +302,33 @@ static bool run_action(const char *action)
         return ok;
     }
 
-    if (std::strcmp(action, "nninfo-hotload") == 0) {
-        dump_module_snapshot("before nninfo-hotload");
-        std::printf("Hotload nninfo to module memory over I2C, size=%lu\n",
+    if (std::strcmp(action, "nninfo-direct") == 0) {
+        dump_module_snapshot("before nninfo-direct");
+        std::printf("Direct-load nninfo to module memory over I2C, size=%lu\n",
                     (unsigned long)NNINFO_SIZE);
         bool ok = load_nn_info_to_cam_memory_i2c(NNINFO_DATA,
                                                  NNINFO_SIZE);
-        dump_payload_status("[NNINFO HOTLOAD I2C]");
+        dump_payload_status("[NNINFO DIRECT I2C]");
         if (ok) {
             load_nn_info_to_sdk_cache(NNINFO_DATA, NNINFO_SIZE);
             dump_network_info_list();
         } else {
-            dump_module_snapshot("nninfo-hotload failed");
+            dump_module_snapshot("nninfo-direct failed");
         }
         return ok;
     }
 
-    if (std::strcmp(action, "model-hotload") == 0) {
-        dump_module_snapshot("before model-hotload");
-        if (!reset_module_for_hotload("model-hotload")) {
+    if (std::strcmp(action, "model-direct") == 0) {
+        dump_module_snapshot("before model-direct");
+        if (!reset_module_for_direct_load("model-direct")) {
             return false;
         }
-        std::printf("Hotload model directly to IMX500 over I2C, size=%lu\n",
+        std::printf("Direct-load model to IMX500 over I2C, size=%lu\n",
                     (unsigned long)MODEL_SIZE);
         bool ok = load_model_to_cam_memory_i2c(MODEL_DATA, MODEL_SIZE);
-        dump_payload_status("[MODEL HOTLOAD I2C]");
+        dump_payload_status("[MODEL DIRECT I2C]");
         if (!ok) {
-            dump_module_snapshot("model-hotload failed");
+            dump_module_snapshot("model-direct failed");
         }
         return ok;
     }
@@ -337,15 +337,15 @@ static bool run_action(const char *action)
         return run_action("model-flash") && run_action("nninfo-flash");
     }
 
-    if (std::strcmp(action, "all-hotload") == 0) {
-        return run_action("model-hotload") && run_action("nninfo-hotload");
+    if (std::strcmp(action, "all-direct") == 0) {
+        return run_action("model-direct") && run_action("nninfo-direct");
     }
 
     if (std::strcmp(action, "all") == 0) {
         return run_action("model-flash") &&
                run_action("nninfo-flash") &&
-               run_action("model-hotload") &&
-               run_action("nninfo-hotload");
+               run_action("model-direct") &&
+               run_action("nninfo-direct");
     }
 
     if (std::strcmp(action, "load-flash") == 0) {

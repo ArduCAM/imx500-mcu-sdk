@@ -50,7 +50,7 @@ in [GPIO Wiring](#gpio-wiring). This provides:
 
 Do not connect any camera signal pin to `5 V`.
 
-The I2C-only payload flash/hotload test does not use this 8-pin header wiring;
+The I2C-only payload flash/direct-load test does not use this 8-pin header wiring;
 it talks through the MIPI CSI/FPC connector I2C bus instead.
 
 ## Get Image
@@ -202,7 +202,7 @@ Run it on the Raspberry Pi 5:
 sudo ./build/spi_receive_integration_test
 ```
 
-Build the I2C-only payload flash/hotload test:
+Build the I2C-only payload flash/direct-load test:
 
 ```sh
 cd examples/platform/rpi/rpi5/i2c_payload_flash_test
@@ -231,13 +231,13 @@ Run individual I2C payload operations:
 sudo ./build/i2c_payload_flash_test reset
 sudo ./build/i2c_payload_flash_test model-flash
 sudo ./build/i2c_payload_flash_test nninfo-flash
-sudo ./build/i2c_payload_flash_test model-hotload
-sudo ./build/i2c_payload_flash_test nninfo-hotload
+sudo ./build/i2c_payload_flash_test model-direct
+sudo ./build/i2c_payload_flash_test nninfo-direct
 ```
 
-The default action is `all-flash`. Other useful actions are `all-hotload`,
-`all`, `status`, `reset`, and `load-flash`. The `model-hotload` and
-`all-hotload` actions run the SDK reset-only path before sending the model over
+The default action is `all-flash`. Other useful actions are `all-direct`,
+`all`, `status`, `reset`, and `load-flash`. The `model-direct` and
+`all-direct` actions run the SDK reset-only path before sending the model over
 I2C.
 
 The default settings live in
