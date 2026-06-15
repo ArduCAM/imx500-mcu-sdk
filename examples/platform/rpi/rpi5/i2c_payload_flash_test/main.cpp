@@ -14,6 +14,14 @@
 #define NNINFO_DATA         higherhrnet_network_info_data
 #define NNINFO_SIZE         higherhrnet_network_info_size
 
+static constexpr uint32_t kSpiBridgeBlockLen = 256;
+
+static uint32_t sdk_spi_bridge_padding_len(uint32_t size)
+{
+    uint32_t tail = size % kSpiBridgeBlockLen;
+    return tail == 0u ? 0u : kSpiBridgeBlockLen - tail;
+}
+
 static void print_usage(const char *argv0)
 {
     std::printf("Usage: %s [status|reset|model-flash|nninfo-flash|model-hotload|nninfo-hotload|all-flash|all-hotload|all|load-flash]\n",
@@ -281,9 +289,13 @@ static bool run_action(const char *action)
         if (!reset_module_for_hotload("model-hotload")) {
             return false;
         }
-        std::printf("Hotload model directly to IMX500 over I2C, size=%lu\n",
-                    (unsigned long)MODEL_SIZE);
-        bool ok = load_model_to_cam_memory_i2c(MODEL_DATA, MODEL_SIZE);
+        uint32_t padding = sdk_spi_bridge_padding_len(MODEL_SIZE);
+        std::printf("Hotload model directly to IMX500 over I2C, size=%lu padding=%lu\n",
+                    (unsigned long)MODEL_SIZE,
+                    (unsigned long)padding);
+        bool ok = load_model_to_cam_memory_i2c_with_padding(MODEL_DATA,
+                                                            MODEL_SIZE,
+                                                            padding);
         dump_payload_status("[MODEL HOTLOAD I2C]");
         if (!ok) {
             dump_module_snapshot("model-hotload failed");

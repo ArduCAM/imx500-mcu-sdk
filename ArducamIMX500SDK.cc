@@ -2902,18 +2902,24 @@ static void fill_i2c_stream_chunk(uint8_t *dst,
                                   uint32_t len,
                                   uint32_t stream_offset,
                                   const uint8_t header[16],
-                                  const uint8_t *payload) {
+                                  const uint8_t *payload,
+                                  uint32_t payload_size) {
     for (uint32_t i = 0; i < len; ++i) {
         uint32_t pos = stream_offset + i;
-        dst[i] = (pos < sizeof(SpiBlobWireHeader))
-                     ? header[pos]
-                     : payload[pos - sizeof(SpiBlobWireHeader)];
+        if (pos < sizeof(SpiBlobWireHeader)) {
+            dst[i] = header[pos];
+        } else if (pos < sizeof(SpiBlobWireHeader) + payload_size) {
+            dst[i] = payload[pos - sizeof(SpiBlobWireHeader)];
+        } else {
+            dst[i] = 0;
+        }
     }
 }
 
 static bool run_i2c_blob_transfer(uint32_t operation,
                                   const uint8_t *payload,
                                   uint32_t payload_size,
+                                  uint32_t trailing_padding,
                                   const char *label) {
     if (!payload || payload_size == 0u) {
         printf("%s invalid payload\n", label);
@@ -2921,6 +2927,12 @@ static bool run_i2c_blob_transfer(uint32_t operation,
     }
     if (!g_i2c_driver.read || !g_i2c_driver.write) {
         printf("%s missing i2c driver\n", label);
+        return false;
+    }
+    if (trailing_padding >= SPI_BRIDGE_BLOCK_LEN) {
+        printf("%s invalid trailing padding=%u\n",
+               label,
+               (unsigned)trailing_padding);
         return false;
     }
     if (!wait_for_boot_status(1, 10000, label)) {
@@ -2987,17 +2999,23 @@ static bool run_i2c_blob_transfer(uint32_t operation,
     store_u32_le(header + 0, SPI_BLOB_HEADER_MAGIC);
     store_u32_le(header + 4, payload_size);
     store_u32_le(header + 8, calc_crc32_local(payload, payload_size));
-    store_u32_le(header + 12, 0);
+    store_u32_le(header + 12, trailing_padding);
 
     uint8_t send_buf[I2C_PAYLOAD_DEFAULT_CHUNK_LEN];
-    const uint32_t stream_size = (uint32_t)sizeof(SpiBlobWireHeader) + payload_size;
+    const uint32_t stream_size =
+        (uint32_t)sizeof(SpiBlobWireHeader) + payload_size + trailing_padding;
     uint32_t stream_sent = 0;
     while (stream_sent < stream_size) {
         uint32_t chunk = stream_size - stream_sent;
         if (chunk > max_write) {
             chunk = max_write;
         }
-        fill_i2c_stream_chunk(send_buf, chunk, stream_sent, header, payload);
+        fill_i2c_stream_chunk(send_buf,
+                              chunk,
+                              stream_sent,
+                              header,
+                              payload,
+                              payload_size);
 
         if (sdk_i2c_write_payload_chunk(send_buf, chunk) < 0) {
             printf("%s send i2c payload failed stream_offset=%u len=%u\n",
@@ -3085,10 +3103,16 @@ static bool run_i2c_blob_transfer(uint32_t operation,
                    (unsigned)stream_sent,
                    (unsigned)sizeof(SpiBlobWireHeader));
         } else {
-            printf("%s sent payload: %u/%u status=%u(%s) result=%u(%s)\n",
+            uint32_t padding_sent =
+                stream_sent > sizeof(SpiBlobWireHeader) + payload_size
+                    ? stream_sent - (uint32_t)sizeof(SpiBlobWireHeader) - payload_size
+                    : 0u;
+            printf("%s sent payload: %u/%u padding=%u/%u status=%u(%s) result=%u(%s)\n",
                    label,
                    (unsigned)payload_sent,
                    (unsigned)payload_size,
+                   (unsigned)padding_sent,
+                   (unsigned)trailing_padding,
                    (unsigned)flash_status.status,
                    spi_flash_status_name(flash_status.status),
                    (unsigned)flash_status.result,
@@ -3142,6 +3166,7 @@ bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size) {
     return run_i2c_blob_transfer(I2C_PAYLOAD_OP_MODEL_TO_FLASH,
                                  model,
                                  model_size,
+                                 0,
                                  "[I2C CAM FLASH MODEL]");
 }
 
@@ -3157,6 +3182,7 @@ bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_siz
     return run_i2c_blob_transfer(I2C_PAYLOAD_OP_NN_INFO_TO_FLASH,
                                  nn_info,
                                  nn_info_size,
+                                 0,
                                  "[I2C CAM FLASH NN_INFO]");
 }
 
@@ -3172,13 +3198,21 @@ bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_siz
     return run_i2c_blob_transfer(I2C_PAYLOAD_OP_NN_INFO_TO_MEMORY,
                                  nn_info,
                                  nn_info_size,
+                                 0,
                                  "[I2C CAM MEMORY NN_INFO]");
 }
 
 bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size) {
+    return load_model_to_cam_memory_i2c_with_padding(model, model_size, 0);
+}
+
+bool load_model_to_cam_memory_i2c_with_padding(const uint8_t *model,
+                                               uint32_t model_size,
+                                               uint32_t trailing_padding) {
     return run_i2c_blob_transfer(I2C_PAYLOAD_OP_MODEL_TO_MEMORY,
                                  model,
                                  model_size,
+                                 trailing_padding,
                                  "[I2C CAM MEMORY MODEL]");
 }
 
