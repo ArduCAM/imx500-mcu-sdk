@@ -3,19 +3,20 @@
 #include <cstring>
 
 #include "ArducamIMX500SDK.h"
+#include "generated_i2c_payload_assets/higherhrnet_fpk.h"
+#include "generated_i2c_payload_assets/higherhrnet_network_info.h"
 #include "g_config.h"
-#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_NoID.h"
-#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_network_info.h"
 #include "peripherals_adapter.h"
 
-#define NN_FW_DATA              InputTensorOnly_NoID_data
-#define NN_FW_SIZE              InputTensorOnly_NoID_size
-#define NN_NETOWRK_INFO_DATA    InputTensorOnly_network_info_data
-#define NN_NETOWRK_INFO_SIZE    InputTensorOnly_network_info_size
+#define MODEL_NAME          "higherhrnet"
+#define MODEL_DATA          higherhrnet_fpk_data
+#define MODEL_SIZE          higherhrnet_fpk_size
+#define NNINFO_DATA         higherhrnet_network_info_data
+#define NNINFO_SIZE         higherhrnet_network_info_size
 
 static void print_usage(const char *argv0)
 {
-    std::printf("Usage: %s [status|model-flash|nn-flash|nn-hotload|model-hotload|all-flash|all-hotload|all|load-flash]\n",
+    std::printf("Usage: %s [status|model-flash|nninfo-flash|model-hotload|nninfo-hotload|all-flash|all-hotload|all|load-flash]\n",
                 argv0);
 }
 
@@ -136,9 +137,10 @@ static void dump_module_snapshot(const char *label)
     std::printf("i2c_device=%s target_addr=0x%02x\n",
                 peripherals_i2c_device_path(),
                 I2C_PAYLOAD_I2C_TARGET_ADDR);
-    std::printf("assets: model=%lu bytes network_info=%lu bytes\n",
-                (unsigned long)NN_FW_SIZE,
-                (unsigned long)NN_NETOWRK_INFO_SIZE);
+    std::printf("assets: model=%s model_size=%lu bytes nninfo_size=%lu bytes\n",
+                MODEL_NAME,
+                (unsigned long)MODEL_SIZE,
+                (unsigned long)NNINFO_SIZE);
 
     if (read_reg(DEVICE_ID_REG, &device_id, "DEVICE_ID_REG")) {
         std::printf("device_id=0x%08lx\n", (unsigned long)device_id);
@@ -195,7 +197,7 @@ static bool wait_boot_status(uint32_t target, uint32_t timeout_ms)
 
 static bool request_load_flash(void)
 {
-    std::printf("Request model/network_info load from module flash...\n");
+    std::printf("Request model/nninfo load from module flash...\n");
     if (pivariety_i2c_bridge_write(LOAD_MODEL_FROM_FLASH, 1, 4) < 0) {
         std::printf("request LOAD_MODEL_FROM_FLASH failed\n");
         return false;
@@ -218,8 +220,8 @@ static bool run_action(const char *action)
     if (std::strcmp(action, "model-flash") == 0) {
         dump_module_snapshot("before model-flash");
         std::printf("Write model to module flash over I2C, size=%lu\n",
-                    (unsigned long)NN_FW_SIZE);
-        bool ok = write_model_to_cam_flash_i2c(NN_FW_DATA, NN_FW_SIZE);
+                    (unsigned long)MODEL_SIZE);
+        bool ok = write_model_to_cam_flash_i2c(MODEL_DATA, MODEL_SIZE);
         dump_payload_status("[MODEL FLASH I2C]");
         if (!ok) {
             dump_module_snapshot("model-flash failed");
@@ -227,31 +229,31 @@ static bool run_action(const char *action)
         return ok;
     }
 
-    if (std::strcmp(action, "nn-flash") == 0) {
-        dump_module_snapshot("before nn-flash");
-        std::printf("Write network_info to module flash over I2C, size=%lu\n",
-                    (unsigned long)NN_NETOWRK_INFO_SIZE);
-        bool ok = write_nn_info_to_cam_flash_i2c(NN_NETOWRK_INFO_DATA,
-                                                 NN_NETOWRK_INFO_SIZE);
-        dump_payload_status("[NN INFO FLASH I2C]");
+    if (std::strcmp(action, "nninfo-flash") == 0) {
+        dump_module_snapshot("before nninfo-flash");
+        std::printf("Write nninfo to module flash over I2C, size=%lu\n",
+                    (unsigned long)NNINFO_SIZE);
+        bool ok = write_nn_info_to_cam_flash_i2c(NNINFO_DATA,
+                                                 NNINFO_SIZE);
+        dump_payload_status("[NNINFO FLASH I2C]");
         if (!ok) {
-            dump_module_snapshot("nn-flash failed");
+            dump_module_snapshot("nninfo-flash failed");
         }
         return ok;
     }
 
-    if (std::strcmp(action, "nn-hotload") == 0) {
-        dump_module_snapshot("before nn-hotload");
-        std::printf("Hotload network_info to module memory over I2C, size=%lu\n",
-                    (unsigned long)NN_NETOWRK_INFO_SIZE);
-        bool ok = load_nn_info_to_cam_memory_i2c(NN_NETOWRK_INFO_DATA,
-                                                 NN_NETOWRK_INFO_SIZE);
-        dump_payload_status("[NN INFO HOTLOAD I2C]");
+    if (std::strcmp(action, "nninfo-hotload") == 0) {
+        dump_module_snapshot("before nninfo-hotload");
+        std::printf("Hotload nninfo to module memory over I2C, size=%lu\n",
+                    (unsigned long)NNINFO_SIZE);
+        bool ok = load_nn_info_to_cam_memory_i2c(NNINFO_DATA,
+                                                 NNINFO_SIZE);
+        dump_payload_status("[NNINFO HOTLOAD I2C]");
         if (ok) {
-            load_nn_info_to_sdk_cache(NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE);
+            load_nn_info_to_sdk_cache(NNINFO_DATA, NNINFO_SIZE);
             dump_network_info_list();
         } else {
-            dump_module_snapshot("nn-hotload failed");
+            dump_module_snapshot("nninfo-hotload failed");
         }
         return ok;
     }
@@ -259,8 +261,8 @@ static bool run_action(const char *action)
     if (std::strcmp(action, "model-hotload") == 0) {
         dump_module_snapshot("before model-hotload");
         std::printf("Hotload model directly to IMX500 over I2C, size=%lu\n",
-                    (unsigned long)NN_FW_SIZE);
-        bool ok = load_model_to_cam_memory_i2c(NN_FW_DATA, NN_FW_SIZE);
+                    (unsigned long)MODEL_SIZE);
+        bool ok = load_model_to_cam_memory_i2c(MODEL_DATA, MODEL_SIZE);
         dump_payload_status("[MODEL HOTLOAD I2C]");
         if (!ok) {
             dump_module_snapshot("model-hotload failed");
@@ -269,18 +271,18 @@ static bool run_action(const char *action)
     }
 
     if (std::strcmp(action, "all-flash") == 0) {
-        return run_action("model-flash") && run_action("nn-flash");
+        return run_action("model-flash") && run_action("nninfo-flash");
     }
 
     if (std::strcmp(action, "all-hotload") == 0) {
-        return run_action("model-hotload") && run_action("nn-hotload");
+        return run_action("model-hotload") && run_action("nninfo-hotload");
     }
 
     if (std::strcmp(action, "all") == 0) {
         return run_action("model-flash") &&
-               run_action("nn-flash") &&
+               run_action("nninfo-flash") &&
                run_action("model-hotload") &&
-               run_action("nn-hotload");
+               run_action("nninfo-hotload");
     }
 
     if (std::strcmp(action, "load-flash") == 0) {

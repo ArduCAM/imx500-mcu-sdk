@@ -210,6 +210,11 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
+This example embeds the bundled HigherHRNet model by default:
+
+- `tools/assets/models/higherhrnet/network.fpk`
+- `tools/assets/models/higherhrnet/network_info.txt`
+
 By default this test auto-scans common I2C device candidates such as
 `/dev/i2c-10`, `/dev/i2c-11`, and `/dev/i2c-1`.
 If your Raspberry Pi OS exposes the camera connector on a different bus, set it
@@ -224,9 +229,9 @@ Run individual I2C payload operations:
 
 ```sh
 sudo ./build/i2c_payload_flash_test model-flash
-sudo ./build/i2c_payload_flash_test nn-flash
+sudo ./build/i2c_payload_flash_test nninfo-flash
 sudo ./build/i2c_payload_flash_test model-hotload
-sudo ./build/i2c_payload_flash_test nn-hotload
+sudo ./build/i2c_payload_flash_test nninfo-hotload
 ```
 
 The default action is `all-flash`. Other useful actions are `all-hotload`,
