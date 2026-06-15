@@ -18,6 +18,7 @@
 #include "g_config.h"
 
 #define I2C_XFER_RETRY_COUNT 32
+#define I2C_PAYLOAD_FLOW_RETRY_COUNT 1
 #define I2C_XFER_RETRY_DELAY_US 1000
 
 static int s_i2c_fd = -1;
@@ -84,6 +85,13 @@ static bool i2c_is_payload_status_reg(uint16_t reg)
 static bool i2c_is_payload_flow_reg(uint16_t reg)
 {
     return i2c_is_payload_status_reg(reg) || reg == I2C_PAYLOAD_DATA_REG;
+}
+
+static uint32_t i2c_retry_count_for_reg(uint16_t reg)
+{
+    return i2c_is_payload_flow_reg(reg)
+               ? I2C_PAYLOAD_FLOW_RETRY_COUNT
+               : I2C_XFER_RETRY_COUNT;
 }
 
 static void i2c_note_xfer_success(uint16_t reg)
@@ -195,9 +203,10 @@ static int32_t i2c_r_blocking(uint8_t addr,
     };
 
     const uint16_t reg_value = i2c_reg_value(reg, reg_num);
+    const uint32_t retry_count = i2c_retry_count_for_reg(reg_value);
     int last_errno = 0;
 
-    for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
+    for (uint32_t attempt = 0; attempt < retry_count; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 2) {
             i2c_note_xfer_success(reg_value);
@@ -273,7 +282,8 @@ static int32_t i2c_w_raw_blocking(uint8_t addr,
     };
 
     int last_errno = 0;
-    for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
+    const uint32_t retry_count = i2c_retry_count_for_reg(reg);
+    for (uint32_t attempt = 0; attempt < retry_count; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 1) {
             i2c_note_xfer_success(reg);
