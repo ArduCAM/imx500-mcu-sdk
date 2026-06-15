@@ -16,7 +16,7 @@
 
 static void print_usage(const char *argv0)
 {
-    std::printf("Usage: %s [status|model-flash|nninfo-flash|model-hotload|nninfo-hotload|all-flash|all-hotload|all|load-flash]\n",
+    std::printf("Usage: %s [status|reset|model-flash|nninfo-flash|model-hotload|nninfo-hotload|all-flash|all-hotload|all|load-flash]\n",
                 argv0);
 }
 
@@ -212,11 +212,27 @@ static bool request_load_flash(void)
     return true;
 }
 
+static bool reset_module_for_hotload(const char *reason)
+{
+    std::printf("Reset module through SDK before %s...\n", reason);
+    if (!reset_imx500_module()) {
+        std::printf("SDK reset failed before %s\n", reason);
+        dump_module_snapshot("reset failed");
+        return false;
+    }
+    dump_module_snapshot("after reset");
+    return true;
+}
+
 static bool run_action(const char *action)
 {
     if (std::strcmp(action, "status") == 0) {
         dump_module_snapshot("status");
         return true;
+    }
+
+    if (std::strcmp(action, "reset") == 0) {
+        return reset_module_for_hotload("manual reset");
     }
 
     if (std::strcmp(action, "model-flash") == 0) {
@@ -262,6 +278,9 @@ static bool run_action(const char *action)
 
     if (std::strcmp(action, "model-hotload") == 0) {
         dump_module_snapshot("before model-hotload");
+        if (!reset_module_for_hotload("model-hotload")) {
+            return false;
+        }
         std::printf("Hotload model directly to IMX500 over I2C, size=%lu\n",
                     (unsigned long)MODEL_SIZE);
         bool ok = load_model_to_cam_memory_i2c(MODEL_DATA, MODEL_SIZE);

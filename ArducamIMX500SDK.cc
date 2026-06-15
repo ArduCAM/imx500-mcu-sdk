@@ -3461,10 +3461,8 @@ int32_t calculate_spi_output_metadata_size(spi_data_format_t f, uint32_t *data_s
   return 0;
 }
 
-bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
+static bool reset_imx500_module_to_loader_main_ready(uint32_t *boot_status_out) {
     uint32_t val;
-    const bool direct_boot = (nn_fw != nullptr && nn_fw_size > 0u);
-
     imx500_err_t cmd_err = imx500_res_read(IMX500_COMMAND_RESET, &val, 20);
     if (cmd_err != IMX500_CMD_OK) {
         printf("Error: reset command failed err=%d(%s)\n",
@@ -3492,6 +3490,9 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("wait imx500 boot timeout after %u ms\n", (unsigned)boot_elapsed);
         return false;
     }
+    if (boot_status_out) {
+        *boot_status_out = imx500_boot_status;
+    }
     printf("imx500 module boot completed, boot_status=%" PRIu32 "\n", imx500_boot_status);
     printf("SDK reset path: loader/main firmware loaded by module firmware\n");
     uint32_t module_fw_ver = 0;
@@ -3509,6 +3510,22 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     if (cmd_err != IMX500_CMD_OK) {
         printf("Error: set SPI frequency failed freq=%" PRIu32 " err=%d(%s)\n",
                spi_frq, (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
+        return false;
+    }
+    return true;
+}
+
+bool reset_imx500_module(void) {
+    return reset_imx500_module_to_loader_main_ready(nullptr);
+}
+
+bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
+    uint32_t val;
+    imx500_err_t cmd_err = IMX500_CMD_OK;
+    uint32_t imx500_boot_status = 0;
+    const bool direct_boot = (nn_fw != nullptr && nn_fw_size > 0u);
+
+    if (!reset_imx500_module_to_loader_main_ready(&imx500_boot_status)) {
         return false;
     }
 

@@ -228,6 +228,7 @@ cmake --build build -j
 Run individual I2C payload operations:
 
 ```sh
+sudo ./build/i2c_payload_flash_test reset
 sudo ./build/i2c_payload_flash_test model-flash
 sudo ./build/i2c_payload_flash_test nninfo-flash
 sudo ./build/i2c_payload_flash_test model-hotload
@@ -235,7 +236,9 @@ sudo ./build/i2c_payload_flash_test nninfo-hotload
 ```
 
 The default action is `all-flash`. Other useful actions are `all-hotload`,
-`all`, `status`, and `load-flash`.
+`all`, `status`, `reset`, and `load-flash`. The `model-hotload` and
+`all-hotload` actions run the SDK reset-only path before sending the model over
+I2C.
 
 The default settings live in
 `examples/platform/rpi/rpi5/spi_receive_integration_test/g_config.h`.

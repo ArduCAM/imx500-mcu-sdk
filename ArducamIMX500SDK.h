@@ -484,6 +484,15 @@ int get_sensor_device_id(char *out, size_t out_size);
 bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
 
 /**
+ * @brief Reset the IMX500 module and wait until loader/main firmware is ready.
+ * @return `true` if reset completed and boot status returned to 1.
+ *
+ * This is the reset-only part shared by @ref open. It does not load a model
+ * from SPI or flash.
+ */
+bool reset_imx500_module(void);
+
+/**
  * @brief Initialize the module, load model/network info, and configure stream formats.
  * @param nn_fw Network weights blob. Pass `NULL` for flash boot.
  * @param nn_fw_size Size of @p nn_fw in bytes.
