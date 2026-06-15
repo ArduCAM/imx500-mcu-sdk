@@ -22,8 +22,7 @@
 #define I2C_PAYLOAD_ACCEPTED_REG      (AI_REG_BASE | 0x0018)
 
 #define I2C_PAYLOAD_OP_ABORT              0
-#define I2C_PAYLOAD_OP_MODEL_TO_FLASH     1
-#define I2C_PAYLOAD_OP_NN_INFO_TO_FLASH   2
+/* Operation IDs 1 and 2 are retired and must not be reused. */
 #define I2C_PAYLOAD_OP_NN_INFO_TO_MEMORY  3
 #define I2C_PAYLOAD_OP_MODEL_TO_MEMORY    4
 

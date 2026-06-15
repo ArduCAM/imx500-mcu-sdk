@@ -558,7 +558,6 @@ bool abort_i2c_payload_operation(void);
  * @return `true` if the transfer and module-side validation succeeded.
  */
 bool write_model_to_cam_flash(const uint8_t *model, uint32_t model_size);
-bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size);
 
 /**
  * @brief Stream a network-info blob to module flash over SPI.
@@ -567,7 +566,6 @@ bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size);
  * @return `true` if the transfer and module-side validation succeeded.
  */
 bool write_nn_info_to_cam_flash(const uint8_t *nn_info, uint32_t nn_info_size);
-bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
 
 /**
  * @brief Load a network-info blob directly into module memory.

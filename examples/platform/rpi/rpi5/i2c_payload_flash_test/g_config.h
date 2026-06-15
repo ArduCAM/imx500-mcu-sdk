@@ -1,5 +1,5 @@
-#ifndef I2C_PAYLOAD_FLASH_TEST_G_CONFIG_H_
-#define I2C_PAYLOAD_FLASH_TEST_G_CONFIG_H_
+#ifndef I2C_PAYLOAD_DIRECT_TEST_G_CONFIG_H_
+#define I2C_PAYLOAD_DIRECT_TEST_G_CONFIG_H_
 
 /*
  * This example talks to the module MCU through the I2C lines in the Raspberry
@@ -20,4 +20,4 @@
 #define I2C_PAYLOAD_I2C_TARGET_ADDR 0x0C
 #endif
 
-#endif  // I2C_PAYLOAD_FLASH_TEST_G_CONFIG_H_
+#endif  // I2C_PAYLOAD_DIRECT_TEST_G_CONFIG_H_

@@ -16,7 +16,7 @@
 
 static void print_usage(const char *argv0)
 {
-    std::printf("Usage: %s [status|reset|model-flash|nninfo-flash|model-direct|nninfo-direct|all-flash|all-direct|all|load-flash]\n",
+    std::printf("Usage: %s [status|reset|model-direct|nninfo-direct|all-direct]\n",
                 argv0);
 }
 
@@ -81,10 +81,6 @@ static const char *payload_op_name(uint32_t op)
     switch (op) {
     case I2C_PAYLOAD_OP_ABORT:
         return "ABORT/IDLE";
-    case I2C_PAYLOAD_OP_MODEL_TO_FLASH:
-        return "MODEL_TO_FLASH";
-    case I2C_PAYLOAD_OP_NN_INFO_TO_FLASH:
-        return "NN_INFO_TO_FLASH";
     case I2C_PAYLOAD_OP_NN_INFO_TO_MEMORY:
         return "NN_INFO_TO_MEMORY";
     case I2C_PAYLOAD_OP_MODEL_TO_MEMORY:
@@ -117,13 +113,6 @@ static bool payload_status_is_terminal(uint32_t status)
     return status == SPI_FLASH_OP_IDLE ||
            status == SPI_FLASH_OP_SUCCESS ||
            status == SPI_FLASH_OP_FAILED;
-}
-
-static bool action_uses_i2c_flash(const char *action)
-{
-    return std::strcmp(action, "model-flash") == 0 ||
-           std::strcmp(action, "nninfo-flash") == 0 ||
-           std::strcmp(action, "all-flash") == 0;
 }
 
 static bool abort_stale_payload_if_needed(const char *stage)
@@ -214,45 +203,6 @@ static void dump_module_snapshot(const char *label)
     std::printf("--------------------\n\n");
 }
 
-static bool wait_boot_status(uint32_t target, uint32_t timeout_ms)
-{
-    uint32_t elapsed = 0;
-    while (elapsed < timeout_ms) {
-        uint32_t boot = 0;
-        if (!read_reg(BOOT_STATUS_REG, &boot, "BOOT_STATUS_REG")) {
-            return false;
-        }
-        if (boot >= target) {
-            return true;
-        }
-        std::printf("wait boot_status >= %lu, current=%lu\n",
-                    (unsigned long)target,
-                    (unsigned long)boot);
-        g_i2c_driver.slp_ms(500);
-        elapsed += 500;
-    }
-    std::printf("wait boot_status >= %lu timeout after %lu ms\n",
-                (unsigned long)target,
-                (unsigned long)timeout_ms);
-    dump_module_snapshot("timeout snapshot");
-    return false;
-}
-
-static bool request_load_flash(void)
-{
-    std::printf("Request model/nninfo load from module flash...\n");
-    if (pivariety_i2c_bridge_write(LOAD_MODEL_FROM_FLASH, 1, 4) < 0) {
-        std::printf("request LOAD_MODEL_FROM_FLASH failed\n");
-        return false;
-    }
-    if (!wait_boot_status(2, 30000)) {
-        std::printf("load flash timeout\n");
-        return false;
-    }
-    std::printf("load flash completed\n");
-    return true;
-}
-
 static bool reset_module_for_direct_load(const char *reason)
 {
     std::printf("Reset module through SDK before %s...\n", reason);
@@ -282,33 +232,6 @@ static bool run_action(const char *action)
 
     if (std::strcmp(action, "reset") == 0) {
         return reset_module_for_direct_load("manual reset");
-    }
-
-    if (std::strcmp(action, "model-flash") == 0) {
-        dump_module_snapshot("before model-flash");
-        std::printf("Write model to module flash over I2C, size=%lu\n",
-                    (unsigned long)MODEL_SIZE);
-        bool ok = write_model_to_cam_flash_i2c(MODEL_DATA, MODEL_SIZE);
-        std::printf("[MODEL FLASH I2C] transfer returned %s\n",
-                    ok ? "OK" : "FAILED");
-        if (!ok) {
-            dump_module_snapshot("model-flash failed");
-        }
-        return ok;
-    }
-
-    if (std::strcmp(action, "nninfo-flash") == 0) {
-        dump_module_snapshot("before nninfo-flash");
-        std::printf("Write nninfo to module flash over I2C, size=%lu\n",
-                    (unsigned long)NNINFO_SIZE);
-        bool ok = write_nn_info_to_cam_flash_i2c(NNINFO_DATA,
-                                                 NNINFO_SIZE);
-        std::printf("[NNINFO FLASH I2C] transfer returned %s\n",
-                    ok ? "OK" : "FAILED");
-        if (!ok) {
-            dump_module_snapshot("nninfo-flash failed");
-        }
-        return ok;
     }
 
     if (std::strcmp(action, "nninfo-direct") == 0) {
@@ -342,23 +265,8 @@ static bool run_action(const char *action)
         return ok;
     }
 
-    if (std::strcmp(action, "all-flash") == 0) {
-        return run_action("model-flash") && run_action("nninfo-flash");
-    }
-
     if (std::strcmp(action, "all-direct") == 0) {
         return run_action("model-direct") && run_action("nninfo-direct");
-    }
-
-    if (std::strcmp(action, "all") == 0) {
-        return run_action("model-flash") &&
-               run_action("nninfo-flash") &&
-               run_action("model-direct") &&
-               run_action("nninfo-direct");
-    }
-
-    if (std::strcmp(action, "load-flash") == 0) {
-        return request_load_flash();
     }
 
     return false;
@@ -366,7 +274,7 @@ static bool run_action(const char *action)
 
 int main(int argc, char **argv)
 {
-    const char *action = argc > 1 ? argv[1] : "all-flash";
+    const char *action = argc > 1 ? argv[1] : "all-direct";
 
     if (std::strcmp(action, "--help") == 0 || std::strcmp(action, "-h") == 0) {
         print_usage(argv[0]);
@@ -389,12 +297,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (action_uses_i2c_flash(action)) {
-        std::printf("Skip final module snapshot after I2C flash to avoid CSI-I2C "
-                    "status polling during post-flash bus recovery.\n");
-    } else {
-        dump_module_snapshot("final module state");
-    }
+    dump_module_snapshot("final module state");
     std::printf("Action completed: %s\n", action);
     close_peripherals();
     return 0;
