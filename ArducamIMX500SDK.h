@@ -572,9 +572,6 @@ bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_siz
 bool load_nn_info_to_cam_memory(const uint8_t *nn_info, uint32_t nn_info_size);
 bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
 bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size);
-bool load_model_to_cam_memory_i2c_with_padding(const uint8_t *model,
-                                               uint32_t model_size,
-                                               uint32_t trailing_padding);
 
 /** @brief Cached network descriptors parsed from the current network-info blob. */
 extern sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];

@@ -323,6 +323,11 @@ static uint8_t *byteswap_u32_words_alloc(const uint8_t *src, uint32_t size) {
     return out;
 }
 
+static uint32_t spi_bridge_padding_len(uint32_t size) {
+    uint32_t tail = size % SPI_BRIDGE_BLOCK_LEN;
+    return tail == 0u ? 0u : SPI_BRIDGE_BLOCK_LEN - tail;
+}
+
 [[maybe_unused]] static bool sdk_i2c_write_reg(uint16_t addr, uint32_t val) {
     if (!g_i2c_driver.write) {
         printf("i2c write reg failed: driver not registered addr=0x%04X val=0x%08" PRIX32 "\n",
@@ -3203,17 +3208,29 @@ bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_siz
 }
 
 bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size) {
-    return load_model_to_cam_memory_i2c_with_padding(model, model_size, 0);
-}
+    if (!model || model_size == 0u) {
+        printf("[I2C CAM MEMORY MODEL] invalid model input\n");
+        return false;
+    }
 
-bool load_model_to_cam_memory_i2c_with_padding(const uint8_t *model,
-                                               uint32_t model_size,
-                                               uint32_t trailing_padding) {
-    return run_i2c_blob_transfer(I2C_PAYLOAD_OP_MODEL_TO_MEMORY,
-                                 model,
-                                 model_size,
-                                 trailing_padding,
-                                 "[I2C CAM MEMORY MODEL]");
+    uint8_t *swapped_model = byteswap_u32_words_alloc(model, model_size);
+    if (!swapped_model) {
+        printf("[I2C CAM MEMORY MODEL] prepare byteswapped model failed size=%u\n",
+               (unsigned)model_size);
+        return false;
+    }
+
+    uint32_t trailing_padding = spi_bridge_padding_len(model_size);
+    printf("[I2C CAM MEMORY MODEL] prepared byteswapped model size=%u padding=%u\n",
+           (unsigned)model_size,
+           (unsigned)trailing_padding);
+    bool ok = run_i2c_blob_transfer(I2C_PAYLOAD_OP_MODEL_TO_MEMORY,
+                                    swapped_model,
+                                    model_size,
+                                    trailing_padding,
+                                    "[I2C CAM MEMORY MODEL]");
+    free(swapped_model);
+    return ok;
 }
 
 static int rp2350_send_fw_to_imx500_sspi(const uint8_t *data, uint32_t len) {
