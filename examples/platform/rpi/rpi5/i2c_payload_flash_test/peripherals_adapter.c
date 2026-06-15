@@ -16,12 +16,13 @@
 #include "common_regs.h"
 #include "g_config.h"
 
-#define I2C_XFER_RETRY_COUNT 12
+#define I2C_XFER_RETRY_COUNT 32
 #define I2C_XFER_RETRY_DELAY_US 1000
 
 static int s_i2c_fd = -1;
 static char s_i2c_device_path[64];
 static uint32_t s_i2c_recovered_log_count = 0;
+static uint32_t s_i2c_status_poll_failure_log_count = 0;
 
 static int rpi5_open_device(const char *path, int flags)
 {
@@ -72,6 +73,30 @@ static void i2c_log_recovered(const char *op,
            (unsigned long)(attempt + 1u));
 }
 
+static bool i2c_is_payload_status_reg(uint16_t reg)
+{
+    return (reg >= 0x0911u && reg <= 0x0915u) ||
+           reg == 0x0917u ||
+           reg == 0x0918u;
+}
+
+static void i2c_note_xfer_success(uint16_t reg)
+{
+    if (i2c_is_payload_status_reg(reg)) {
+        s_i2c_status_poll_failure_log_count = 0;
+    }
+}
+
+static bool i2c_should_log_xfer_failure(uint16_t reg)
+{
+    if (!i2c_is_payload_status_reg(reg)) {
+        return true;
+    }
+    ++s_i2c_status_poll_failure_log_count;
+    return s_i2c_status_poll_failure_log_count <= 8u ||
+           (s_i2c_status_poll_failure_log_count % 32u) == 0u;
+}
+
 static int32_t i2c_w_blocking(uint8_t addr,
                               uint8_t *reg,
                               uint8_t reg_num,
@@ -111,6 +136,7 @@ static int32_t i2c_w_blocking(uint8_t addr,
     for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 1) {
+            i2c_note_xfer_success(reg_value);
             i2c_log_recovered("write", addr, reg_value, attempt);
             return i2c_msg.len;
         }
@@ -170,6 +196,7 @@ static int32_t i2c_r_blocking(uint8_t addr,
     for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 2) {
+            i2c_note_xfer_success(reg_value);
             i2c_log_recovered("read", addr, reg_value, attempt);
             return nbytes;
         }
@@ -177,12 +204,14 @@ static int32_t i2c_r_blocking(uint8_t addr,
         rpi5_sleep_us(I2C_XFER_RETRY_DELAY_US * (attempt + 1u));
     }
 
-    printf("[CSI-I2C] read failed dev=%s addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
-           s_i2c_device_path,
-           addr,
-           reg_value,
-           (unsigned long)nbytes,
-           strerror(last_errno));
+    if (i2c_should_log_xfer_failure(reg_value)) {
+        printf("[CSI-I2C] read failed dev=%s addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
+               s_i2c_device_path,
+               addr,
+               reg_value,
+               (unsigned long)nbytes,
+               strerror(last_errno));
+    }
     return -1;
 }
 
@@ -243,6 +272,7 @@ static int32_t i2c_w_raw_blocking(uint8_t addr,
     for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 1) {
+            i2c_note_xfer_success(reg);
             i2c_log_recovered("write-block", addr, reg, attempt);
             free(msg);
             return (int32_t)nbytes;
