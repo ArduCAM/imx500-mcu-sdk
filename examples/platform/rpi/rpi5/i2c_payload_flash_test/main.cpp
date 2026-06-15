@@ -1,0 +1,322 @@
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+#include "ArducamIMX500SDK.h"
+#include "g_config.h"
+#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_NoID.h"
+#include "imx500_firmware_cpp/imx500_firmware/InputTensorOnly_network_info.h"
+#include "peripherals_adapter.h"
+
+#define NN_FW_DATA              InputTensorOnly_NoID_data
+#define NN_FW_SIZE              InputTensorOnly_NoID_size
+#define NN_NETOWRK_INFO_DATA    InputTensorOnly_network_info_data
+#define NN_NETOWRK_INFO_SIZE    InputTensorOnly_network_info_size
+
+static void print_usage(const char *argv0)
+{
+    std::printf("Usage: %s [status|model-flash|nn-flash|nn-hotload|model-hotload|all-flash|all-hotload|all|load-flash]\n",
+                argv0);
+}
+
+static const char *payload_status_name(uint32_t status)
+{
+    switch (status) {
+    case SPI_FLASH_OP_IDLE:
+        return "IDLE";
+    case SPI_FLASH_OP_WAIT_HEADER:
+        return "WAIT_HEADER";
+    case SPI_FLASH_OP_RECEIVING:
+        return "RECEIVING";
+    case SPI_FLASH_OP_PARSING:
+        return "PARSING";
+    case SPI_FLASH_OP_SUCCESS:
+        return "SUCCESS";
+    case SPI_FLASH_OP_FAILED:
+        return "FAILED";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static const char *payload_result_name(uint32_t result)
+{
+    switch (result) {
+    case SPI_FLASH_RESULT_NONE:
+        return "NONE";
+    case SPI_FLASH_RESULT_OK:
+        return "OK";
+    case SPI_FLASH_RESULT_TIMEOUT:
+        return "TIMEOUT";
+    case SPI_FLASH_RESULT_BAD_HEADER:
+        return "BAD_HEADER";
+    case SPI_FLASH_RESULT_BAD_SIZE:
+        return "BAD_SIZE";
+    case SPI_FLASH_RESULT_WRITE_FAIL:
+        return "WRITE_FAIL";
+    case SPI_FLASH_RESULT_CRC_MISMATCH:
+        return "CRC_MISMATCH";
+    case SPI_FLASH_RESULT_PARSE_FAIL:
+        return "PARSE_FAIL";
+    case SPI_FLASH_RESULT_FLASH_BLOB_MISSING:
+        return "FLASH_BLOB_MISSING";
+    case SPI_FLASH_RESULT_BUSY:
+        return "BUSY";
+    case SPI_FLASH_RESULT_BAD_OPERATION:
+        return "BAD_OPERATION";
+    case SPI_FLASH_RESULT_NOT_SUPPORTED:
+        return "NOT_SUPPORTED";
+    case SPI_FLASH_RESULT_NO_MEMORY:
+        return "NO_MEMORY";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static const char *payload_op_name(uint32_t op)
+{
+    switch (op) {
+    case I2C_PAYLOAD_OP_ABORT:
+        return "ABORT/IDLE";
+    case I2C_PAYLOAD_OP_MODEL_TO_FLASH:
+        return "MODEL_TO_FLASH";
+    case I2C_PAYLOAD_OP_NN_INFO_TO_FLASH:
+        return "NN_INFO_TO_FLASH";
+    case I2C_PAYLOAD_OP_NN_INFO_TO_MEMORY:
+        return "NN_INFO_TO_MEMORY";
+    case I2C_PAYLOAD_OP_MODEL_TO_MEMORY:
+        return "MODEL_TO_MEMORY";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static bool dump_payload_status(const char *label)
+{
+    spi_flash_status_t status = {};
+    if (!get_spi_flash_status(&status)) {
+        std::printf("%s failed to read payload status\n", label);
+        return false;
+    }
+    std::printf("%s status=%lu(%s) result=%lu(%s) bytes=%lu/%lu\n",
+                label,
+                (unsigned long)status.status,
+                payload_status_name(status.status),
+                (unsigned long)status.result,
+                payload_result_name(status.result),
+                (unsigned long)status.bytes_done,
+                (unsigned long)status.bytes_total);
+    return true;
+}
+
+static bool read_reg(uint16_t reg, uint32_t *value, const char *name = nullptr)
+{
+    int ret = pivariety_i2c_bridge_read(reg, value, 4);
+    if (ret < 0) {
+        std::printf("[I2C READ] failed reg=0x%04x%s%s ret=%d\n",
+                    reg,
+                    name ? " " : "",
+                    name ? name : "",
+                    ret);
+        return false;
+    }
+    return true;
+}
+
+static void dump_module_snapshot(const char *label)
+{
+    uint32_t device_id = 0;
+    uint32_t fw_version = 0;
+    uint32_t boot = 0;
+    uint32_t op = 0;
+    uint32_t max_write = 0;
+    uint32_t accepted = 0;
+
+    std::printf("\n---- %s ----\n", label);
+    std::printf("i2c_device=%s target_addr=0x%02x\n",
+                peripherals_i2c_device_path(),
+                I2C_PAYLOAD_I2C_TARGET_ADDR);
+    std::printf("assets: model=%lu bytes network_info=%lu bytes\n",
+                (unsigned long)NN_FW_SIZE,
+                (unsigned long)NN_NETOWRK_INFO_SIZE);
+
+    if (read_reg(DEVICE_ID_REG, &device_id, "DEVICE_ID_REG")) {
+        std::printf("device_id=0x%08lx\n", (unsigned long)device_id);
+    }
+    if (read_reg(DEVICE_VERSION_REG, &fw_version, "DEVICE_VERSION_REG")) {
+        std::printf("firmware_version=0x%08lx\n", (unsigned long)fw_version);
+    }
+    if (read_reg(BOOT_STATUS_REG, &boot, "BOOT_STATUS_REG")) {
+        std::printf("boot_status=%lu\n", (unsigned long)boot);
+    }
+    if (read_reg(I2C_PAYLOAD_OP_REG, &op, "I2C_PAYLOAD_OP_REG")) {
+        std::printf("i2c_payload_op=%lu(%s)\n",
+                    (unsigned long)op,
+                    payload_op_name(op));
+    }
+    if (read_reg(I2C_PAYLOAD_MAX_WRITE_REG,
+                 &max_write,
+                 "I2C_PAYLOAD_MAX_WRITE_REG")) {
+        std::printf("i2c_payload_max_write=%lu\n", (unsigned long)max_write);
+    }
+    if (read_reg(I2C_PAYLOAD_ACCEPTED_REG,
+                 &accepted,
+                 "I2C_PAYLOAD_ACCEPTED_REG")) {
+        std::printf("i2c_payload_last_accepted=%lu\n",
+                    (unsigned long)accepted);
+    }
+    dump_payload_status("[PAYLOAD]");
+    std::printf("--------------------\n\n");
+}
+
+static bool wait_boot_status(uint32_t target, uint32_t timeout_ms)
+{
+    uint32_t elapsed = 0;
+    while (elapsed < timeout_ms) {
+        uint32_t boot = 0;
+        if (!read_reg(BOOT_STATUS_REG, &boot, "BOOT_STATUS_REG")) {
+            return false;
+        }
+        if (boot >= target) {
+            return true;
+        }
+        std::printf("wait boot_status >= %lu, current=%lu\n",
+                    (unsigned long)target,
+                    (unsigned long)boot);
+        g_i2c_driver.slp_ms(500);
+        elapsed += 500;
+    }
+    std::printf("wait boot_status >= %lu timeout after %lu ms\n",
+                (unsigned long)target,
+                (unsigned long)timeout_ms);
+    dump_module_snapshot("timeout snapshot");
+    return false;
+}
+
+static bool request_load_flash(void)
+{
+    std::printf("Request model/network_info load from module flash...\n");
+    if (pivariety_i2c_bridge_write(LOAD_MODEL_FROM_FLASH, 1, 4) < 0) {
+        std::printf("request LOAD_MODEL_FROM_FLASH failed\n");
+        return false;
+    }
+    if (!wait_boot_status(2, 30000)) {
+        std::printf("load flash timeout\n");
+        return false;
+    }
+    std::printf("load flash completed\n");
+    return true;
+}
+
+static bool run_action(const char *action)
+{
+    if (std::strcmp(action, "status") == 0) {
+        dump_module_snapshot("status");
+        return true;
+    }
+
+    if (std::strcmp(action, "model-flash") == 0) {
+        dump_module_snapshot("before model-flash");
+        std::printf("Write model to module flash over I2C, size=%lu\n",
+                    (unsigned long)NN_FW_SIZE);
+        bool ok = write_model_to_cam_flash_i2c(NN_FW_DATA, NN_FW_SIZE);
+        dump_payload_status("[MODEL FLASH I2C]");
+        if (!ok) {
+            dump_module_snapshot("model-flash failed");
+        }
+        return ok;
+    }
+
+    if (std::strcmp(action, "nn-flash") == 0) {
+        dump_module_snapshot("before nn-flash");
+        std::printf("Write network_info to module flash over I2C, size=%lu\n",
+                    (unsigned long)NN_NETOWRK_INFO_SIZE);
+        bool ok = write_nn_info_to_cam_flash_i2c(NN_NETOWRK_INFO_DATA,
+                                                 NN_NETOWRK_INFO_SIZE);
+        dump_payload_status("[NN INFO FLASH I2C]");
+        if (!ok) {
+            dump_module_snapshot("nn-flash failed");
+        }
+        return ok;
+    }
+
+    if (std::strcmp(action, "nn-hotload") == 0) {
+        dump_module_snapshot("before nn-hotload");
+        std::printf("Hotload network_info to module memory over I2C, size=%lu\n",
+                    (unsigned long)NN_NETOWRK_INFO_SIZE);
+        bool ok = load_nn_info_to_cam_memory_i2c(NN_NETOWRK_INFO_DATA,
+                                                 NN_NETOWRK_INFO_SIZE);
+        dump_payload_status("[NN INFO HOTLOAD I2C]");
+        if (ok) {
+            load_nn_info_to_sdk_cache(NN_NETOWRK_INFO_DATA, NN_NETOWRK_INFO_SIZE);
+            dump_network_info_list();
+        } else {
+            dump_module_snapshot("nn-hotload failed");
+        }
+        return ok;
+    }
+
+    if (std::strcmp(action, "model-hotload") == 0) {
+        dump_module_snapshot("before model-hotload");
+        std::printf("Hotload model directly to IMX500 over I2C, size=%lu\n",
+                    (unsigned long)NN_FW_SIZE);
+        bool ok = load_model_to_cam_memory_i2c(NN_FW_DATA, NN_FW_SIZE);
+        dump_payload_status("[MODEL HOTLOAD I2C]");
+        if (!ok) {
+            dump_module_snapshot("model-hotload failed");
+        }
+        return ok;
+    }
+
+    if (std::strcmp(action, "all-flash") == 0) {
+        return run_action("model-flash") && run_action("nn-flash");
+    }
+
+    if (std::strcmp(action, "all-hotload") == 0) {
+        return run_action("model-hotload") && run_action("nn-hotload");
+    }
+
+    if (std::strcmp(action, "all") == 0) {
+        return run_action("model-flash") &&
+               run_action("nn-flash") &&
+               run_action("model-hotload") &&
+               run_action("nn-hotload");
+    }
+
+    if (std::strcmp(action, "load-flash") == 0) {
+        return request_load_flash();
+    }
+
+    return false;
+}
+
+int main(int argc, char **argv)
+{
+    const char *action = argc > 1 ? argv[1] : "all-flash";
+
+    if (std::strcmp(action, "--help") == 0 || std::strcmp(action, "-h") == 0) {
+        print_usage(argv[0]);
+        return 0;
+    }
+
+    if (!init_i2c_peripheral()) {
+        return 1;
+    }
+    std::printf("Using I2C device: %s\n", peripherals_i2c_device_path());
+    bind_i2c_peripherals_api();
+    dump_module_snapshot("initial module state");
+    std::printf("Requested action: %s\n", action);
+
+    bool ok = run_action(action);
+    if (!ok) {
+        std::printf("Action failed: %s\n", action);
+        print_usage(argv[0]);
+        close_peripherals();
+        return 1;
+    }
+
+    dump_module_snapshot("final module state");
+    std::printf("Action completed: %s\n", action);
+    close_peripherals();
+    return 0;
+}

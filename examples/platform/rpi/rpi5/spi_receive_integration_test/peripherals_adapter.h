@@ -9,10 +9,13 @@ extern "C" {
 #endif
 
 bool init_peripherals(void);
+bool init_i2c_peripheral(void);
 void close_peripherals(void);
 bool bind_peripherals_api(void);
+bool bind_i2c_peripherals_api(void);
 
 int pivariety_i2c_bridge_write(uint16_t addr, uint32_t val, uint32_t size);
+int pivariety_i2c_bridge_write_block(uint16_t addr, const uint8_t *data, uint32_t len);
 int pivariety_i2c_bridge_read(uint16_t addr, uint32_t *val, uint32_t size);
 int pivariety_spi_bridge_write(uint8_t *data, uint32_t len);
 int pivariety_spi_bridge_read(uint8_t *data, uint32_t len);

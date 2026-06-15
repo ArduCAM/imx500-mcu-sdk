@@ -41,6 +41,9 @@ typedef int (*i2c_write_fn)(uint16_t addr, uint32_t val, uint32_t size);
 /** @brief I2C read callback supplied by the platform. */
 typedef int (*i2c_read_fn)(uint16_t addr, uint32_t *val, uint32_t size);
 
+/** @brief Optional raw I2C block-write callback supplied by the platform. */
+typedef int (*i2c_write_block_fn)(uint16_t addr, const uint8_t *data, uint32_t len);
+
 /** @brief Millisecond delay callback supplied by the platform. */
 typedef void (*sleep_ms_fn)(uint32_t ms);
 
@@ -54,6 +57,7 @@ typedef void (*imx500_printf_fn)(const char *msg);
 typedef struct i2c_driver {
   i2c_write_fn write;
   i2c_read_fn read;
+  i2c_write_block_fn write_block;
   sleep_ms_fn slp_ms;
   sleep_us_fn slp_us;
 } i2c_driver;

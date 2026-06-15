@@ -16,6 +16,16 @@
 #define SPI_FLASH_OP_RESULT_REG       (AI_REG_BASE | 0x0012)
 #define SPI_FLASH_BYTES_DONE_REG      (AI_REG_BASE | 0x0013)
 #define SPI_FLASH_BYTES_TOTAL_REG     (AI_REG_BASE | 0x0014)
+#define I2C_PAYLOAD_OP_REG            (AI_REG_BASE | 0x0015)
+#define I2C_PAYLOAD_DATA_REG          (AI_REG_BASE | 0x0016)
+#define I2C_PAYLOAD_MAX_WRITE_REG     (AI_REG_BASE | 0x0017)
+#define I2C_PAYLOAD_ACCEPTED_REG      (AI_REG_BASE | 0x0018)
+
+#define I2C_PAYLOAD_OP_ABORT              0
+#define I2C_PAYLOAD_OP_MODEL_TO_FLASH     1
+#define I2C_PAYLOAD_OP_NN_INFO_TO_FLASH   2
+#define I2C_PAYLOAD_OP_NN_INFO_TO_MEMORY  3
+#define I2C_PAYLOAD_OP_MODEL_TO_MEMORY    4
 
 #define IMX500_COMMAND_GET_ES_VER                                                       (IMX500_COMMAND_BASE | 1)
 #define IMX500_COMMAND_GET_LOADER_FW_VER                                                (IMX500_COMMAND_BASE | 2)

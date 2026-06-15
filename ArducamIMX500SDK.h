@@ -247,6 +247,10 @@ typedef enum {
 	SPI_FLASH_RESULT_CRC_MISMATCH = 6,
 	SPI_FLASH_RESULT_PARSE_FAIL = 7,
 	SPI_FLASH_RESULT_FLASH_BLOB_MISSING = 8,
+	SPI_FLASH_RESULT_BUSY = 9,
+	SPI_FLASH_RESULT_BAD_OPERATION = 10,
+	SPI_FLASH_RESULT_NOT_SUPPORTED = 11,
+	SPI_FLASH_RESULT_NO_MEMORY = 12,
 } spi_flash_op_result_t;
 
 /** @brief Summary of a model or network-info flash write request. */
@@ -538,6 +542,7 @@ bool get_spi_flash_status(spi_flash_status_t *status);
  * @return `true` if the transfer and module-side validation succeeded.
  */
 bool write_model_to_cam_flash(const uint8_t *model, uint32_t model_size);
+bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size);
 
 /**
  * @brief Stream a network-info blob to module flash over SPI.
@@ -546,6 +551,7 @@ bool write_model_to_cam_flash(const uint8_t *model, uint32_t model_size);
  * @return `true` if the transfer and module-side validation succeeded.
  */
 bool write_nn_info_to_cam_flash(const uint8_t *nn_info, uint32_t nn_info_size);
+bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
 
 /**
  * @brief Load a network-info blob directly into module memory.
@@ -554,6 +560,8 @@ bool write_nn_info_to_cam_flash(const uint8_t *nn_info, uint32_t nn_info_size);
  * @return `true` if the module accepted the blob.
  */
 bool load_nn_info_to_cam_memory(const uint8_t *nn_info, uint32_t nn_info_size);
+bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
+bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size);
 
 /** @brief Cached network descriptors parsed from the current network-info blob. */
 extern sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];

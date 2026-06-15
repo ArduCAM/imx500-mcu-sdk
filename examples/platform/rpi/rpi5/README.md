@@ -11,7 +11,9 @@ This RPi5 example uses two physical paths to the IMX500 camera module:
   header.
 
 Both paths are required if you want to preview the image and run the
-`spi_receive_integration_test` metadata example.
+`spi_receive_integration_test` metadata example. The
+`i2c_payload_flash_test` example uses the I2C lines inside the MIPI CSI/FPC
+camera connector, so it does not require the extra 8-pin header I2C/SPI wiring.
 
 ### MIPI CSI Connection
 
@@ -47,6 +49,9 @@ in [GPIO Wiring](#gpio-wiring). This provides:
 - `3.3 V` power and common `GND`.
 
 Do not connect any camera signal pin to `5 V`.
+
+The I2C-only payload flash/hotload test does not use this 8-pin header wiring;
+it talks through the MIPI CSI/FPC connector I2C bus instead.
 
 ## Get Image
 
@@ -196,6 +201,36 @@ Run it on the Raspberry Pi 5:
 ```sh
 sudo ./build/spi_receive_integration_test
 ```
+
+Build the I2C-only payload flash/hotload test:
+
+```sh
+cd examples/platform/rpi/rpi5/i2c_payload_flash_test
+cmake -S . -B build
+cmake --build build -j
+```
+
+By default this test auto-scans common I2C device candidates such as
+`/dev/i2c-10`, `/dev/i2c-11`, and `/dev/i2c-1`.
+If your Raspberry Pi OS exposes the camera connector on a different bus, set it
+explicitly:
+
+```sh
+cmake -S . -B build -DI2C_PAYLOAD_I2C_DEVICE=/dev/i2c-X
+cmake --build build -j
+```
+
+Run individual I2C payload operations:
+
+```sh
+sudo ./build/i2c_payload_flash_test model-flash
+sudo ./build/i2c_payload_flash_test nn-flash
+sudo ./build/i2c_payload_flash_test model-hotload
+sudo ./build/i2c_payload_flash_test nn-hotload
+```
+
+The default action is `all-flash`. Other useful actions are `all-hotload`,
+`all`, `status`, and `load-flash`.
 
 The default settings live in
 `examples/platform/rpi/rpi5/spi_receive_integration_test/g_config.h`.
