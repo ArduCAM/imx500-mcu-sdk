@@ -69,6 +69,8 @@ static const char *payload_result_name(uint32_t result)
         return "NOT_SUPPORTED";
     case SPI_FLASH_RESULT_NO_MEMORY:
         return "NO_MEMORY";
+    case SPI_FLASH_RESULT_IMX500_DOWNLOAD_FAIL:
+        return "IMX500_DOWNLOAD_FAIL";
     default:
         return "UNKNOWN";
     }

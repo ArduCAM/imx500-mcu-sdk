@@ -251,6 +251,7 @@ typedef enum {
 	SPI_FLASH_RESULT_BAD_OPERATION = 10,
 	SPI_FLASH_RESULT_NOT_SUPPORTED = 11,
 	SPI_FLASH_RESULT_NO_MEMORY = 12,
+	SPI_FLASH_RESULT_IMX500_DOWNLOAD_FAIL = 13,
 } spi_flash_op_result_t;
 
 /** @brief Summary of a model or network-info flash write request. */
