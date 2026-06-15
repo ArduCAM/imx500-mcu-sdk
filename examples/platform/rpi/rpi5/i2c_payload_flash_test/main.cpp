@@ -119,6 +119,13 @@ static bool payload_status_is_terminal(uint32_t status)
            status == SPI_FLASH_OP_FAILED;
 }
 
+static bool action_uses_i2c_flash(const char *action)
+{
+    return std::strcmp(action, "model-flash") == 0 ||
+           std::strcmp(action, "nninfo-flash") == 0 ||
+           std::strcmp(action, "all-flash") == 0;
+}
+
 static bool abort_stale_payload_if_needed(const char *stage)
 {
     spi_flash_status_t status = {};
@@ -282,7 +289,8 @@ static bool run_action(const char *action)
         std::printf("Write model to module flash over I2C, size=%lu\n",
                     (unsigned long)MODEL_SIZE);
         bool ok = write_model_to_cam_flash_i2c(MODEL_DATA, MODEL_SIZE);
-        dump_payload_status("[MODEL FLASH I2C]");
+        std::printf("[MODEL FLASH I2C] transfer returned %s\n",
+                    ok ? "OK" : "FAILED");
         if (!ok) {
             dump_module_snapshot("model-flash failed");
         }
@@ -295,7 +303,8 @@ static bool run_action(const char *action)
                     (unsigned long)NNINFO_SIZE);
         bool ok = write_nn_info_to_cam_flash_i2c(NNINFO_DATA,
                                                  NNINFO_SIZE);
-        dump_payload_status("[NNINFO FLASH I2C]");
+        std::printf("[NNINFO FLASH I2C] transfer returned %s\n",
+                    ok ? "OK" : "FAILED");
         if (!ok) {
             dump_module_snapshot("nninfo-flash failed");
         }
@@ -380,7 +389,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    dump_module_snapshot("final module state");
+    if (action_uses_i2c_flash(action)) {
+        std::printf("Skip final module snapshot after I2C flash to avoid CSI-I2C "
+                    "status polling during post-flash bus recovery.\n");
+    } else {
+        dump_module_snapshot("final module state");
+    }
     std::printf("Action completed: %s\n", action);
     close_peripherals();
     return 0;

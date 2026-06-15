@@ -68,12 +68,12 @@ static const uint32_t I2C_PAYLOAD_FLASH_CHUNK_LEN = 1024;
 static const uint32_t I2C_PAYLOAD_FALLBACK_CHUNK_LEN = 4;
 static const uint32_t I2C_PAYLOAD_DRAIN_TIMEOUT_MS = 5000;
 static const uint32_t I2C_PAYLOAD_FLASH_WRITE_TIMEOUT_MS = 60000;
-static const uint32_t I2C_PAYLOAD_FLASH_FINALIZE_TIMEOUT_MS = 180000;
 static const uint32_t I2C_PAYLOAD_FLASH_CHUNK_GAP_MS = 50;
 static const uint32_t I2C_PAYLOAD_FLASH_SECTOR_LEN = 4096;
 static const uint32_t I2C_PAYLOAD_FLASH_SECTOR_SETTLE_MS = 500;
 static const uint32_t I2C_PAYLOAD_FLASH_FINAL_SETTLE_MS = 3000;
-static const uint32_t I2C_PAYLOAD_FLASH_FINAL_POLL_MS = 500;
+static const uint32_t I2C_PAYLOAD_FLASH_FINAL_SETTLE_PER_KB_MS = 2;
+static const uint32_t I2C_PAYLOAD_FLASH_FINAL_SETTLE_MAX_MS = 15000;
 static const uint32_t SPI_FORWARD_MODE_SETTLE_MS = 20;
 static const uint32_t DWP_AP_VC_HSIZE = 0x0FD8u;
 static const uint32_t DWP_AP_VC_VSIZE = 0x0BE0u;
@@ -3295,24 +3295,31 @@ static bool run_i2c_blob_transfer(uint32_t operation,
         }
     }
 
-    uint32_t timeout_ms = writes_flash
-                              ? I2C_PAYLOAD_FLASH_FINALIZE_TIMEOUT_MS
-                              : SPI_FLASH_FINALIZE_TIMEOUT_MS;
-    if (writes_flash && g_i2c_driver.slp_ms) {
-        printf("%s wait flash finalize settle %u ms before status polling\n",
-               label,
-               (unsigned)I2C_PAYLOAD_FLASH_FINAL_SETTLE_MS);
-        g_i2c_driver.slp_ms(I2C_PAYLOAD_FLASH_FINAL_SETTLE_MS);
+    if (writes_flash) {
+        uint32_t flash_settle_ms =
+            I2C_PAYLOAD_FLASH_FINAL_SETTLE_MS +
+            ((payload_size + 1023u) / 1024u) *
+                I2C_PAYLOAD_FLASH_FINAL_SETTLE_PER_KB_MS;
+        if (flash_settle_ms > I2C_PAYLOAD_FLASH_FINAL_SETTLE_MAX_MS) {
+            flash_settle_ms = I2C_PAYLOAD_FLASH_FINAL_SETTLE_MAX_MS;
+        }
+        if (g_i2c_driver.slp_ms) {
+            printf("%s wait flash finalize settle %u ms before returning\n",
+                   label,
+                   (unsigned)flash_settle_ms);
+            g_i2c_driver.slp_ms(flash_settle_ms);
+        }
+        printf("%s flash payload fully sent; skip final CSI-I2C status polling to avoid "
+               "post-flash bus stalls\n",
+               label);
+        return true;
     }
+
+    uint32_t timeout_ms = SPI_FLASH_FINALIZE_TIMEOUT_MS;
     if (operation == I2C_PAYLOAD_OP_MODEL_TO_MEMORY) {
         timeout_ms += ((payload_size + 1023u) / 1024u) * SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS;
     }
-    bool final_status_ok = writes_flash
-                               ? wait_for_spi_flash_terminal_with_poll(timeout_ms,
-                                                                       I2C_PAYLOAD_FLASH_FINAL_POLL_MS,
-                                                                       &flash_status)
-                               : wait_for_spi_flash_terminal(timeout_ms,
-                                                             &flash_status);
+    bool final_status_ok = wait_for_spi_flash_terminal(timeout_ms, &flash_status);
     if (!final_status_ok) {
         printf("%s timeout waiting i2c payload result after %u ms\n",
                label,
