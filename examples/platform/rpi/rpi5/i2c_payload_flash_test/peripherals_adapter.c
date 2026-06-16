@@ -4,7 +4,6 @@
 #include <fcntl.h>
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
-#include <linux/spi/spidev.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,15 +13,18 @@
 #include <unistd.h>
 
 #include "ai_driver.h"
+#include "ai_regs.h"
+#include "common_regs.h"
 #include "g_config.h"
-#include "log.h"
 
-#define I2C_XFER_RETRY_COUNT 12
+#define I2C_XFER_RETRY_COUNT 32
+#define I2C_PAYLOAD_FLOW_RETRY_COUNT 1
 #define I2C_XFER_RETRY_DELAY_US 1000
 
 static int s_i2c_fd = -1;
-static int s_spi_fd = -1;
+static char s_i2c_device_path[64];
 static uint32_t s_i2c_recovered_log_count = 0;
+static uint32_t s_i2c_status_poll_failure_log_count = 0;
 
 static int rpi5_open_device(const char *path, int flags)
 {
@@ -57,84 +59,54 @@ static uint16_t i2c_reg_value(const uint8_t *reg, uint8_t reg_num)
     return value;
 }
 
-static void i2c_log_recovered(const char *op, uint8_t addr, uint16_t reg, uint32_t attempt)
+static void i2c_log_recovered(const char *op,
+                              uint8_t addr,
+                              uint16_t reg,
+                              uint32_t attempt)
 {
     if (attempt == 0 || s_i2c_recovered_log_count >= 12) {
         return;
     }
     ++s_i2c_recovered_log_count;
-    printf("[I2C] %s recovered addr=0x%02x reg=0x%04x attempt=%lu\n",
+    printf("[CSI-I2C] %s recovered addr=0x%02x reg=0x%04x attempt=%lu\n",
            op,
            addr,
            reg,
            (unsigned long)(attempt + 1u));
 }
 
-static int configure_spi_device(void)
+static bool i2c_is_payload_status_reg(uint16_t reg)
 {
-    uint8_t mode = RPI5_SPI_MODE;
-    uint8_t bits = RPI5_SPI_BITS_PER_WORD;
-    uint32_t speed = RPI5_SPI_SPEED_HZ;
-
-    if (ioctl(s_spi_fd, SPI_IOC_WR_MODE, &mode) < 0 ||
-        ioctl(s_spi_fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0 ||
-        ioctl(s_spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
-        printf("[SPI] configure %s failed: %s\n", RPI5_SPI_DEVICE, strerror(errno));
-        return -1;
-    }
-
-    printf("SPI initialized device=%s mode=%u bits=%u speed=%lu Hz\n",
-           RPI5_SPI_DEVICE,
-           (unsigned)mode,
-           (unsigned)bits,
-           (unsigned long)speed);
-    return 0;
+    return (reg >= 0x0911u && reg <= 0x0915u) ||
+           reg == 0x0917u ||
+           reg == 0x0918u;
 }
 
-bool init_peripherals(void)
+static bool i2c_is_payload_flow_reg(uint16_t reg)
 {
-    if (!init_i2c_peripheral()) {
-        return false;
-    }
-
-    s_spi_fd = rpi5_open_device(RPI5_SPI_DEVICE, O_RDWR | O_CLOEXEC);
-    if (s_spi_fd < 0) {
-        printf("[SPI] open %s failed: %s\n", RPI5_SPI_DEVICE, strerror(errno));
-        close_peripherals();
-        return false;
-    }
-    if (configure_spi_device() < 0) {
-        close_peripherals();
-        return false;
-    }
-
-    return true;
+    return i2c_is_payload_status_reg(reg) || reg == I2C_PAYLOAD_DATA_REG;
 }
 
-bool init_i2c_peripheral(void)
+static uint32_t i2c_retry_count_for_reg(uint16_t reg)
 {
-    if (s_i2c_fd >= 0) {
+    return i2c_is_payload_flow_reg(reg)
+               ? I2C_PAYLOAD_FLOW_RETRY_COUNT
+               : I2C_XFER_RETRY_COUNT;
+}
+
+static void i2c_note_xfer_success(uint16_t reg)
+{
+    (void)reg;
+}
+
+static bool i2c_should_log_xfer_failure(uint16_t reg)
+{
+    if (!i2c_is_payload_flow_reg(reg)) {
         return true;
     }
-    s_i2c_fd = rpi5_open_device(RPI5_I2C_DEVICE, O_RDWR | O_CLOEXEC);
-    if (s_i2c_fd < 0) {
-        printf("[I2C] open %s failed: %s\n", RPI5_I2C_DEVICE, strerror(errno));
-        return false;
-    }
-    printf("I2C initialized device=%s addr=0x%02x\n", RPI5_I2C_DEVICE, RPI5_I2C_TARGET_ADDR);
-    return true;
-}
-
-void close_peripherals(void)
-{
-    if (s_spi_fd >= 0) {
-        close(s_spi_fd);
-        s_spi_fd = -1;
-    }
-    if (s_i2c_fd >= 0) {
-        close(s_i2c_fd);
-        s_i2c_fd = -1;
-    }
+    ++s_i2c_status_poll_failure_log_count;
+    return s_i2c_status_poll_failure_log_count <= 1u ||
+           (s_i2c_status_poll_failure_log_count % 128u) == 0u;
 }
 
 static int32_t i2c_w_blocking(uint8_t addr,
@@ -176,6 +148,7 @@ static int32_t i2c_w_blocking(uint8_t addr,
     for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 1) {
+            i2c_note_xfer_success(reg_value);
             i2c_log_recovered("write", addr, reg_value, attempt);
             return i2c_msg.len;
         }
@@ -183,7 +156,8 @@ static int32_t i2c_w_blocking(uint8_t addr,
         rpi5_sleep_us(I2C_XFER_RETRY_DELAY_US * (attempt + 1u));
     }
 
-    printf("[I2C] write failed addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
+    printf("[CSI-I2C] write failed dev=%s addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
+           s_i2c_device_path,
            addr,
            reg_value,
            (unsigned long)nbytes,
@@ -229,11 +203,13 @@ static int32_t i2c_r_blocking(uint8_t addr,
     };
 
     const uint16_t reg_value = i2c_reg_value(reg, reg_num);
+    const uint32_t retry_count = i2c_retry_count_for_reg(reg_value);
     int last_errno = 0;
 
-    for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
+    for (uint32_t attempt = 0; attempt < retry_count; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 2) {
+            i2c_note_xfer_success(reg_value);
             i2c_log_recovered("read", addr, reg_value, attempt);
             return nbytes;
         }
@@ -241,11 +217,14 @@ static int32_t i2c_r_blocking(uint8_t addr,
         rpi5_sleep_us(I2C_XFER_RETRY_DELAY_US * (attempt + 1u));
     }
 
-    printf("[I2C] read failed addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
-           addr,
-           reg_value,
-           (unsigned long)nbytes,
-           strerror(last_errno));
+    if (i2c_should_log_xfer_failure(reg_value)) {
+        printf("[CSI-I2C] read failed dev=%s addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
+               s_i2c_device_path,
+               addr,
+               reg_value,
+               (unsigned long)nbytes,
+               strerror(last_errno));
+    }
     return -1;
 }
 
@@ -269,7 +248,7 @@ static int32_t i2c_w(uint8_t addr, uint16_t reg, uint32_t data, uint32_t mode)
     case 4:
         return i2c_w_blocking(addr, reg_buf, 2, buf, 4);
     default:
-        printf("[I2C] unsupported write size=%lu\n", (unsigned long)mode);
+        printf("[CSI-I2C] unsupported write size=%lu\n", (unsigned long)mode);
         return -1;
     }
 }
@@ -303,9 +282,11 @@ static int32_t i2c_w_raw_blocking(uint8_t addr,
     };
 
     int last_errno = 0;
-    for (uint32_t attempt = 0; attempt < I2C_XFER_RETRY_COUNT; ++attempt) {
+    const uint32_t retry_count = i2c_retry_count_for_reg(reg);
+    for (uint32_t attempt = 0; attempt < retry_count; ++attempt) {
         int ret = ioctl(s_i2c_fd, I2C_RDWR, &ioctl_data);
         if (ret == 1) {
+            i2c_note_xfer_success(reg);
             i2c_log_recovered("write-block", addr, reg, attempt);
             free(msg);
             return (int32_t)nbytes;
@@ -314,11 +295,14 @@ static int32_t i2c_w_raw_blocking(uint8_t addr,
         rpi5_sleep_us(I2C_XFER_RETRY_DELAY_US * (attempt + 1u));
     }
 
-    printf("[I2C] write-block failed addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
-           addr,
-           reg,
-           (unsigned long)nbytes,
-           strerror(last_errno));
+    if (i2c_should_log_xfer_failure(reg)) {
+        printf("[CSI-I2C] write-block failed dev=%s addr=0x%02x reg=0x%04x len=%lu errno=%s\n",
+               s_i2c_device_path,
+               addr,
+               reg,
+               (unsigned long)nbytes,
+               strerror(last_errno));
+    }
     free(msg);
     return -1;
 }
@@ -349,7 +333,7 @@ static int32_t i2c_r(uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
                 (uint32_t)buf[3];
         break;
     default:
-        printf("[I2C] unsupported read size=%lu\n", (unsigned long)mode);
+        printf("[CSI-I2C] unsupported read size=%lu\n", (unsigned long)mode);
         ret = -1;
         break;
     }
@@ -357,130 +341,147 @@ static int32_t i2c_r(uint8_t addr, uint16_t reg, uint32_t *data, uint32_t mode)
     return ret;
 }
 
-int pivariety_i2c_bridge_write(uint16_t addr, uint32_t val, uint32_t size)
+static bool probe_current_i2c_device(void)
 {
-    int ret = i2c_w(RPI5_I2C_TARGET_ADDR, addr, val, size);
-    LOG_DEBUG("[pivariety_i2c_bridge_write], addr: 0x%X, val: 0x%X, size: %lu ec: %d\n",
-              addr,
-              val,
-              (unsigned long)size,
-              ret);
-    return ret;
+    uint32_t version = 0;
+    uint32_t device_id = 0;
+    if (i2c_r(I2C_PAYLOAD_I2C_TARGET_ADDR, DEVICE_VERSION_REG, &version, 4) < 0) {
+        printf("[CSI-I2C] probe failed dev=%s addr=0x%02x reg=DEVICE_VERSION_REG\n",
+               s_i2c_device_path,
+               I2C_PAYLOAD_I2C_TARGET_ADDR);
+        return false;
+    }
+    if (i2c_r(I2C_PAYLOAD_I2C_TARGET_ADDR, DEVICE_ID_REG, &device_id, 4) < 0) {
+        printf("[CSI-I2C] probe failed dev=%s addr=0x%02x reg=DEVICE_ID_REG\n",
+               s_i2c_device_path,
+               I2C_PAYLOAD_I2C_TARGET_ADDR);
+        return false;
+    }
+    printf("[CSI-I2C] found module dev=%s addr=0x%02x device_id=0x%08lx version=0x%08lx\n",
+           s_i2c_device_path,
+           I2C_PAYLOAD_I2C_TARGET_ADDR,
+           (unsigned long)device_id,
+           (unsigned long)version);
+    return true;
 }
 
-int pivariety_i2c_bridge_write_block(uint16_t addr, const uint8_t *data, uint32_t len)
+static bool try_open_i2c_device(const char *path, bool require_probe)
 {
-    int ret = i2c_w_raw_blocking(RPI5_I2C_TARGET_ADDR, addr, data, len);
-    LOG_DEBUG("[pivariety_i2c_bridge_write_block], addr: 0x%X, len: %lu ec: %d\n",
-              addr,
-              (unsigned long)len,
-              ret);
-    return ret;
+    if (!path || path[0] == '\0') {
+        return false;
+    }
+
+    printf("[CSI-I2C] try device %s addr=0x%02x\n",
+           path,
+           I2C_PAYLOAD_I2C_TARGET_ADDR);
+    int fd = rpi5_open_device(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        printf("[CSI-I2C] open %s failed: %s\n", path, strerror(errno));
+        return false;
+    }
+
+    s_i2c_fd = fd;
+    snprintf(s_i2c_device_path, sizeof(s_i2c_device_path), "%s", path);
+    if (!require_probe) {
+        printf("[CSI-I2C] opened configured device %s, probing module...\n",
+               s_i2c_device_path);
+        return true;
+    }
+    printf("[CSI-I2C] opened %s, probing module...\n", s_i2c_device_path);
+    if (probe_current_i2c_device()) {
+        return true;
+    }
+
+    printf("[CSI-I2C] no module response on %s, trying next candidate\n",
+           s_i2c_device_path);
+    close(s_i2c_fd);
+    s_i2c_fd = -1;
+    s_i2c_device_path[0] = '\0';
+    return false;
+}
+
+bool init_i2c_peripheral(void)
+{
+    if (s_i2c_fd >= 0) {
+        return true;
+    }
+
+    if (I2C_PAYLOAD_I2C_DEVICE[0] != '\0') {
+        if (!try_open_i2c_device(I2C_PAYLOAD_I2C_DEVICE, false)) {
+            printf("[CSI-I2C] open configured device %s failed: %s\n",
+                   I2C_PAYLOAD_I2C_DEVICE,
+                   strerror(errno));
+            return false;
+        }
+        if (!probe_current_i2c_device()) {
+            printf("[CSI-I2C] configured device %s opened, but module addr=0x%02x did not respond\n",
+                   I2C_PAYLOAD_I2C_DEVICE,
+                   I2C_PAYLOAD_I2C_TARGET_ADDR);
+            close_peripherals();
+            return false;
+        }
+        return true;
+    }
+
+    printf("[CSI-I2C] auto scan candidates: %s\n", I2C_PAYLOAD_I2C_CANDIDATES);
+    char candidates[512];
+    snprintf(candidates, sizeof(candidates), "%s", I2C_PAYLOAD_I2C_CANDIDATES);
+
+    char *save = NULL;
+    for (char *path = strtok_r(candidates, ":", &save);
+         path != NULL;
+         path = strtok_r(NULL, ":", &save)) {
+        if (try_open_i2c_device(path, true)) {
+            return true;
+        }
+    }
+
+    printf("[CSI-I2C] no module found at addr=0x%02x on I2C candidates: %s\n",
+           I2C_PAYLOAD_I2C_TARGET_ADDR,
+           I2C_PAYLOAD_I2C_CANDIDATES);
+    printf("[CSI-I2C] specify the bus with: cmake -S . -B build -DI2C_PAYLOAD_I2C_DEVICE=/dev/i2c-X\n");
+    return false;
+}
+
+void close_peripherals(void)
+{
+    if (s_i2c_fd >= 0) {
+        close(s_i2c_fd);
+        s_i2c_fd = -1;
+    }
+    s_i2c_device_path[0] = '\0';
+}
+
+const char *peripherals_i2c_device_path(void)
+{
+    return s_i2c_device_path;
+}
+
+int pivariety_i2c_bridge_write(uint16_t addr, uint32_t val, uint32_t size)
+{
+    return i2c_w(I2C_PAYLOAD_I2C_TARGET_ADDR, addr, val, size);
+}
+
+int pivariety_i2c_bridge_write_block(uint16_t addr,
+                                     const uint8_t *data,
+                                     uint32_t len)
+{
+    return i2c_w_raw_blocking(I2C_PAYLOAD_I2C_TARGET_ADDR, addr, data, len);
 }
 
 int pivariety_i2c_bridge_read(uint16_t addr, uint32_t *val, uint32_t size)
 {
-    int ret = i2c_r(RPI5_I2C_TARGET_ADDR, addr, val, size);
-    LOG_DEBUG("[pivariety_i2c_bridge_read], addr: 0x%X, val: 0x%X, size: %lu ec: %d\n",
-              addr,
-              val ? *val : 0,
-              (unsigned long)size,
-              ret);
-    return ret;
-}
-
-static int spi_transfer_bytes(const uint8_t *tx, uint8_t *rx, uint32_t len)
-{
-    if (s_spi_fd < 0 || len == 0 || (!tx && !rx)) {
-        return -1;
-    }
-
-    const uint32_t max_chunk = RPI5_SPI_MAX_TRANSFER_BYTES;
-    const uint32_t transfer_count = (len + max_chunk - 1u) / max_chunk;
-    struct spi_ioc_transfer *xfers =
-        (struct spi_ioc_transfer *)calloc(transfer_count, sizeof(*xfers));
-    uint8_t *zero_tx = NULL;
-
-    if (!xfers) {
-        return -1;
-    }
-
-    if (!tx) {
-        zero_tx = (uint8_t *)calloc(max_chunk, 1);
-        if (!zero_tx) {
-            free(xfers);
-            return -1;
-        }
-    }
-
-    uint32_t offset = 0;
-    for (uint32_t i = 0; i < transfer_count; ++i) {
-        uint32_t chunk = len - offset;
-        if (chunk > max_chunk) {
-            chunk = max_chunk;
-        }
-
-        xfers[i].tx_buf = (uintptr_t)(tx ? (tx + offset) : zero_tx);
-        xfers[i].rx_buf = (uintptr_t)(rx ? (rx + offset) : NULL);
-        xfers[i].len = chunk;
-        xfers[i].speed_hz = RPI5_SPI_SPEED_HZ;
-        xfers[i].delay_usecs = RPI5_SPI_DELAY_USECS;
-        xfers[i].bits_per_word = RPI5_SPI_BITS_PER_WORD;
-
-        offset += chunk;
-    }
-
-    int ret = ioctl(s_spi_fd, SPI_IOC_MESSAGE(transfer_count), xfers);
-    free(zero_tx);
-    free(xfers);
-
-    if (ret < 1) {
-        printf("[SPI] transfer failed len=%lu chunks=%lu errno=%s\n",
-               (unsigned long)len,
-               (unsigned long)transfer_count,
-               strerror(errno));
-        return -1;
-    }
-
-    return (int)len;
-}
-
-int pivariety_spi_bridge_write(uint8_t *data, uint32_t len)
-{
-    if (!data || len == 0) {
-        return -1;
-    }
-    return spi_transfer_bytes(data, NULL, len);
-}
-
-int pivariety_spi_bridge_read(uint8_t *data, uint32_t len)
-{
-    if (!data || len == 0) {
-        return -1;
-    }
-    return spi_transfer_bytes(NULL, data, len);
+    return i2c_r(I2C_PAYLOAD_I2C_TARGET_ADDR, addr, val, size);
 }
 
 bool bind_i2c_peripherals_api(void)
 {
-    i2c_driver i2c_drv = {};
+    i2c_driver i2c_drv = {0};
     i2c_drv.write = pivariety_i2c_bridge_write;
     i2c_drv.read = pivariety_i2c_bridge_read;
     i2c_drv.write_block = pivariety_i2c_bridge_write_block;
     i2c_drv.slp_ms = rpi5_sleep_ms;
     i2c_drv.slp_us = rpi5_sleep_us;
     register_i2c_driver(i2c_drv);
-    return true;
-}
-
-bool bind_peripherals_api(void)
-{
-    bind_i2c_peripherals_api();
-
-    spi_driver spi_drv = {};
-    spi_drv.write = pivariety_spi_bridge_write;
-    spi_drv.read = pivariety_spi_bridge_read;
-    register_spi_driver(spi_drv);
-
     return true;
 }

@@ -11,7 +11,9 @@ This RPi5 example uses two physical paths to the IMX500 camera module:
   header.
 
 Both paths are required if you want to preview the image and run the
-`spi_receive_integration_test` metadata example.
+`spi_receive_integration_test` metadata example. The
+`i2c_payload_flash_test` example uses the I2C lines inside the MIPI CSI/FPC
+camera connector, so it does not require the extra 8-pin header I2C/SPI wiring.
 
 ### MIPI CSI Connection
 
@@ -47,6 +49,9 @@ in [GPIO Wiring](#gpio-wiring). This provides:
 - `3.3 V` power and common `GND`.
 
 Do not connect any camera signal pin to `5 V`.
+
+The I2C-only payload direct-load and flash test does not use this 8-pin header
+wiring; it talks through the MIPI CSI/FPC connector I2C bus instead.
 
 ## Get Image
 
@@ -197,8 +202,50 @@ Run it on the Raspberry Pi 5:
 sudo ./build/spi_receive_integration_test
 ```
 
+Build the I2C-only payload direct-load and flash test:
+
+```sh
+cd examples/platform/rpi/rpi5/i2c_payload_flash_test
+cmake -S . -B build
+cmake --build build -j
+```
+
+This example embeds the bundled HigherHRNet model by default:
+
+- `tools/assets/models/higherhrnet/network.fpk`
+- `tools/assets/models/higherhrnet/network_info.txt`
+
+By default this test auto-scans common I2C device candidates such as
+`/dev/i2c-10`, `/dev/i2c-11`, and `/dev/i2c-1`.
+If your Raspberry Pi OS exposes the camera connector on a different bus, set it
+explicitly:
+
+```sh
+cmake -S . -B build -DI2C_PAYLOAD_I2C_DEVICE=/dev/i2c-X
+cmake --build build -j
+```
+
+Run individual I2C payload direct-load and flash operations:
+
+```sh
+sudo ./build/i2c_payload_flash_test reset
+sudo ./build/i2c_payload_flash_test model-direct
+sudo ./build/i2c_payload_flash_test nninfo-direct
+sudo ./build/i2c_payload_flash_test all-direct
+sudo ./build/i2c_payload_flash_test model-flash
+sudo ./build/i2c_payload_flash_test nninfo-flash
+sudo ./build/i2c_payload_flash_test all-flash
+sudo ./build/i2c_payload_flash_test flash-load
+sudo ./build/i2c_payload_flash_test flash-cycle
+```
+
+The default action is `flash-cycle`, which writes the bundled model and
+`network_info` to module flash over PiVariety I2C payload, then requests a
+flash load through the normal `LOAD_MODEL_FROM_FLASH` flow. Other useful
+actions are `status` and `reset`. The `model-direct`, `all-direct`, and flash
+write actions run the SDK reset-only path before sending payload data over I2C.
+
 The default settings live in
-`examples/platform/rpi/rpi5/spi_receive_integration_test/g_config.h`.
-Change `RPI5_I2C_DEVICE`, `RPI5_SPI_DEVICE`, or `RPI5_SPI_SPEED_HZ` there if
-your Pi exposes the bus with different device names or you need a slower SPI
-clock.
+`examples/platform/rpi/rpi5/i2c_payload_flash_test/g_config.h`.
+Change `I2C_PAYLOAD_I2C_DEVICE` or `I2C_PAYLOAD_I2C_CANDIDATES` there if your
+Pi exposes the camera I2C bus with different device names.

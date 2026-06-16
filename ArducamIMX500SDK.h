@@ -247,6 +247,11 @@ typedef enum {
 	SPI_FLASH_RESULT_CRC_MISMATCH = 6,
 	SPI_FLASH_RESULT_PARSE_FAIL = 7,
 	SPI_FLASH_RESULT_FLASH_BLOB_MISSING = 8,
+	SPI_FLASH_RESULT_BUSY = 9,
+	SPI_FLASH_RESULT_BAD_OPERATION = 10,
+	SPI_FLASH_RESULT_NOT_SUPPORTED = 11,
+	SPI_FLASH_RESULT_NO_MEMORY = 12,
+	SPI_FLASH_RESULT_IMX500_DOWNLOAD_FAIL = 13,
 } spi_flash_op_result_t;
 
 /** @brief Summary of a model or network-info flash write request. */
@@ -479,6 +484,15 @@ int get_sensor_device_id(char *out, size_t out_size);
 bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
 
 /**
+ * @brief Reset the IMX500 module and wait until loader/main firmware is ready.
+ * @return `true` if reset completed and boot status returned to 1.
+ *
+ * This is the reset-only part shared by @ref open. It does not load a model
+ * from SPI or flash.
+ */
+bool reset_imx500_module(void);
+
+/**
  * @brief Initialize the module, load model/network info, and configure stream formats.
  * @param nn_fw Network weights blob. Pass `NULL` for flash boot.
  * @param nn_fw_size Size of @p nn_fw in bytes.
@@ -532,6 +546,12 @@ void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header
 bool get_spi_flash_status(spi_flash_status_t *status);
 
 /**
+ * @brief Abort any active I2C payload import session and wait until it returns to idle.
+ * @return `true` if the module acknowledged the abort and the payload state is idle.
+ */
+bool abort_i2c_payload_operation(void);
+
+/**
  * @brief Stream a model blob to module flash over SPI.
  * @param model Pointer to the model payload.
  * @param model_size Model size in bytes.
@@ -554,6 +574,24 @@ bool write_nn_info_to_cam_flash(const uint8_t *nn_info, uint32_t nn_info_size);
  * @return `true` if the module accepted the blob.
  */
 bool load_nn_info_to_cam_memory(const uint8_t *nn_info, uint32_t nn_info_size);
+/**
+ * @brief Stream a model blob to module flash over PiVariety I2C payload.
+ * @param model Pointer to the model payload.
+ * @param model_size Model size in bytes.
+ * @return `true` if the transfer and module-side validation succeeded.
+ */
+bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size);
+
+/**
+ * @brief Stream a network-info blob to module flash over PiVariety I2C payload.
+ * @param nn_info Pointer to the network-info payload.
+ * @param nn_info_size Network-info size in bytes.
+ * @return `true` if the transfer and module-side validation succeeded.
+ */
+bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
+
+bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
+bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size);
 
 /** @brief Cached network descriptors parsed from the current network-info blob. */
 extern sc_dnn_nw_info_t network_info[MAX_NUM_OF_NETWORKS];

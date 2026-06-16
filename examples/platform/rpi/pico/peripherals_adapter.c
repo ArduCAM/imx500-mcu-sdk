@@ -319,7 +319,7 @@ int pivariety_spi_bridge_read(uint8_t *data, uint32_t len) {
 }
 
 bool bind_peripherals_api() {
-  i2c_driver i2c_drv;
+  i2c_driver i2c_drv = {};
   i2c_drv.write = pivariety_i2c_bridge_write;
   i2c_drv.read = pivariety_i2c_bridge_read;
   i2c_drv.slp_ms = sleep_ms;
