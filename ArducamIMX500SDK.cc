@@ -2091,9 +2091,7 @@ imx500_err_t imx500_res_read(uint32_t cmd_id,
             return IMX500_CMD_ERR_I2C_READ;
         }
         if (imx500_cmd_running_status == 0) {
-            printf("imx500_res_read failed: cmd=0x%08" PRIX32 " not effective elapsed=%u/%u ms\n",
-                   cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
-            return IMX500_CMD_ERR_NOT_EFFECTIVE;
+            continue;
         } else if (imx500_cmd_running_status == 1) {
             break;
         } else if (imx500_cmd_running_status == 2) {
@@ -2103,6 +2101,11 @@ imx500_err_t imx500_res_read(uint32_t cmd_id,
         } else if (imx500_cmd_running_status == 3) {
             continue;
         }
+    }
+    if (imx500_cmd_running_status == 0) {
+        printf("imx500_res_read failed: cmd=0x%08" PRIX32 " not effective elapsed=%u/%u ms\n",
+               cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
+        return IMX500_CMD_ERR_NOT_EFFECTIVE;
     }
     if (imx500_cmd_running_status != 1) {
         printf("imx500_res_read failed: cmd=0x%08" PRIX32 " timeout wait_ms=%u last_running_status=%" PRIu32 "\n",
@@ -2155,9 +2158,7 @@ static imx500_err_t imx500_res_write(uint32_t cmd_id,
             return IMX500_CMD_ERR_I2C_READ;
         }
         if (imx500_cmd_running_status == 0) {
-            printf("imx500_res_write failed: cmd=0x%08" PRIX32 " not effective elapsed=%u/%u ms\n",
-                   cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
-            return IMX500_CMD_ERR_NOT_EFFECTIVE;
+            continue;
         } else if (imx500_cmd_running_status == 1) {
             break;
         } else if (imx500_cmd_running_status == 2) {
@@ -2167,6 +2168,11 @@ static imx500_err_t imx500_res_write(uint32_t cmd_id,
         } else if (imx500_cmd_running_status == 3) {
             continue;
         }
+    }
+    if (imx500_cmd_running_status == 0) {
+        printf("imx500_res_write failed: cmd=0x%08" PRIX32 " not effective elapsed=%u/%u ms\n",
+               cmd_id, (unsigned)elapsed, (unsigned)wait_ms);
+        return IMX500_CMD_ERR_NOT_EFFECTIVE;
     }
     if (imx500_cmd_running_status != 1) {
         printf("imx500_res_write failed: cmd=0x%08" PRIX32 " timeout wait_ms=%u last_running_status=%" PRIu32 "\n",
