@@ -230,6 +230,18 @@ static bool reset_module_for_payload_transfer(const char *reason)
     return true;
 }
 
+static bool prepare_flash_payload_without_module_reset(const char *reason)
+{
+    std::printf("Prepare I2C payload flash write before %s without SDK reset...\n",
+                reason);
+    if (!abort_stale_payload_if_needed(reason)) {
+        dump_module_snapshot("stale payload abort failed before flash write");
+        return false;
+    }
+    dump_module_snapshot("after flash payload prep");
+    return true;
+}
+
 static void countdown_before_flash_write(const char *label)
 {
     std::printf("\n%s will start in %u seconds. Open the firmware serial console now.\n",
@@ -294,7 +306,7 @@ static bool run_action(const char *action)
 
     if (std::strcmp(action, "model-flash") == 0) {
         dump_module_snapshot("before model-flash");
-        if (!reset_module_for_payload_transfer("model-flash")) {
+        if (!prepare_flash_payload_without_module_reset("model-flash")) {
             return false;
         }
         countdown_before_flash_write("model flash write");
@@ -310,7 +322,7 @@ static bool run_action(const char *action)
 
     if (std::strcmp(action, "nninfo-flash") == 0) {
         dump_module_snapshot("before nninfo-flash");
-        if (!reset_module_for_payload_transfer("nninfo-flash")) {
+        if (!prepare_flash_payload_without_module_reset("nninfo-flash")) {
             return false;
         }
         countdown_before_flash_write("network_info flash write");
@@ -326,7 +338,7 @@ static bool run_action(const char *action)
 
     if (std::strcmp(action, "all-flash") == 0) {
         dump_module_snapshot("before all-flash");
-        if (!reset_module_for_payload_transfer("all-flash")) {
+        if (!prepare_flash_payload_without_module_reset("all-flash")) {
             return false;
         }
         countdown_before_flash_write("all-flash write sequence");
