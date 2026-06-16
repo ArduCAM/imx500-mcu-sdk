@@ -47,7 +47,7 @@ endfunction()
 set(IMX500_MCU_SDK_C_SRC_FILES
     ${CMAKE_CURRENT_LIST_DIR}/ArducamIMX500SDK.c
     ${CMAKE_CURRENT_LIST_DIR}/ai_driver.c
-    ${CMAKE_CURRENT_LIST_DIR}/tools/third_party/flatcc/src/runtime/verifier.c
+    ${CMAKE_CURRENT_LIST_DIR}/third_party/flatcc/src/runtime/verifier.c
 )
 
 configure_file(
@@ -60,7 +60,7 @@ set(IMX500_MCU_SDK_C_INCLUDE_DIRS
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_LIST_DIR}/apParams_c
-    ${CMAKE_CURRENT_LIST_DIR}/tools/third_party/flatcc/include
+    ${CMAKE_CURRENT_LIST_DIR}/third_party/flatcc/include
 )
 
 include_directories(

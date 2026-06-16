@@ -8,7 +8,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 add_executable(parse_apparams_metadata_flatcc
     ${CMAKE_CURRENT_LIST_DIR}/parse_apparams_metadata.c
-    ${CMAKE_CURRENT_LIST_DIR}/../../third_party/flatcc/src/runtime/verifier.c
+    ${CMAKE_CURRENT_LIST_DIR}/../../../third_party/flatcc/src/runtime/verifier.c
 )
 
 target_include_directories(parse_apparams_metadata_flatcc PRIVATE
@@ -16,7 +16,7 @@ target_include_directories(parse_apparams_metadata_flatcc PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..
     ${CMAKE_CURRENT_LIST_DIR}/../../..
     ${CMAKE_CURRENT_LIST_DIR}/../../../apParams_c
-    ${CMAKE_CURRENT_LIST_DIR}/../../third_party/flatcc/include
+    ${CMAKE_CURRENT_LIST_DIR}/../../../third_party/flatcc/include
 )
 
 if(MSVC)

@@ -4,6 +4,6 @@
 [submodule "third_party/micropython"]
 	path = third_party/micropython
 	url = https://github.com/micropython/micropython.git
-[submodule "tools/third_party/flatcc"]
-	path = tools/third_party/flatcc
+[submodule "third_party/flatcc"]
+	path = third_party/flatcc
 	url = https://github.com/dvidelabs/flatcc.git
