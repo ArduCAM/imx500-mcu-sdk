@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 
 #include "ArducamIMX500SDK.h"
 #include "generated_i2c_payload_assets/higherhrnet_fpk.h"
@@ -13,6 +14,8 @@
 #define MODEL_SIZE          higherhrnet_fpk_size
 #define NNINFO_DATA         higherhrnet_network_info_data
 #define NNINFO_SIZE         higherhrnet_network_info_size
+
+static constexpr unsigned kFlashStartCountdownSeconds = 5;
 
 static void print_usage(const char *argv0)
 {
@@ -227,6 +230,22 @@ static bool reset_module_for_payload_transfer(const char *reason)
     return true;
 }
 
+static void countdown_before_flash_write(const char *label)
+{
+    std::printf("\n%s will start in %u seconds. Open the firmware serial console now.\n",
+                label,
+                kFlashStartCountdownSeconds);
+    for (unsigned seconds_left = kFlashStartCountdownSeconds;
+         seconds_left > 0;
+         --seconds_left) {
+        std::printf("  %u...\n", seconds_left);
+        std::fflush(stdout);
+        sleep(1);
+    }
+    std::printf("Starting %s now.\n\n", label);
+    std::fflush(stdout);
+}
+
 static bool run_action(const char *action)
 {
     if (std::strcmp(action, "status") == 0) {
@@ -278,6 +297,7 @@ static bool run_action(const char *action)
         if (!reset_module_for_payload_transfer("model-flash")) {
             return false;
         }
+        countdown_before_flash_write("model flash write");
         std::printf("Write model to module flash over I2C payload, size=%lu\n",
                     (unsigned long)MODEL_SIZE);
         bool ok = write_model_to_cam_flash_i2c(MODEL_DATA, MODEL_SIZE);
@@ -293,6 +313,7 @@ static bool run_action(const char *action)
         if (!reset_module_for_payload_transfer("nninfo-flash")) {
             return false;
         }
+        countdown_before_flash_write("network_info flash write");
         std::printf("Write network_info to module flash over I2C payload, size=%lu\n",
                     (unsigned long)NNINFO_SIZE);
         bool ok = write_nn_info_to_cam_flash_i2c(NNINFO_DATA, NNINFO_SIZE);
@@ -308,6 +329,7 @@ static bool run_action(const char *action)
         if (!reset_module_for_payload_transfer("all-flash")) {
             return false;
         }
+        countdown_before_flash_write("all-flash write sequence");
         std::printf("Write model to module flash over I2C payload, size=%lu\n",
                     (unsigned long)MODEL_SIZE);
         if (!write_model_to_cam_flash_i2c(MODEL_DATA, MODEL_SIZE)) {
