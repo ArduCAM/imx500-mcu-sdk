@@ -27,6 +27,7 @@
 #define I2C_PAYLOAD_OP_MODEL_TO_MEMORY    4
 #define I2C_PAYLOAD_OP_MODEL_TO_FLASH     5
 #define I2C_PAYLOAD_OP_NN_INFO_TO_FLASH   6
+#define I2C_PAYLOAD_OP_COMMIT_BLOCK       7
 
 #define IMX500_COMMAND_GET_ES_VER                                                       (IMX500_COMMAND_BASE | 1)
 #define IMX500_COMMAND_GET_LOADER_FW_VER                                                (IMX500_COMMAND_BASE | 2)
