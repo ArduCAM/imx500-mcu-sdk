@@ -18,7 +18,7 @@
 #include "g_config.h"
 
 #define I2C_XFER_RETRY_COUNT 32
-#define I2C_PAYLOAD_FLOW_RETRY_COUNT 1
+#define I2C_PAYLOAD_FLOW_RETRY_COUNT 3
 #define I2C_XFER_RETRY_DELAY_US 1000
 
 static int s_i2c_fd = -1;

@@ -66,6 +66,8 @@ static const uint32_t SPI_FLASH_RECEIVER_ARM_GUARD_MS = 10;
 static const uint32_t I2C_PAYLOAD_DEFAULT_CHUNK_LEN = 4096;
 static const uint32_t I2C_PAYLOAD_FALLBACK_CHUNK_LEN = 4;
 static const uint32_t I2C_PAYLOAD_DRAIN_TIMEOUT_MS = 5000;
+static const uint32_t I2C_PAYLOAD_FLASH_FINALIZE_QUIET_MS = 500;
+static const uint32_t I2C_PAYLOAD_FLASH_FINALIZE_PER_KB_TIMEOUT_MS = 25;
 static const uint32_t SPI_FORWARD_MODE_SETTLE_MS = 20;
 static const uint32_t DWP_AP_VC_HSIZE = 0x0FD8u;
 static const uint32_t DWP_AP_VC_VSIZE = 0x0BE0u;
@@ -3046,6 +3048,9 @@ static bool run_i2c_blob_transfer(uint32_t operation,
     if (!wait_for_boot_status(1, 10000, label)) {
         return false;
     }
+    const bool flash_operation =
+        operation == I2C_PAYLOAD_OP_MODEL_TO_FLASH ||
+        operation == I2C_PAYLOAD_OP_NN_INFO_TO_FLASH;
 
     spi_flash_status_t flash_status = {};
     if (!get_spi_flash_status(&flash_status)) {
@@ -3244,9 +3249,16 @@ static bool run_i2c_blob_transfer(uint32_t operation,
         }
     }
 
+    if (flash_operation && g_i2c_driver.slp_ms) {
+        g_i2c_driver.slp_ms(I2C_PAYLOAD_FLASH_FINALIZE_QUIET_MS);
+    }
+
     uint32_t timeout_ms = SPI_FLASH_FINALIZE_TIMEOUT_MS;
     if (operation == I2C_PAYLOAD_OP_MODEL_TO_MEMORY) {
         timeout_ms += ((payload_size + 1023u) / 1024u) * SPI_FLASH_TRANSFER_PER_KB_TIMEOUT_MS;
+    } else if (flash_operation) {
+        timeout_ms += ((payload_size + 1023u) / 1024u) *
+                      I2C_PAYLOAD_FLASH_FINALIZE_PER_KB_TIMEOUT_MS;
     }
     bool final_status_ok = wait_for_spi_flash_terminal(timeout_ms, &flash_status);
     if (!final_status_ok) {
