@@ -1,4 +1,4 @@
-# MicroPython IMX500 SPI Receive Example(experimental)
+# MicroPython IMX500 SPI Receive Example
 
 This example shows how to use the C/C++ IMX500 MCU SDK from MicroPython on
 Raspberry Pi Pico.
