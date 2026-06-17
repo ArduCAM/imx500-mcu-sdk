@@ -20,6 +20,7 @@ the next IMX500 product path.
 | Run a visible AI demo | [ESP32-P4 example](examples/platform/esp/esp32p4/README.md) | LCD preview is visible and the serial log prints parsed AI output | [MCU integration path](docs/paths/spi-mcu-product-path.md) |
 | Read AI metadata on an MCU | [Pico 2 serial stream example](examples/platform/rpi/pico2/camera_serial_stream_multitask/README.md) | MCU receives an IMX500 metadata frame and forwards or parses it into an event | [SPI metadata productization path](docs/paths/spi-mcu-product-path.md) |
 | Prototype with MicroPython | [Pico MicroPython metadata parse example](examples/platform/rpi/pico/micropython_imx500_metadata_parse/README.md) | Pico imports `imx500_mcu_sdk`, parses metadata, and prints SSD MobileNet detections or UART product frames | [MicroPython user module](python_bindings/micropython/README.md) |
+| Bring up Nordic MicroPython | [nRF52840 DK MicroPython SPI receive example](examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive/README.md) | nRF52840 DK imports `imx500_mcu_sdk`, opens IMX500 over `TWI1`, and reads one metadata frame over `SPIM3` | [MicroPython user module](python_bindings/micropython/README.md) |
 | Test a model | [Model validation mission](docs/paths/model-validation-to-production.md) | Known model or real hardware output produces parsed metadata | [Application pack](examples/README.md) / [model conversion](https://www.arducam.com/arducam-ai-model-converter-tutorial) |
 | Port the SDK to your board | Integration guide: [中文](docs/zho/integration-guide.md), [English](docs/eng/integration-guide.md), [日本語](docs/jpn/integration-guide.md) | Your platform callbacks can probe the module, start the stream, and read metadata | [Custom MCU product path](docs/paths/spi-mcu-product-path.md) |
 | Move toward production | [Production checklist](docs/production/design-in-checklist.md) | Interface, model, optics, enclosure, and factory test flow are confirmed | [Design-in, customization, and volume supply](docs/production/support-options.md) |
@@ -116,6 +117,7 @@ The SDK provides:
 | Raspberry Pi Pico 2 | Wiring, serial metadata stream, production test examples | [examples/platform/rpi/pico2](examples/platform/rpi/pico2/README.md) |
 | Raspberry Pi Pico W | Person-detection ROI MVP and SPI receive test examples | [examples/platform/rpi/pico_w](examples/platform/rpi/pico_w/imx500_person_detect_roi_mvp/README.md) |
 | Raspberry Pi 5 | Experimental MIPI preview plus Linux I2C/SPI metadata test | [examples/platform/rpi/rpi5](examples/platform/rpi/rpi5/README.md) |
+| Nordic nRF52840 DK | MicroPython SDK module SPI metadata smoke test | [examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive](examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive/README.md) |
 | Other MCU platforms | Port by implementing the SDK adapter callbacks | Integration guide: [中文](docs/zho/integration-guide.md), [English](docs/eng/integration-guide.md), [日本語](docs/jpn/integration-guide.md) |
 
 ## Quick Start: ESP32-P4
@@ -174,7 +176,7 @@ Example events include `person_count = 3`, `zone_occupied = true`,
 | `ArducamIMX500SDK.h/.cc` | Public SDK API and core implementation |
 | `ai_driver.h/.c` | Platform callback registration interfaces |
 | `imx500_mcu_sdk.cmake` | SDK source collection and compile-time configuration |
-| `python_bindings/` | Optional Python host tools for quick USB bridge validation |
+| `python_bindings/` | Optional Python host tools and MicroPython user module support |
 | `docs/` | API landing page and integration documentation |
 | `examples/` | Platform reference projects |
 | `third_party/flatbuffers/` | FlatBuffers dependency used by network-info parsing |
