@@ -49,11 +49,15 @@ The Pico does not push AI frames by itself. The host should:
 1. Send `STATUS_REQUEST`.
 2. Check that the `STATUS_RESPONSE` JSON has `ready: true`.
 3. Send `GET_DATA_REQUEST` whenever one parsed AI result is needed.
+4. If the response JSON has `status: "PENDING"`, wait `poll_after_ms`, then
+   send `GET_DATA_REQUEST` again. This polls the same core1 camera job instead
+   of starting another camera read.
 
 The default PASS/NG rule is:
 
 - `NG`: at least one detection is above `SCORE_THRESHOLD`
 - `PASS`: no detections are above `SCORE_THRESHOLD`
+- `PENDING`: the core1 camera worker is still waiting for one valid metadata frame
 - `ERROR`: metadata parsed, but SSD MobileNet detection post-processing failed
 
 For `GET_DATA_REQUEST`, JPEG transfer is controlled by request JSON. The default
@@ -103,7 +107,7 @@ Message types:
   "fw_version": 0,
   "pid": 0,
   "probe_ok": true,
-  "imx500_device_id": 0,
+  "device_id": 0,
   "boot_status": 0,
   "opened": true,
   "streaming": true,
@@ -111,12 +115,18 @@ Message types:
   "startup_state": "READY",
   "startup_message": "camera ready",
   "startup_attempts": 3,
+  "camera_core": "READY",
+  "camera_operation_busy": false,
+  "camera_job_id": 0,
+  "camera_job_state": "IDLE",
+  "camera_job_elapsed_ms": 0,
   "poll_after_ms": 0,
   "last_error": null,
   "last_result": null,
   "parsed_frames": 0,
   "uart_baudrate": 115200,
-  "data_timeout_ms": 1000
+  "data_timeout_ms": 1000,
+  "data_capture_timeout_ms": 60000
 }
 ```
 
@@ -124,28 +134,38 @@ Immediately after power-on, `STATUS_RESPONSE` can return `ready: false` with a
 startup state such as `"BOOTING"`, `"PROBED"`, `"OPENED"`, or `"STREAM_ON"`.
 This is not a transport error; the host should wait `poll_after_ms`, then poll
 `STATUS_REQUEST` again until `ready: true`. Sensor UID is optional during
-startup, and `device_uid_error` does not prevent `ready: true`.
+startup, and `device_uid_error` does not prevent `ready: true`. `camera_core`
+reports the core1 camera worker state; when `ready` is true it should normally be
+`"READY"`.
 
 `GET_DATA_REQUEST` accepts optional JSON:
 
 ```json
 {
-  "timeout_ms": 1000,
+  "wait_ms": 200,
+  "capture_timeout_ms": 60000,
   "include_jpeg": "on_ng"
 }
 ```
 
-`timeout_ms` is clamped to `50..5000`. `include_jpeg` can be `"on_ng"`,
-`"always"`, or `"never"`. Boolean `true` is treated as `"always"` and `false`
-as `"never"`.
+`wait_ms` controls how long core0 waits for an already-running core1 camera job
+before returning `PENDING`; it is clamped to `0..5000`. For compatibility,
+`timeout_ms` is also accepted as the wait value. `capture_timeout_ms` controls
+how long core1 may keep waiting for a valid metadata frame before returning an
+`ERROR`; it defaults to 60000 and is clamped to `1000..120000`. `include_jpeg`
+can be `"on_ng"`, `"always"`, or `"never"`. Boolean `true` is treated as
+`"always"` and `false` as `"never"`.
 
 `DATA_RESPONSE` JSON includes `device_uid` from
-`imx500.get_sensor_device_id()`, the probed `imx500_device_id`, echoed request
+`imx500.get_sensor_device_id()`, the probed `device_uid`, echoed request
 `sequence`, local `sample_index`, IMX500 `frame_count`, result status,
 threshold, read attempts, JPEG mode, and up to eight detections. Detection
 scores are sent as `score_permille`, and normalized boxes are sent as
 `box_norm_10000` in `(y1, x1, y2, x2)` order. If the response header has a
-non-zero binary length, those bytes are the JPEG payload.
+non-zero binary length, those bytes are the JPEG payload. While a frame read is
+still running, `DATA_RESPONSE` returns `status: "PENDING"` with `job_id`,
+`camera_job_state`, `elapsed_ms`, and `poll_after_ms`; the host should poll
+again after that delay.
 
 Minimal host-side packet flow:
 
@@ -165,6 +185,16 @@ STATUS_REQUEST = 0x10
 GET_DATA_REQUEST = 0x11
 STATUS_RESPONSE = 0x90
 DATA_RESPONSE = 0x91
+ERROR_RESPONSE = 0x92
+
+CODE_OK = 0
+CODE_NG = 1
+CODE_ERROR = 2
+
+PORT = "/dev/ttyCH9344USB0"
+BAUDRATE = 115200
+STARTUP_POLLS = 60
+DATA_POLLS = 300
 
 
 def checksum32(*parts):
@@ -189,7 +219,11 @@ def send_packet(port, msg_type, sequence, payload=None):
         0,
         checksum32(body),
     )
-    port.write(header + body)
+    packet = header + body
+    written = port.write(packet)
+    if written != len(packet):
+        raise RuntimeError("serial write incomplete: wrote %s of %d bytes" % (written, len(packet)))
+    port.flush()
 
 
 def read_exact(port, length):
@@ -218,27 +252,88 @@ def recv_packet(port):
     return msg_type, code, seq, payload, binary
 
 
-with serial.Serial("/dev/tty.usbserial-XXXX", 115200, timeout=30) as port:
-    sequence = 1
-    for _ in range(20):
+def require_sequence(expected, actual):
+    if actual != expected:
+        raise RuntimeError("response sequence mismatch: expected %d got %d" % (expected, actual))
+
+
+def raise_protocol_error(payload):
+    raise RuntimeError(payload.get("error") or "device returned protocol error")
+
+
+def wait_until_camera_ready(port, sequence):
+    for _ in range(STARTUP_POLLS):
         send_packet(port, STATUS_REQUEST, sequence)
-        msg_type, code, seq, status, _ = recv_packet(port)
+        msg_type, code, resp_seq, status, _ = recv_packet(port)
+        require_sequence(sequence, resp_seq)
+        if msg_type == ERROR_RESPONSE:
+            raise_protocol_error(status)
         if msg_type != STATUS_RESPONSE:
             raise RuntimeError("unexpected response type: 0x%02x" % msg_type)
-        print(status.get("startup_state"), status.get("startup_message"))
-        if status.get("ready"):
-            break
-        if code != 0 and status.get("startup_state") == "ERROR":
+
+        print(
+            "state=%s core=%s busy=%s ready=%s msg=%s"
+            % (
+                status.get("startup_state"),
+                status.get("camera_core"),
+                status.get("camera_operation_busy"),
+                status.get("ready"),
+                status.get("startup_message"),
+            )
+        )
+
+        if status.get("ready") and status.get("camera_core") == "READY":
+            return sequence + 1, status
+
+        if code != CODE_OK and status.get("startup_state") == "ERROR":
             raise RuntimeError(status.get("last_error") or "camera startup failed")
+
         sequence += 1
         time.sleep(max(status.get("poll_after_ms", 200), 100) / 1000.0)
-    else:
-        raise TimeoutError("camera did not become ready")
 
-    send_packet(port, GET_DATA_REQUEST, sequence, {"timeout_ms": 1000, "include_jpeg": "on_ng"})
-    msg_type, code, seq, result, jpeg = recv_packet(port)
-    if msg_type != DATA_RESPONSE:
-        raise RuntimeError("unexpected response type: 0x%02x" % msg_type)
+    raise TimeoutError("camera did not become ready")
+
+
+def request_ai_frame(port, sequence):
+    request = {
+        "wait_ms": 200,
+        "capture_timeout_ms": 60000,
+        "include_jpeg": "on_ng",
+    }
+    for _ in range(DATA_POLLS):
+        send_packet(port, GET_DATA_REQUEST, sequence, request)
+        msg_type, code, resp_seq, result, jpeg = recv_packet(port)
+        require_sequence(sequence, resp_seq)
+        if msg_type == ERROR_RESPONSE:
+            raise_protocol_error(result)
+        if msg_type != DATA_RESPONSE:
+            raise RuntimeError("unexpected response type: 0x%02x" % msg_type)
+
+        status = result.get("status")
+        if status == "PENDING":
+            print(
+                "pending job=%s state=%s elapsed=%sms"
+                % (
+                    result.get("job_id"),
+                    result.get("camera_job_state"),
+                    result.get("elapsed_ms"),
+                )
+            )
+            sequence += 1
+            time.sleep(max(result.get("poll_after_ms", 200), 50) / 1000.0)
+            continue
+
+        return sequence + 1, code, result, jpeg
+
+    raise TimeoutError("camera data request stayed pending")
+
+
+with serial.Serial(PORT, BAUDRATE, timeout=30) as port:
+    sequence = 1
+    sequence, status = wait_until_camera_ready(port, sequence)
+
+    sequence, code, result, jpeg = request_ai_frame(port, sequence)
+    print("response code:", code)
     print(result)
     if jpeg:
         print("jpeg bytes:", len(jpeg))

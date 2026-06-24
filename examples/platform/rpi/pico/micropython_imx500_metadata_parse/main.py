@@ -1,5 +1,5 @@
 import time
-
+import _thread
 import imx500_mcu_sdk as imx500
 
 try:
@@ -21,6 +21,9 @@ TENSOR_CAPTURE_BYTES = 4096
 DISPLAY_PREVIEW_BYTES = 16
 PRINT_TENSOR_SUMMARY_ON_FIRST_FRAME = True
 DATA_READ_TIMEOUT_MS = 1000
+DATA_CAPTURE_TIMEOUT_MS = 60000
+DATA_CAPTURE_MAX_TIMEOUT_MS = 120000
+DATA_PENDING_POLL_AFTER_MS = 200
 SPI_FORMAT = imx500.SpiDataFormat.METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
 
 UART_ID = 1
@@ -28,10 +31,13 @@ UART_TX_PIN = 4
 UART_RX_PIN = 5
 UART_BAUDRATE = 115200
 UART_WRITE_CHUNK = 512
-UART_READ_TIMEOUT_MS = 200
+UART_READ_TIMEOUT_MS = 1000
 UART_MAX_COMMAND_JSON_BYTES = 1024
 UART_MAX_COMMAND_BINARY_BYTES = 0
 UART_IDLE_SLEEP_MS = 10
+CAMERA_CORE_IDLE_SLEEP_MS = 10
+CAMERA_CORE_STARTUP_SLEEP_MS = 100
+CAMERA_RESPONSE_WAIT_SLICE_MS = 5
 
 UART_MAGIC = b"IMX5"
 UART_VERSION = 2
@@ -48,6 +54,14 @@ UART_CODE_ERROR = 2
 
 MAX_UART_DETECTIONS = 8
 NG_ON_ANY_DETECTION = True
+
+CORE1_STATUS_STOPPED = 0
+CORE1_STATUS_RUNNING = 1
+CORE1_STATUS_READY = 2
+CORE1_STATUS_FAILED = -1
+
+CAMERA_OPERATION_NONE = 0
+CAMERA_OPERATION_READ_AI_FRAME = 1
 
 
 def _tensor_dims(tensor):
@@ -143,7 +157,7 @@ def _uart_write_all(uart, data):
 
 def _uart_read_exact(uart, length, timeout_ms):
     data = bytearray()
-    start = time.ticks_ms()
+    last_progress = time.ticks_ms()
     while len(data) < length:
         available = uart.any()
         if available:
@@ -153,8 +167,9 @@ def _uart_read_exact(uart, length, timeout_ms):
             chunk = uart.read(need)
             if chunk:
                 data.extend(chunk)
+                last_progress = time.ticks_ms()
                 continue
-        if time.ticks_diff(time.ticks_ms(), start) >= timeout_ms:
+        if time.ticks_diff(time.ticks_ms(), last_progress) >= timeout_ms:
             return None
         time.sleep_ms(1)
     return bytes(data)
@@ -298,7 +313,7 @@ def _build_ai_result(
     err,
     sequence,
     device_uid,
-    imx500_device_id,
+    device_id,
     status_text,
     jpeg_len,
     sample_index,
@@ -306,7 +321,7 @@ def _build_ai_result(
     header = parsed.get("primary_header") or {}
     result = {
         "device_uid": device_uid,
-        "imx500_device_id": imx500_device_id,
+        "device_id": device_id,
         "sequence": sequence,
         "sample_index": sample_index,
         "frame_count": header.get("frame_count"),
@@ -333,6 +348,16 @@ def _result_code(status_text):
     if status_text == "ERROR":
         return UART_CODE_ERROR
     return UART_CODE_OK
+
+
+def _core1_status_text():
+    if core1_status == CORE1_STATUS_READY:
+        return "READY"
+    if core1_status == CORE1_STATUS_RUNNING:
+        return "RUNNING"
+    if core1_status == CORE1_STATUS_FAILED:
+        return "FAILED"
+    return "STOPPED"
 
 
 def print_tensor(kind, index, tensor):
@@ -573,13 +598,13 @@ def _make_camera_state():
         "fw_version": None,
         "pid": None,
         "probe_ok": False,
-        "imx500_device_id": 0,
+        "device_id": 0,
         "boot_status": 0,
         "opened": False,
         "streaming": False,
         "ready": False,
         "startup_state": "BOOTING",
-        "startup_message": "waiting for first status request",
+        "startup_message": "camera core starting",
         "startup_attempts": 0,
         "device_uid_error": None,
         "last_error": None,
@@ -598,7 +623,7 @@ def _probe_camera(state):
         state["pid"] = imx500.get_pid()
         ok, device_id, boot_status = imx500.probe_imx500_module()
         state["probe_ok"] = bool(ok)
-        state["imx500_device_id"] = device_id
+        state["device_id"] = device_id
         state["boot_status"] = boot_status
         if not ok:
             state["ready"] = False
@@ -687,7 +712,6 @@ def _advance_camera_startup(state):
     if state.get("ready"):
         _refresh_device_uid(state)
         return True
-
     state["startup_attempts"] = state.get("startup_attempts", 0) + 1
     if not state.get("probe_ok"):
         return _probe_camera(state)
@@ -700,6 +724,7 @@ def _advance_camera_startup(state):
 
 def _status_payload(state):
     startup_state = state.get("startup_state", "BOOTING")
+    job_snapshot = _camera_job_snapshot()
     poll_after_ms = 200
     if startup_state == "PROBED":
         poll_after_ms = 5000
@@ -715,7 +740,7 @@ def _status_payload(state):
         "fw_version": state.get("fw_version"),
         "pid": state.get("pid"),
         "probe_ok": state.get("probe_ok", False),
-        "imx500_device_id": state.get("imx500_device_id", 0),
+        "device_id": state.get("device_id", 0),
         "boot_status": state.get("boot_status", 0),
         "opened": state.get("opened", False),
         "streaming": state.get("streaming", False),
@@ -723,25 +748,44 @@ def _status_payload(state):
         "startup_state": startup_state,
         "startup_message": state.get("startup_message", ""),
         "startup_attempts": state.get("startup_attempts", 0),
+        "camera_core": _core1_status_text(),
+        "camera_operation_busy": job_snapshot["state"] != "IDLE",
+        "camera_job_id": job_snapshot["id"],
+        "camera_job_state": job_snapshot["state"],
+        "camera_job_elapsed_ms": job_snapshot["elapsed_ms"],
         "poll_after_ms": poll_after_ms,
         "last_error": state.get("last_error"),
         "last_result": state.get("last_result"),
         "parsed_frames": state.get("parsed_frames", 0),
         "uart_baudrate": UART_BAUDRATE,
         "data_timeout_ms": DATA_READ_TIMEOUT_MS,
+        "data_capture_timeout_ms": DATA_CAPTURE_TIMEOUT_MS,
     }
 
 
-def _request_timeout_ms(request):
-    value = request.get("timeout_ms", DATA_READ_TIMEOUT_MS)
+def _request_response_wait_ms(request):
+    value = request.get("wait_ms", request.get("timeout_ms", DATA_READ_TIMEOUT_MS))
     try:
         value = int(value)
     except Exception:
         value = DATA_READ_TIMEOUT_MS
-    if value < 50:
-        value = 50
+    if value < 0:
+        value = 0
     if value > 5000:
         value = 5000
+    return value
+
+
+def _request_capture_timeout_ms(request):
+    value = request.get("capture_timeout_ms", DATA_CAPTURE_TIMEOUT_MS)
+    try:
+        value = int(value)
+    except Exception:
+        value = DATA_CAPTURE_TIMEOUT_MS
+    if value < 1000:
+        value = 1000
+    if value > DATA_CAPTURE_MAX_TIMEOUT_MS:
+        value = DATA_CAPTURE_MAX_TIMEOUT_MS
     return value
 
 
@@ -760,7 +804,7 @@ def _read_ai_frame(state, sequence, request):
     if not state.get("ready"):
         return {
             "device_uid": state.get("device_uid", ""),
-            "imx500_device_id": state.get("imx500_device_id", 0),
+            "device_id": state.get("device_id", 0),
             "sequence": sequence,
             "sample_index": state.get("parsed_frames", 0),
             "status": "ERROR",
@@ -770,7 +814,7 @@ def _read_ai_frame(state, sequence, request):
             "jpeg_bytes": 0,
         }, None, 0
 
-    timeout_ms = _request_timeout_ms(request)
+    timeout_ms = _request_capture_timeout_ms(request)
     jpeg_mode = _request_jpeg_mode(request)
     start = time.ticks_ms()
     attempts = 0
@@ -833,13 +877,13 @@ def _read_ai_frame(state, sequence, request):
             err,
             sequence,
             state.get("device_uid", ""),
-            state.get("imx500_device_id", 0),
+            state.get("device_id", 0),
             status_text,
             jpeg_len,
             sample_index,
         )
         ai_result["attempts"] = attempts
-        ai_result["timeout_ms"] = timeout_ms
+        ai_result["capture_timeout_ms"] = timeout_ms
         ai_result["jpeg_mode"] = jpeg_mode
         state["last_result"] = status_text
         print(
@@ -853,13 +897,13 @@ def _read_ai_frame(state, sequence, request):
     state["last_error"] = last_error or "metadata read timeout"
     return {
         "device_uid": state.get("device_uid", ""),
-        "imx500_device_id": state.get("imx500_device_id", 0),
+        "device_id": state.get("device_id", 0),
         "sequence": sequence,
         "sample_index": state.get("parsed_frames", 0),
         "status": "ERROR",
         "error": state["last_error"],
         "attempts": attempts,
-        "timeout_ms": timeout_ms,
+        "capture_timeout_ms": timeout_ms,
         "jpeg_bytes": 0,
     }, None, 0
 
@@ -880,14 +924,234 @@ def _send_error_response(uart, sequence, message):
     print("  protocol error seq=%d bytes=%d: %s" % (sequence, sent, message))
 
 
-def _handle_uart_packet(uart, state, packet):
-    if packet is None:
-        return
-    sequence = packet.get("sequence", 0)
-    if packet.get("error"):
-        _send_error_response(uart, sequence, packet["error"])
-        return
+def _make_camera_error_result(state, sequence, request, message):
+    request = request or {}
+    return {
+        "device_uid": state.get("device_uid", ""),
+        "device_id": state.get("device_id", 0),
+        "sequence": sequence,
+        "sample_index": state.get("parsed_frames", 0),
+        "status": "ERROR",
+        "startup_state": state.get("startup_state", "BOOTING"),
+        "startup_message": state.get("startup_message", ""),
+        "error": message,
+        "wait_ms": _request_response_wait_ms(request),
+        "capture_timeout_ms": _request_capture_timeout_ms(request),
+        "jpeg_bytes": 0,
+    }, None, 0
 
+
+def _clear_camera_job_locked():
+    camera_job["id"] = 0
+    camera_job["operation"] = CAMERA_OPERATION_NONE
+    camera_job["sequence"] = 0
+    camera_job["request"] = None
+    camera_job["pending"] = False
+    camera_job["busy"] = False
+    camera_job["done"] = False
+    camera_job["cancelled"] = False
+    camera_job["ai_result"] = None
+    camera_job["jpeg"] = None
+    camera_job["jpeg_len"] = 0
+    camera_job["created_ms"] = 0
+
+
+def _camera_job_snapshot():
+    camera_job_lock.acquire()
+    try:
+        if camera_job["done"]:
+            state_text = "DONE"
+        elif camera_job["busy"]:
+            state_text = "BUSY"
+        elif camera_job["pending"]:
+            state_text = "PENDING"
+        else:
+            state_text = "IDLE"
+        elapsed_ms = 0
+        if camera_job["created_ms"]:
+            elapsed_ms = time.ticks_diff(time.ticks_ms(), camera_job["created_ms"])
+        return {
+            "id": camera_job["id"],
+            "sequence": camera_job["sequence"],
+            "state": state_text,
+            "pending": camera_job["pending"],
+            "busy": camera_job["busy"],
+            "done": camera_job["done"],
+            "elapsed_ms": elapsed_ms,
+        }
+    finally:
+        camera_job_lock.release()
+
+
+def _make_pending_result(state, sequence, request, snapshot):
+    return {
+        "device_uid": state.get("device_uid", ""),
+        "device_id": state.get("device_id", 0),
+        "sequence": sequence,
+        "job_id": snapshot.get("id", 0),
+        "job_sequence": snapshot.get("sequence", 0),
+        "sample_index": state.get("parsed_frames", 0),
+        "status": "PENDING",
+        "pending": True,
+        "camera_job_state": snapshot.get("state", "BUSY"),
+        "elapsed_ms": snapshot.get("elapsed_ms", 0),
+        "poll_after_ms": DATA_PENDING_POLL_AFTER_MS,
+        "wait_ms": _request_response_wait_ms(request or {}),
+        "capture_timeout_ms": _request_capture_timeout_ms(request or {}),
+        "jpeg_bytes": 0,
+    }, None, 0
+
+
+def _submit_camera_data_request(sequence, request):
+    global camera_job_next_id
+    camera_job_lock.acquire()
+    try:
+        if camera_job["pending"] or camera_job["busy"] or camera_job["done"]:
+            return 0
+        camera_job_next_id += 1
+        camera_job["id"] = camera_job_next_id
+        camera_job["operation"] = CAMERA_OPERATION_READ_AI_FRAME
+        camera_job["sequence"] = sequence
+        camera_job["request"] = request or {}
+        camera_job["pending"] = True
+        camera_job["busy"] = False
+        camera_job["done"] = False
+        camera_job["cancelled"] = False
+        camera_job["ai_result"] = None
+        camera_job["jpeg"] = None
+        camera_job["jpeg_len"] = 0
+        camera_job["created_ms"] = time.ticks_ms()
+        return camera_job_next_id
+    finally:
+        camera_job_lock.release()
+
+
+def _take_next_camera_job():
+    camera_job_lock.acquire()
+    try:
+        if not camera_job["pending"]:
+            return None
+        job = (
+            camera_job["id"],
+            camera_job["operation"],
+            camera_job["sequence"],
+            camera_job["request"],
+        )
+        camera_job["pending"] = False
+        camera_job["busy"] = True
+        return job
+    finally:
+        camera_job_lock.release()
+
+
+def _finish_camera_job(job_id, ai_result, jpeg, jpeg_len):
+    camera_job_lock.acquire()
+    try:
+        if camera_job["id"] != job_id or not camera_job["busy"]:
+            return
+        if camera_job["cancelled"]:
+            _clear_camera_job_locked()
+            return
+        camera_job["ai_result"] = ai_result
+        camera_job["jpeg"] = jpeg
+        camera_job["jpeg_len"] = jpeg_len
+        camera_job["busy"] = False
+        camera_job["done"] = True
+    finally:
+        camera_job_lock.release()
+
+
+def _take_finished_camera_job(job_id, response_sequence=None):
+    camera_job_lock.acquire()
+    try:
+        if camera_job["id"] != job_id or not camera_job["done"]:
+            return None
+        ai_result = camera_job["ai_result"]
+        if ai_result is not None and response_sequence is not None:
+            if response_sequence != camera_job["sequence"]:
+                ai_result["job_sequence"] = camera_job["sequence"]
+            ai_result["sequence"] = response_sequence
+            ai_result["job_id"] = job_id
+        result = (
+            ai_result,
+            camera_job["jpeg"],
+            camera_job["jpeg_len"],
+        )
+        _clear_camera_job_locked()
+        return result
+    finally:
+        camera_job_lock.release()
+
+
+def _fail_camera_jobs(message):
+    camera_job_lock.acquire()
+    try:
+        if not (camera_job["pending"] or camera_job["busy"]):
+            return
+        ai_result, jpeg, jpeg_len = _make_camera_error_result(
+            state,
+            camera_job["sequence"],
+            camera_job["request"],
+            message,
+        )
+        camera_job["pending"] = False
+        camera_job["busy"] = False
+        camera_job["done"] = True
+        camera_job["cancelled"] = False
+        camera_job["ai_result"] = ai_result
+        camera_job["jpeg"] = jpeg
+        camera_job["jpeg_len"] = jpeg_len
+    finally:
+        camera_job_lock.release()
+
+
+def _request_ai_frame_on_core1(state, sequence, request):
+    request = request or {}
+    if core1_status == CORE1_STATUS_FAILED:
+        return _make_camera_error_result(state, sequence, request, "camera core is stopped")
+
+    snapshot = _camera_job_snapshot()
+    if snapshot["done"]:
+        result = _take_finished_camera_job(snapshot["id"], sequence)
+        if result is not None:
+            return result
+
+    if snapshot["state"] == "IDLE":
+        job_id = _submit_camera_data_request(sequence, request)
+        if not job_id:
+            snapshot = _camera_job_snapshot()
+            if snapshot["done"]:
+                result = _take_finished_camera_job(snapshot["id"], sequence)
+                if result is not None:
+                    return result
+            return _make_pending_result(state, sequence, request, snapshot)
+    else:
+        job_id = snapshot["id"]
+
+    wait_ms = _request_response_wait_ms(request)
+    start = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), start) <= wait_ms:
+        result = _take_finished_camera_job(job_id, sequence)
+        if result is not None:
+            return result
+        if core1_status == CORE1_STATUS_FAILED:
+            return _make_camera_error_result(
+                state,
+                sequence,
+                request,
+                state.get("last_error") or "camera core stopped",
+            )
+        time.sleep_ms(CAMERA_RESPONSE_WAIT_SLICE_MS)
+
+    result = _take_finished_camera_job(job_id, sequence)
+    if result is not None:
+        return result
+
+    return _make_pending_result(state, sequence, request, _camera_job_snapshot())
+
+
+def _handle_uart_packet(uart, state, packet):
+    sequence = packet.get("sequence", 0)
     msg_type = packet.get("msg_type")
     request = packet.get("json") or {}
     if msg_type == UART_MSG_STATUS_REQUEST:
@@ -898,12 +1162,10 @@ def _handle_uart_packet(uart, state, packet):
             "  status response seq=%d state=%s ready=%s bytes=%d"
             % (sequence, payload["startup_state"], payload["ready"], sent)
         )
-        if not payload["ready"]:
-            _advance_camera_startup(state)
         return
 
     if msg_type == UART_MSG_DATA_REQUEST:
-        ai_result, jpeg, jpeg_len = _read_ai_frame(state, sequence, request)
+        ai_result, jpeg, jpeg_len = _request_ai_frame_on_core1(state, sequence, request)
         sent = _send_uart_packet(
             uart,
             UART_MSG_DATA_RESPONSE,
@@ -922,7 +1184,69 @@ def _handle_uart_packet(uart, state, packet):
     _send_error_response(uart, sequence, "unsupported message type %s" % msg_type)
 
 
+state = _make_camera_state()
+core1_status = CORE1_STATUS_STOPPED
+camera_job_next_id = 0
+camera_job_lock = _thread.allocate_lock()
+camera_job = {
+    "id": 0,
+    "operation": CAMERA_OPERATION_NONE,
+    "sequence": 0,
+    "request": None,
+    "pending": False,
+    "busy": False,
+    "done": False,
+    "cancelled": False,
+    "ai_result": None,
+    "jpeg": None,
+    "jpeg_len": 0,
+    "created_ms": 0,
+}
+
+
+def core1_task():
+    global core1_status
+    try:
+        core1_status = CORE1_STATUS_RUNNING
+        print("camera core1 task started")
+        while True:
+            if not state.get("ready"):
+                _advance_camera_startup(state)
+                if state.get("ready"):
+                    core1_status = CORE1_STATUS_READY
+
+            job = _take_next_camera_job()
+            if job is not None:
+                job_id, operation, sequence, request = job
+                if operation == CAMERA_OPERATION_READ_AI_FRAME:
+                    ai_result, jpeg, jpeg_len = _read_ai_frame(state, sequence, request)
+                else:
+                    ai_result, jpeg, jpeg_len = _make_camera_error_result(
+                        state,
+                        sequence,
+                        request,
+                        "unsupported camera operation %s" % operation,
+                    )
+                _finish_camera_job(job_id, ai_result, jpeg, jpeg_len)
+                continue
+
+            if state.get("ready"):
+                time.sleep_ms(CAMERA_CORE_IDLE_SLEEP_MS)
+            else:
+                time.sleep_ms(CAMERA_CORE_STARTUP_SLEEP_MS)
+    except Exception as exc:
+        message = _exception_text("camera core exception", exc)
+        state["ready"] = False
+        state["startup_state"] = "ERROR"
+        state["startup_message"] = "camera core stopped"
+        state["last_error"] = message
+        core1_status = CORE1_STATUS_FAILED
+        _fail_camera_jobs(message)
+        print("camera core1 stopped:", message)
+
+
 def main():
+    global core1_status
     print("IMX500 MicroPython metadata parse example")
 
     uart = UART(
@@ -931,12 +1255,19 @@ def main():
         tx=Pin(UART_TX_PIN),
         rx=Pin(UART_RX_PIN),
     )
+    try:
+        _thread.start_new_thread(core1_task, ())
+    except Exception as exc:
+        state["ready"] = False
+        state["startup_state"] = "ERROR"
+        state["startup_message"] = "camera core start failed"
+        state["last_error"] = _exception_text("start camera core failed", exc)
+        core1_status = CORE1_STATUS_FAILED
     print(
         "uart protocol v%d: id=%d tx=GPIO%d rx=GPIO%d baud=%d"
         % (UART_VERSION, UART_ID, UART_TX_PIN, UART_RX_PIN, UART_BAUDRATE)
     )
 
-    state = _make_camera_state()
     print(
         "camera startup_state=%s uid=%s fw=%s pid=%s device_id=%s boot_status=%s"
         % (
@@ -944,7 +1275,7 @@ def main():
             state["device_uid"],
             _hex_or_none(state["fw_version"]),
             _hex_or_none(state["pid"]),
-            _hex_or_none(state["imx500_device_id"]),
+            _hex_or_none(state["device_id"]),
             _hex_or_none(state["boot_status"]),
         )
     )
@@ -958,6 +1289,10 @@ def main():
         packet = _read_uart_packet(uart)
         if packet is None:
             time.sleep_ms(UART_IDLE_SLEEP_MS)
+            continue
+        if packet.get("error"):
+            sequence = packet.get("sequence", 0)
+            _send_error_response(uart, sequence, packet["error"])
             continue
         _handle_uart_packet(uart, state, packet)
 
