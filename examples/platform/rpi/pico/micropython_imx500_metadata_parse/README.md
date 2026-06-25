@@ -126,7 +126,7 @@ Message types:
   "parsed_frames": 0,
   "uart_baudrate": 115200,
   "data_timeout_ms": 1000,
-  "data_capture_timeout_ms": 60000
+  "data_capture_timeout_ms": 10000
 }
 ```
 
@@ -143,7 +143,7 @@ reports the core1 camera worker state; when `ready` is true it should normally b
 ```json
 {
   "wait_ms": 200,
-  "capture_timeout_ms": 60000,
+  "capture_timeout_ms": 10000,
   "include_jpeg": "on_ng"
 }
 ```
@@ -152,7 +152,7 @@ reports the core1 camera worker state; when `ready` is true it should normally b
 before returning `PENDING`; it is clamped to `0..5000`. For compatibility,
 `timeout_ms` is also accepted as the wait value. `capture_timeout_ms` controls
 how long core1 may keep waiting for a valid metadata frame before returning an
-`ERROR`; it defaults to 60000 and is clamped to `1000..120000`. `include_jpeg`
+`ERROR`; it defaults to 10000 and is clamped to `1000..20000`. `include_jpeg`
 can be `"on_ng"`, `"always"`, or `"never"`. Boolean `true` is treated as
 `"always"` and `false` as `"never"`.
 
@@ -297,7 +297,7 @@ def wait_until_camera_ready(port, sequence):
 def request_ai_frame(port, sequence):
     request = {
         "wait_ms": 200,
-        "capture_timeout_ms": 60000,
+        "capture_timeout_ms": 10000,
         "include_jpeg": "on_ng",
     }
     for _ in range(DATA_POLLS):
