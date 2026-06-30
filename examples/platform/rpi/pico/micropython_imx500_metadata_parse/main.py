@@ -661,20 +661,20 @@ def _open_camera(state):
     state["startup_message"] = "opening imx500 stream path"
     try:
         state["opened"] = bool(
-            imx500.open(None, None, imx500.MipiDataFormat.IMAGE, SPI_FORMAT, 10)
+            imx500.imx500_open(None, None, imx500.MipiDataFormat.IMAGE, SPI_FORMAT, 10)
         )
     except Exception as exc:
         state["opened"] = False
-        state["last_error"] = _exception_text("imx500 open failed", exc)
+        state["last_error"] = _exception_text("imx500_open failed", exc)
         state["ready"] = False
         state["startup_state"] = "ERROR"
-        state["startup_message"] = "imx500 open failed"
+        state["startup_message"] = "imx500_open failed"
         return False
     if not state["opened"]:
-        state["last_error"] = "imx500 open() returned false"
+        state["last_error"] = "imx500_open() returned false"
         state["ready"] = False
         state["startup_state"] = "ERROR"
-        state["startup_message"] = "imx500 open returned false"
+        state["startup_message"] = "imx500_open returned false"
         return False
     state["startup_state"] = "OPENED"
     state["startup_message"] = "imx500 stream path opened"

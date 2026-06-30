@@ -65,7 +65,7 @@ depend on catching the initial boot banner.
 
 The production test passes only when:
 
-1. `open(...)` succeeds in direct boot mode.
+1. `imx500_open(...)` succeeds in direct boot mode.
 2. `stream_on()` starts successfully.
 3. The first metadata frame is read successfully.
 4. The first byte of that frame is `0x01`.
@@ -74,7 +74,7 @@ The production test passes only when:
 
 - If you see `TEST_STATUS: BUSY`, the board is likely running an older firmware image and needs to be reflashed or manually reset once.
 - If the host cannot find a port, run `--list-ports` and pass `--port`.
-- If `open(...)` fails, confirm wiring, power, and model/network-info bundling.
+- If `imx500_open(...)` fails, confirm wiring, power, and model/network-info bundling.
 - If metadata fails, check SPI pin direction and metadata buffer assumptions.
 
 ## Reusable BOOT-Button Mode

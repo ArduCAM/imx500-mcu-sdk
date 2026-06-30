@@ -66,7 +66,7 @@ static void print_benchmark_table(
     printf("+-----------------------------------------+-------------------------+\n");
 
     snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(open_cost_us));
-    print_benchmark_row("open() duration", value);
+    print_benchmark_row("imx500_open() duration", value);
 
     snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(stream_on_cost_us));
     print_benchmark_row("stream_on() duration", value);
@@ -75,7 +75,7 @@ static void print_benchmark_table(
     print_benchmark_row("stream_on -> first frame", value);
 
     snprintf(value, sizeof(value), "%.2f ms", bench_us_to_ms(startup_total_us));
-    print_benchmark_row("open -> first frame (startup)", value);
+    print_benchmark_row("imx500_open -> first frame (startup)", value);
 
     snprintf(value, sizeof(value), "%lu/%lu",
              (unsigned long)pre_inject->success_frames,
@@ -242,7 +242,7 @@ static const char* get_boot_mode_name(void) {
 static bool open_with_selected_boot_mode(void) {
 #if INTEGRATION_TEST_BOOT_MODE == INTEGRATION_TEST_BOOT_MODE_DIRECT
     printf("Boot mode: %s\n", get_boot_mode_name());
-    return open(NN_FW_DATA,
+    return imx500_open(NN_FW_DATA,
                 NN_FW_SIZE,
                 NN_NETOWRK_INFO_DATA,
                 NN_NETOWRK_INFO_SIZE,
@@ -255,7 +255,7 @@ static bool open_with_selected_boot_mode(void) {
         printf("flash programming failed\n");
         return false;
     }
-    return open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR, 10);
+    return imx500_open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, SPI_METADATA_OUTPUT_TENSOR, 10);
 #else
 #error "Unsupported INTEGRATION_TEST_BOOT_MODE"
 #endif
@@ -288,7 +288,7 @@ int main() {
     bool open_ret = open_with_selected_boot_mode();
     uint64_t open_end_us = time_us_64();
     if (!open_ret) {
-        printf("open() failed\n");
+        printf("imx500_open() failed\n");
         return 1;
     }
 

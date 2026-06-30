@@ -11,13 +11,13 @@ usermod/imx500_mcu_sdk/micropython.cmake
 ```
 
 Pico examples reference this CMake file through `USER_C_MODULES`. On Pico
-MicroPython, `open(...)` initializes the fixed I2C/SPI pins from the
+MicroPython, `imx500_open(...)` initializes the fixed I2C/SPI pins from the
 example-local `g_config.h` before calling the C++ SDK.
 
 Core aligned APIs include:
 
 ```python
-imx500_mcu_sdk.open(...)
+imx500_mcu_sdk.imx500_open(...)
 imx500_mcu_sdk.probe_imx500_module()
 imx500_mcu_sdk.stream_on()
 imx500_mcu_sdk.get_metadata_size()

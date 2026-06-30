@@ -147,7 +147,7 @@ Run the first hardware check:
 PYTHONPATH=python python3 tools/imx500_first_run.py
 ```
 
-You should see the USB bridge respond, the SDK `open()` call succeed, and at
+You should see the USB bridge respond, the SDK `imx500_open()` call succeed, and at
 least one metadata frame saved.
 
 For more flashing details, see [tools/README.md](../../tools/README.md).

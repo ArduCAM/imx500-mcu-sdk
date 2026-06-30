@@ -146,7 +146,7 @@ Most platforms follow this sequence:
 1. Register platform callbacks with `register_i2c_driver(...)` and `register_spi_driver(...)`.
 2. Optionally bind SDK logs to the platform logger with `register_printf(...)`.
 3. Optionally call `probe_imx500_module(...)` for an early hardware presence check.
-4. Call `open(...)` to load firmware/network info and configure data formats.
+4. Call `imx500_open(...)` to load firmware/network info and configure data formats.
 5. Call `stream_on()` to start runtime output.
 6. Call `read_metadata(...)` to read an SPI metadata frame.
 7. Call `parse_metadata(...)` to parse metadata and bind output tensor payloads.
@@ -157,7 +157,7 @@ Flow summary:
 ```text
 register_i2c_driver / register_spi_driver
     -> probe_imx500_module
-    -> open
+    -> imx500_open
     -> stream_on
     -> read_metadata
     -> parse_metadata

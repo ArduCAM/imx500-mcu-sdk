@@ -146,7 +146,7 @@ adapter bring-up 時の確認項目:
 1. `register_i2c_driver(...)` と `register_spi_driver(...)` でプラットフォーム callback を登録します。
 2. 必要に応じて `register_printf(...)` で SDK log をプラットフォーム logger へ接続します。
 3. 必要に応じて `probe_imx500_module(...)` を呼び、早期のハードウェア存在確認を行います。
-4. `open(...)` を呼び、firmware/network info をロードしてデータ形式を設定します。
+4. `imx500_open(...)` を呼び、firmware/network info をロードしてデータ形式を設定します。
 5. `stream_on()` を呼び、runtime output を開始します。
 6. `read_metadata(...)` を呼び、SPI metadata frame を読み出します。
 7. `parse_metadata(...)` を呼び、metadata を解析して output tensor payload を関連付けます。
@@ -157,7 +157,7 @@ adapter bring-up 時の確認項目:
 ```text
 register_i2c_driver / register_spi_driver
     -> probe_imx500_module
-    -> open
+    -> imx500_open
     -> stream_on
     -> read_metadata
     -> parse_metadata

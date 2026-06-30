@@ -56,7 +56,7 @@ Use this category for module lifecycle control, model loading, metadata transpor
 - @ref get_fw_ver "get_fw_ver(...)"
 - @ref get_pid "get_pid(...)"
 - @ref probe_imx500_module "probe_imx500_module(...)"
-- @ref open "open(...)"
+- @ref imx500_open "imx500_open(...)"
 - @ref load_imx500_fw "load_imx500_fw(...)"
 - @ref stream_on "stream_on()"
 - @ref switch_spi_data_forward_mode "switch_spi_data_forward_mode(...)"
@@ -104,7 +104,7 @@ Most integrations follow this order:
 1. Register platform callbacks with @ref register_i2c_driver "register_i2c_driver(...)" and @ref register_spi_driver "register_spi_driver(...)".
 2. Optionally bind logging with @ref register_printf "register_printf(...)".
 3. Probe the hardware with @ref probe_imx500_module "probe_imx500_module(...)" if your application needs an early presence check.
-4. Initialize the module with @ref open "open(...)".
+4. Initialize the module with @ref imx500_open "imx500_open(...)".
 5. Start runtime output with @ref stream_on "stream_on()".
 6. Read metadata with @ref read_metadata "read_metadata(...)".
 7. Parse output metadata and bind tensor payloads for dequant or downstream decoding with @ref parse_metadata "parse_metadata(...)".

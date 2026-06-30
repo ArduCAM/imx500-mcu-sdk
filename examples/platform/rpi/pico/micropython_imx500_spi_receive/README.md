@@ -14,7 +14,7 @@ compiled into the MicroPython RP2 firmware, then imported from `main.py`.
   - `get_fw_ver()`
   - `get_pid()`
   - `probe_imx500_module()`
-  - `open(...)`
+  - `imx500_open(...)`
   - `stream_on()`
   - `read_metadata(buffer)`
 
@@ -96,7 +96,7 @@ flash process before debugging the IMX500 module.
 
 After flashing the custom MicroPython firmware and copying `main.py`, open the
 USB serial REPL. The script opens the IMX500 module from module Flash, starts
-streaming, and prints metadata frame lengths. On Pico MicroPython, `open(...)`
+streaming, and prints metadata frame lengths. On Pico MicroPython, `imx500_open(...)`
 initializes the fixed Pico I2C/SPI pins before calling the SDK.
 
 ### Run With mpremote

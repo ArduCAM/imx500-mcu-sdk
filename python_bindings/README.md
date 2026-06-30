@@ -65,8 +65,8 @@ micropython/usermod/imx500_mcu_sdk
 ```
 
 It exposes the same core SDK function names as the pybind module, including
-`open(...)`, `probe_imx500_module()`, `stream_on()`, `get_metadata_size()`, and
-`read_metadata(buffer)`. On Pico MicroPython, `open(...)` also initializes the
+`imx500_open(...)`, `probe_imx500_module()`, `stream_on()`, `get_metadata_size()`, and
+`read_metadata(buffer)`. On Pico MicroPython, `imx500_open(...)` also initializes the
 fixed I2C/SPI pins from the example-local `g_config.h` before calling the SDK.
 
 ## Tools
@@ -79,7 +79,7 @@ prefix the command with `PYTHONPATH=python`.
 
 Runs the recommended first validation flow with checkpoint-style output. It
 connects to the USB bridge, probes the IMX500 module, calls
-`imx500_mcu_sdk.open()`, starts the stream, and saves one metadata frame. Add
+`imx500_mcu_sdk.imx500_open()`, starts the stream, and saves one metadata frame. Add
 `--jpeg-preview` to request JPEG metadata output and save one extracted JPEG
 preview frame without opening a preview window.
 
@@ -103,7 +103,7 @@ PYTHONPATH=python python3 tools/imx500_usb_flash.py \
 
 ### `tools/imx500_sdk_open_test.py`
 
-Validates the basic SDK path, including `imx500_mcu_sdk.open()`,
+Validates the basic SDK path, including `imx500_mcu_sdk.imx500_open()`,
 `imx500_mcu_sdk.stream_on()`, and metadata reads. It can use the model already
 stored in module Flash, or temporarily load a model and `network_info` over USB
 for direct-boot testing.

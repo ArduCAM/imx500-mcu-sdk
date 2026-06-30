@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the IMX500 MCU SDK open() path over the USB CDC bridge."""
+"""Exercise the IMX500 MCU SDK imx500_open() path over the USB CDC bridge."""
 
 from __future__ import annotations
 
@@ -79,13 +79,13 @@ def parse_args() -> argparse.Namespace:
         "--mipi-format",
         choices=sorted(MIPI_FORMATS),
         default="image",
-        help="MIPI output format passed to imx500_mcu_sdk.open()",
+        help="MIPI output format passed to imx500_mcu_sdk.imx500_open()",
     )
     parser.add_argument(
         "--spi-format",
         choices=sorted(SPI_FORMATS),
         default="output",
-        help="SPI metadata format passed to imx500_mcu_sdk.open()",
+        help="SPI metadata format passed to imx500_mcu_sdk.imx500_open()",
     )
     parser.add_argument(
         "--model",
@@ -100,13 +100,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stream-on",
         action="store_true",
-        help="Call imx500_mcu_sdk.stream_on() after imx500_mcu_sdk.open() succeeds.",
+        help="Call imx500_mcu_sdk.stream_on() after imx500_mcu_sdk.imx500_open() succeeds.",
     )
     parser.add_argument(
         "--metadata-frames",
         type=int,
         default=0,
-        help="Read this many metadata frames after open. This waits until frames are ready.",
+        help="Read this many metadata frames after imx500_open. This waits until frames are ready.",
     )
     parser.add_argument(
         "--metadata-max-bytes",
@@ -122,7 +122,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-probe",
         action="store_true",
-        help="Skip imx500_mcu_sdk.probe_imx500_module() before open.",
+        help="Skip imx500_mcu_sdk.probe_imx500_module() before imx500_open.",
     )
     return parser.parse_args()
 
@@ -159,19 +159,19 @@ def main() -> int:
 
         boot_name = "direct model/network_info" if direct_boot else "flash model/network_info"
         print(
-            "calling imx500_mcu_sdk.open(): "
+            "calling imx500_mcu_sdk.imx500_open(): "
             f"boot={boot_name}, mipi={args.mipi_format}, spi={args.spi_format}, "
             f"fps={args.fps}",
             flush=True,
         )
-        opened = imx500_mcu_sdk.open(
+        opened = imx500_mcu_sdk.imx500_open(
             model,
             network_info,
             MIPI_FORMATS[args.mipi_format],
             SPI_FORMATS[args.spi_format],
             args.fps,
         )
-        print(f"imx500_mcu_sdk.open result: {opened}", flush=True)
+        print(f"imx500_mcu_sdk.imx500_open result: {opened}", flush=True)
         if not opened:
             return 2
 

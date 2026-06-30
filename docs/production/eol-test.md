@@ -11,7 +11,7 @@ catch hardware, model, stream, metadata, and parser failures.
 | Detect module | Module responds over the expected control path. |
 | Read version/status | Firmware/status can be read and logged. |
 | Load or confirm model | Model and `network_info` are present and match the expected build. |
-| Start stream | `open()` and `stream_on()` complete. |
+| Start stream | `imx500_open()` and `stream_on()` complete. |
 | Read metadata | At least one complete metadata frame is received. |
 | Parse output | Metadata parser returns the expected network/tensor descriptors. |
 | Emit marker | Fixture prints a stable `PASS` or `FAIL` result marker. |
@@ -22,7 +22,7 @@ For Pico 2, start from:
 
 - [Pico 2 production test](../../examples/platform/rpi/pico2/production_test/README.md)
 
-That example checks `open(...)`, `stream_on()`, first metadata frame read, and a
+That example checks `imx500_open(...)`, `stream_on()`, first metadata frame read, and a
 fixed metadata byte condition before printing `TEST_RESULT: PASS` or
 `TEST_RESULT: FAIL`.
 

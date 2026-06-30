@@ -27,8 +27,8 @@ Move through these checkpoints in order:
 
 | Checkpoint | What should work |
 | --- | --- |
-| I2C control | The MCU can probe or open the IMX500 module. |
-| Stream control | The MCU can call `open()` and `stream_on()` through the SDK. |
+| I2C control | The MCU can probe the IMX500 module. |
+| Stream control | The MCU can call `imx500_open()` and `stream_on()` through the SDK. |
 | SPI metadata | The MCU receives one complete metadata frame. |
 | Metadata parsing | The SDK parses metadata into network and tensor descriptors. |
 | Product event | Your firmware converts tensor output into application behavior. |

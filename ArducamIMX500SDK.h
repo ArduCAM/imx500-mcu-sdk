@@ -324,7 +324,7 @@ extern "C" {
  * @brief Parse one raw SPI metadata buffer using the selected SPI metadata layout.
  * @param data Raw metadata buffer from @ref read_metadata.
  * @param data_len Number of valid bytes in @p data.
- * @param spi_format SPI metadata layout passed to @ref open.
+ * @param spi_format SPI metadata layout passed to @ref imx500_open.
  * @param parsed_metadata Output structure filled with parsed offsets and tensors.
  * @return `true` on success, `false` if the payload format is invalid.
  */
@@ -487,7 +487,7 @@ bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
  * @brief Reset the IMX500 module and wait until loader/main firmware is ready.
  * @return `true` if reset completed and boot status returned to 1.
  *
- * This is the reset-only part shared by @ref open. It does not load a model
+ * This is the reset-only part shared by @ref imx500_open. It does not load a model
  * from SPI or flash.
  */
 bool reset_imx500_module(void);
@@ -503,7 +503,7 @@ bool reset_imx500_module(void);
  * @param fps Target frame rate.
  * @return `true` if initialization completed successfully.
  */
-bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps);
+bool imx500_open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps);
 
 /**
  * @brief Transfer one firmware blob to the module.
@@ -514,7 +514,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
  */
 int load_imx500_fw(const uint8_t *fw, uint32_t size, uint32_t fw_type);
 
-/** @brief Start inference/video streaming after @ref open succeeds. */
+/** @brief Start inference/video streaming after @ref imx500_open succeeds. */
 void stream_on(void);
 
 /**

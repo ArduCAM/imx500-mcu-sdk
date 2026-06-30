@@ -156,7 +156,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Attach to an already configured stream instead of calling "
-            "imx500_mcu_sdk.open()/imx500_mcu_sdk.stream_on()."
+            "imx500_mcu_sdk.imx500_open()/imx500_mcu_sdk.stream_on()."
         ),
     )
     parser.add_argument(
@@ -205,15 +205,15 @@ def main() -> int:
             )
 
         if not args.no_open:
-            print("calling imx500_mcu_sdk.open(..., spi=jpeg-output)", flush=True)
-            opened = imx500_mcu_sdk.open(
+            print("calling imx500_mcu_sdk.imx500_open(..., spi=jpeg-output)", flush=True)
+            opened = imx500_mcu_sdk.imx500_open(
                 model,
                 network_info,
                 imx500_mcu_sdk.MipiDataFormat.IMAGE,
                 imx500_mcu_sdk.SpiDataFormat.METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
                 args.fps,
             )
-            print(f"imx500_mcu_sdk.open result: {opened}", flush=True)
+            print(f"imx500_mcu_sdk.imx500_open result: {opened}", flush=True)
             if not opened:
                 return 2
             print("calling imx500_mcu_sdk.stream_on()", flush=True)

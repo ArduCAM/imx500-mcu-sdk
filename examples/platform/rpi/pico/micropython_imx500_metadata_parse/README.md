@@ -423,7 +423,7 @@ mpremote reset
 The script uses:
 
 ```python
-imx500.open(
+imx500.imx500_open(
     None,
     None,
     imx500.MipiDataFormat.IMAGE,
@@ -435,8 +435,8 @@ imx500.read_metadata(buf)
 imx500.parse_metadata(buf, length=n, spi_format=..., preview_len=4096)
 ```
 
-`open(...)`, `probe_imx500_module()`, and `read_metadata(buffer)` are aligned
-with the pybind Python API. On Pico MicroPython, `open(...)` also initializes the
+`imx500_open(...)`, `probe_imx500_module()`, and `read_metadata(buffer)` are aligned
+with the pybind Python API. On Pico MicroPython, `imx500_open(...)` also initializes the
 fixed Pico I2C/SPI pins before calling the SDK.
 
 `read_metadata(buffer)` writes into the supplied `bytearray` and returns the

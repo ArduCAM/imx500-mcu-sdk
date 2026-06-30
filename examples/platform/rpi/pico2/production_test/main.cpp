@@ -266,7 +266,7 @@ bool run_production_test() {
     set_test_led_state(LedState::Idle);
     print_module_identity();
 
-    if (!open(NN_FW_DATA,
+    if (!imx500_open(NN_FW_DATA,
               NN_FW_SIZE,
               NN_NETWORK_INFO_DATA,
               NN_NETWORK_INFO_SIZE,
@@ -280,7 +280,7 @@ bool run_production_test() {
         return false;
     }
 
-    printf("open() completed, starting stream\n");
+    printf("imx500_open() completed, starting stream\n");
     stream_on();
 
     printf("Waiting for first frame...\n");

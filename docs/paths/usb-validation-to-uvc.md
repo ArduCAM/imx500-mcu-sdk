@@ -32,7 +32,7 @@ You passed this path's first mission when:
 
 - The USB bridge is detected.
 - IMX500 status or probe information is read.
-- `imx500_mcu_sdk.open()` and `stream_on()` complete.
+- `imx500_mcu_sdk.imx500_open()` and `stream_on()` complete.
 - One metadata frame is saved under `first_run_outputs/`.
 - Optional: one JPEG preview is saved under `first_run_outputs/`.
 
@@ -51,7 +51,7 @@ After USB validation passes, choose the next step:
 
 Contact Arducam when:
 
-- The USB bridge is detected but `open()` does not complete.
+- The USB bridge is detected but `imx500_open()` does not complete.
 - Metadata frames are present but do not match the expected model output.
 - JPEG preview works on PC but your target deployment needs a different USB or
   UVC product shape.

@@ -141,7 +141,7 @@ SDK。
 1. 注册平台回调：`register_i2c_driver(...)` 和 `register_spi_driver(...)`
 2. 可选：通过 `register_printf(...)` 将 SDK log 接入平台 logger
 3. 可选：调用 `probe_imx500_module(...)` 做早期硬件存在性检查
-4. 调用 `open(...)` 加载 firmware/network info 并配置数据格式
+4. 调用 `imx500_open(...)` 加载 firmware/network info 并配置数据格式
 5. 调用 `stream_on()` 启动 runtime output
 6. 调用 `read_metadata(...)` 读取 SPI metadata frame
 7. 调用 `parse_metadata(...)` 解析 metadata，并绑定 output tensor payload
@@ -152,7 +152,7 @@ SDK。
 ```text
 register_i2c_driver / register_spi_driver
     -> probe_imx500_module
-    -> open
+    -> imx500_open
     -> stream_on
     -> read_metadata
     -> parse_metadata

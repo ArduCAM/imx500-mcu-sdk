@@ -3680,7 +3680,7 @@ bool reset_imx500_module(void) {
     return reset_imx500_module_to_loader_main_ready(nullptr);
 }
 
-bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
+bool imx500_open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
     uint32_t val;
     imx500_err_t cmd_err = IMX500_CMD_OK;
     uint32_t imx500_boot_status = 0;

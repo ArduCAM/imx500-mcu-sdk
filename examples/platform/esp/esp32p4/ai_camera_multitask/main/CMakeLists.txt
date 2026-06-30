@@ -92,14 +92,6 @@ if(AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK)
         "${IMX500_SDK_DIR}/ai_driver.c"
         ${IMX500_GENERATED_ASSET_SRCS})
 
-    set(ai_camera_multitask_srcs
-        "ai_camera_multitask.cpp"
-        "imx500_multitask_model_registry.cpp"
-        "imx500_multitask_postprocess.cpp"
-        "imx500_multitask_ui.cpp"
-        "higherhrnet_postprocess.cpp"
-        "${IMX500_SDK_DIR}/ArducamIMX500SDK.cc")
-
     list(APPEND priv_include_dirs
         "${IMX500_SDK_DIR}"
         "${CMAKE_CURRENT_BINARY_DIR}"
@@ -133,10 +125,6 @@ if(AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK)
         message(FATAL_ERROR "Unsupported AI_CAMERA_MULTITASK_SPI_METADATA_MODE=${AI_CAMERA_MULTITASK_SPI_METADATA_MODE}, expected OUTPUT_TENSOR_ONLY or JPEG_INPUT_OUTPUT")
     endif()
 
-    if(NOT CMAKE_SCRIPT_MODE_FILE)
-        set_source_files_properties(${ai_camera_multitask_srcs}
-            PROPERTIES COMPILE_DEFINITIONS "open=imx500_sdk_open")
-    endif()
 else()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE AI_CAMERA_MULTITASK_ENABLE_IMX500_SDK=0)
 endif()

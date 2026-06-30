@@ -110,7 +110,7 @@ int main() {
     printf("Peripherals initialized, opening IMX500 stream\n");
     fflush(stdout);
 
-    const bool open_ret = open(
+    const bool open_ret = imx500_open(
         nullptr,
         0,
         nullptr,
@@ -120,7 +120,7 @@ int main() {
         10
     );
     if (!open_ret) {
-        printf("IMX500 open failed\n");
+        printf("IMX500 imx500_open failed\n");
         fflush(stdout);
         send_packet(0, nullptr, -1);
         while (1) {

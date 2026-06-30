@@ -3676,7 +3676,7 @@ bool reset_imx500_module(void) {
     return reset_imx500_module_to_loader_main_ready(NULL);
 }
 
-bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
+bool imx500_open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps) {
     uint32_t val;
     imx500_err_t cmd_err = IMX500_CMD_OK;
     uint32_t imx500_boot_status = 0;
@@ -3742,7 +3742,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("load model from flash completed, boot_status=%" PRIu32 "\n", imx500_boot_status);
     }
 
-    cmd_err = imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
+    cmd_err = imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 5000);
     if (cmd_err != IMX500_CMD_OK) {
         printf("Error: sensor default config failed err=%d(%s)\n",
                (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
@@ -3800,7 +3800,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
     switch (spi_format)
     {
     case SPI_METADATA_OUTPUT_TENSOR:
-        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_OUTPUT_TENSOR, &val, 10);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_OUTPUT_TENSOR, &val, 500);
         if (cmd_err != IMX500_CMD_OK) {
             printf("Error: set SPI metadata output tensor format failed err=%d(%s)\n",
                    (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
@@ -3818,7 +3818,7 @@ bool open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uin
         printf("Not yet implemented(SPI_METADATA_JPEG_INPUT_TENSOR), disabled.\n");
         break;
     case SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR:
-        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR, &val, 10);
+        cmd_err = imx500_res_read(IMX500_COMMAND_SET_FORMAT_SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR, &val, 500);
         if (cmd_err != IMX500_CMD_OK) {
             printf("Error: set SPI JPEG/input/output metadata format failed err=%d(%s)\n",
                    (int)cmd_err, get_imx500_cmd_error_name(cmd_err));

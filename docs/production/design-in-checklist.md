@@ -13,7 +13,7 @@ hardware, firmware, model output, test flow, and supply.
 | Interfaces | `I2C`, `SPI`, MIPI, USB, power, reset, and mechanical constraints are confirmed. |
 | Model | Model package, `network_info`, metadata format, tensor layout, and post-processing are fixed. |
 | Optics | Lens, FOV, focus distance, illumination, enclosure window, and mounting are validated. |
-| Firmware | `open()`, `stream_on()`, metadata read, parse, retry, and recovery behavior are defined. |
+| Firmware | `imx500_open()`, `stream_on()`, metadata read, parse, retry, and recovery behavior are defined. |
 | Application output | Product events, thresholds, ROI, labels, and fail-safe behavior are specified. |
 | Factory test | Test command, pass/fail marker, expected logs, and station flow are documented. |
 | Supply | Volume plan, customization needs, SLA, and long-term supply expectations are known. |

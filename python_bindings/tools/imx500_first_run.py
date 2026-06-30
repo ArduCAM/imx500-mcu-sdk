@@ -170,14 +170,14 @@ def parse_args() -> argparse.Namespace:
         "--mipi-format",
         choices=sorted(MIPI_FORMATS),
         default="image",
-        help="MIPI format passed to imx500_mcu_sdk.open().",
+        help="MIPI format passed to imx500_mcu_sdk.imx500_open().",
     )
     parser.add_argument(
         "--spi-format",
         choices=sorted(SPI_FORMATS),
         default="output",
         help=(
-            "SPI format passed to imx500_mcu_sdk.open(). Ignored when "
+            "SPI format passed to imx500_mcu_sdk.imx500_open(). Ignored when "
             "--jpeg-preview is set."
         ),
     )
@@ -210,7 +210,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-probe",
         action="store_true",
-        help="Skip imx500_mcu_sdk.probe_imx500_module() before open().",
+        help="Skip imx500_mcu_sdk.probe_imx500_module() before imx500_open().",
     )
     return parser.parse_args()
 
@@ -305,7 +305,7 @@ def main() -> int:
 
     def open_stream() -> str:
         spi_format_name = "jpeg-output" if args.jpeg_preview else args.spi_format
-        opened = imx500_mcu_sdk.open(
+        opened = imx500_mcu_sdk.imx500_open(
             model,
             network_info,
             MIPI_FORMATS[args.mipi_format],
@@ -313,7 +313,7 @@ def main() -> int:
             args.fps,
         )
         if not opened:
-            raise RuntimeError("imx500_mcu_sdk.open() returned false")
+            raise RuntimeError("imx500_mcu_sdk.imx500_open() returned false")
         imx500_mcu_sdk.stream_on()
         boot_name = "flash" if model is None else "direct"
         return f"boot={boot_name} mipi={args.mipi_format} spi={spi_format_name} fps={args.fps}"
@@ -367,7 +367,7 @@ def main() -> int:
     checkpoints = [
         Checkpoint("USB bridge detected", connect_bridge),
         Checkpoint("IMX500 status read", read_status),
-        Checkpoint("SDK open and stream_on", open_stream),
+        Checkpoint("SDK imx500_open and stream_on", open_stream),
         Checkpoint("Metadata frame received", read_metadata_frame),
     ]
     if args.jpeg_preview:

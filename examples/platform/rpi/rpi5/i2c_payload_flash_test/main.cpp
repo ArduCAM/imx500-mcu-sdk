@@ -329,7 +329,7 @@ static bool run_action(const char *action)
     if (std::strcmp(action, "flash-load") == 0) {
         dump_module_snapshot("before flash-load");
         std::printf("Load model and network_info from module flash...\n");
-        bool ok = open(nullptr,
+        bool ok = imx500_open(nullptr,
                        0,
                        nullptr,
                        0,

@@ -119,7 +119,7 @@ You should see:
 
 ## Model Programming
 
-The Pico 2 firmware intentionally calls `open(nullptr, 0, nullptr, 0, ...)`.
+The Pico 2 firmware intentionally calls `imx500_open(nullptr, 0, nullptr, 0, ...)`.
 Pico flash is too small to store both the forwarding firmware and an IMX500
 `.fpk` package, so the model must be programmed onto the camera module
 separately.

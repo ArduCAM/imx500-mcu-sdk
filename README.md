@@ -16,7 +16,7 @@ the next IMX500 product path.
 
 | Mission | Start with | Success checkpoint | Next unlock |
 | --- | --- | --- | --- |
-| Validate the camera over USB | [Python USB tools](python_bindings/README.md) | USB bridge detected, SDK `open()` completes, one metadata frame is received, optional JPEG preview is saved | [USB3 UVC deployment path / B0566](docs/paths/usb-validation-to-uvc.md) |
+| Validate the camera over USB | [Python USB tools](python_bindings/README.md) | USB bridge detected, SDK `imx500_open()` completes, one metadata frame is received, optional JPEG preview is saved | [USB3 UVC deployment path / B0566](docs/paths/usb-validation-to-uvc.md) |
 | Run a visible AI demo | [ESP32-P4 example](examples/platform/esp/esp32p4/README.md) | LCD preview is visible and the serial log prints parsed AI output | [MCU integration path](docs/paths/spi-mcu-product-path.md) |
 | Read AI metadata on an MCU | [Pico 2 serial stream example](examples/platform/rpi/pico2/camera_serial_stream_multitask/README.md) | MCU receives an IMX500 metadata frame and forwards or parses it into an event | [SPI metadata productization path](docs/paths/spi-mcu-product-path.md) |
 | Prototype with MicroPython | [Pico MicroPython metadata parse example](examples/platform/rpi/pico/micropython_imx500_metadata_parse/README.md) | Pico imports `imx500_mcu_sdk`, parses metadata, and prints SSD MobileNet detections or UART product frames | [MicroPython user module](python_bindings/micropython/README.md) |
@@ -35,7 +35,7 @@ Need the API surface while building? Use the
 
 If you just received a B0642 module, validate the camera from a PC before wiring
 an MCU. The optional Python host tools can exercise the USB bridge,
-`imx500_mcu_sdk.open()`, metadata reads, JPEG preview, and model flashing flows.
+`imx500_mcu_sdk.imx500_open()`, metadata reads, JPEG preview, and model flashing flows.
 
 Before connecting the module to the host PC, hold down the module `MODE` button,
 then plug in the host-side USB cable. Keep `MODE` button pressed until the USB bridge is
@@ -61,7 +61,7 @@ PYTHONPATH=python python3 tools/imx500_usb_flash.py \
 PYTHONPATH=python python3 tools/imx500_first_run.py
 ```
 
-You passed this checkpoint when the tool connects to the USB bridge, `open()`
+You passed this checkpoint when the tool connects to the USB bridge, `imx500_open()`
 returns success, and at least one metadata frame is saved.
 
 Next unlocks:
@@ -163,7 +163,7 @@ Most ports follow the same sequence:
 3. Apply `imx500_mcu_sdk_apply_config(your_target)`.
 4. Implement platform `I2C`, `SPI`, delay, and optional log callbacks.
 5. Register callbacks with `register_i2c_driver(...)`, `register_spi_driver(...)`, and optionally `register_printf(...)`.
-6. Call `open(...)`, `stream_on()`, `read_metadata(...)`, and `parse_metadata(...)`.
+6. Call `imx500_open(...)`, `stream_on()`, `read_metadata(...)`, and `parse_metadata(...)`.
 7. Convert parsed tensors into product events with your post-processing logic.
 
 For the detailed integration manual, see [中文](docs/zho/integration-guide.md),

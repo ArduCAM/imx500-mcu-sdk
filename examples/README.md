@@ -53,7 +53,7 @@ Build and flash firmware
 Open serial monitor or host receiver
     |
     v
-Confirm IMX500 open(), stream_on(), and metadata output
+Confirm IMX500 imx500_open(), stream_on(), and metadata output
     |
     v
 Choose model validation, SPI/MCU productization, or production test

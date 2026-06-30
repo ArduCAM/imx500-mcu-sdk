@@ -711,8 +711,8 @@ static bool init_imx500_streaming(void) {
     service_wifi_connected_led();
 
     printf("Opening IMX500 with model/network_info already deployed in module flash...\n");
-    if (!open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, kImx500SpiMetadataFormat, IMX500_STREAM_FPS)) {
-        printf("open() failed\n");
+    if (!imx500_open(nullptr, 0, nullptr, 0, MIPI_DATA_IMAGE, kImx500SpiMetadataFormat, IMX500_STREAM_FPS)) {
+        printf("imx500_open() failed\n");
         return false;
     }
 

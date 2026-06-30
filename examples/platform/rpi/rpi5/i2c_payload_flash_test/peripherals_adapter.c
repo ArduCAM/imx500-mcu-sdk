@@ -29,8 +29,8 @@ static uint32_t s_i2c_status_poll_failure_log_count = 0;
 static int rpi5_open_device(const char *path, int flags)
 {
     /*
-     * The SDK exports a public function named open(...). Use openat through
-     * syscall so this Linux adapter cannot resolve to the SDK symbol.
+     * Use openat through syscall so this Linux adapter always resolves device
+     * file opens to the POSIX API.
      */
     return (int)syscall(SYS_openat, AT_FDCWD, path, flags, 0);
 }

@@ -17,14 +17,14 @@ def main():
     ok, device_id, boot_status = imx500.probe_imx500_module()
     print("probe:", ok, "device_id:", hex(device_id), "boot_status:", hex(boot_status))
 
-    if not imx500.open(
+    if not imx500.imx500_open(
         None,
         None,
         imx500.MipiDataFormat.IMAGE,
         imx500.SpiDataFormat.METADATA_OUTPUT_TENSOR,
         10,
     ):
-        raise RuntimeError("imx500 open() failed")
+        raise RuntimeError("imx500_open() failed")
 
     imx500.stream_on()
 

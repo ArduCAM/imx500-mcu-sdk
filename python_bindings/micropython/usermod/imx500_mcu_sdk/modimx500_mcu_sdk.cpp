@@ -265,10 +265,10 @@ static mp_obj_t imx500_sdk_open(size_t n_args, const mp_obj_t *pos_args, mp_map_
     optional_read_buffer(args[ARG_model].u_obj, &model);
     optional_read_buffer(args[ARG_network_info].u_obj, &network_info);
 
-    bool ok = open((const uint8_t *)model.buf,
-                   checked_buffer_len(model.len, "open model"),
+    bool ok = imx500_open((const uint8_t *)model.buf,
+                   checked_buffer_len(model.len, "imx500_open model"),
                    (const uint8_t *)network_info.buf,
-                   checked_buffer_len(network_info.len, "open network_info"),
+                   checked_buffer_len(network_info.len, "imx500_open network_info"),
                    (mipi_data_format_t)args[ARG_mipi_format].u_int,
                    (spi_data_format_t)args[ARG_spi_format].u_int,
                    (uint32_t)args[ARG_fps].u_int);
@@ -679,7 +679,7 @@ static const mp_rom_map_elem_t imx500_sdk_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_get_pid), MP_ROM_PTR(&imx500_sdk_get_pid_obj) },
     { MP_ROM_QSTR(MP_QSTR_get_sensor_device_id), MP_ROM_PTR(&imx500_sdk_get_sensor_device_id_obj) },
     { MP_ROM_QSTR(MP_QSTR_probe_imx500_module), MP_ROM_PTR(&imx500_sdk_probe_obj) },
-    { MP_ROM_QSTR(MP_QSTR_open), MP_ROM_PTR(&imx500_sdk_open_obj) },
+    { MP_ROM_QSTR(MP_QSTR_imx500_open), MP_ROM_PTR(&imx500_sdk_open_obj) },
     { MP_ROM_QSTR(MP_QSTR_load_imx500_fw), MP_ROM_PTR(&imx500_sdk_load_imx500_fw_obj) },
     { MP_ROM_QSTR(MP_QSTR_stream_on), MP_ROM_PTR(&imx500_sdk_stream_on_obj) },
     { MP_ROM_QSTR(MP_QSTR_switch_spi_data_forward_mode), MP_ROM_PTR(&imx500_sdk_switch_spi_data_forward_mode_obj) },

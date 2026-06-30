@@ -1386,7 +1386,7 @@ static bool open_imx500_stream()
              "opening IMX500 with embedded model directly: fw=%u bytes nn_info=%u bytes",
              static_cast<unsigned>(g_active_model->firmware.size),
              static_cast<unsigned>(g_active_model->network_info.size));
-    return open(g_active_model->firmware.data,
+    return imx500_open(g_active_model->firmware.data,
                 static_cast<uint32_t>(g_active_model->firmware.size),
                 g_active_model->network_info.data,
                 static_cast<uint32_t>(g_active_model->network_info.size),
@@ -1399,7 +1399,7 @@ static bool open_imx500_stream()
     }
 
     ESP_LOGI(TAG, "opening IMX500 from module flash");
-    return open(nullptr, 0, nullptr, 0,
+    return imx500_open(nullptr, 0, nullptr, 0,
                 MIPI_DATA_IMAGE,
                 kSpiMetadataFormat,
                 10);
@@ -1671,7 +1671,7 @@ extern "C" esp_err_t ai_camera_multitask_run(void)
     imx500_present_status_screen(g_display_panel, g_lcd_buffers, EXAMPLE_LCD_BUF_NUM,
                                  "LOADING MODEL", g_active_model->display_name, get_boot_mode_name());
 
-    ESP_RETURN_ON_FALSE(open_imx500_stream(), ESP_FAIL, TAG, "open() failed");
+    ESP_RETURN_ON_FALSE(open_imx500_stream(), ESP_FAIL, TAG, "imx500_open() failed");
     ESP_RETURN_ON_FALSE(allocate_parsed_metadata_buffer(), ESP_FAIL, TAG, "failed to prepare parsed metadata buffer");
 
     if (xSemaphoreTake(g_overlay_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {

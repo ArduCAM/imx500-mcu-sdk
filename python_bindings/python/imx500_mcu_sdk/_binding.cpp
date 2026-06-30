@@ -315,7 +315,7 @@ void bind_sdk_functions(py::module_& m) {
     return value;
   });
 
-  m.def("open",
+  m.def("imx500_open",
         [](py::object model,
            py::object network_info,
            mipi_data_format_t mipi_format,
@@ -331,7 +331,7 @@ void bind_sdk_functions(py::module_& m) {
                                            ? nullptr
                                            : reinterpret_cast<const uint8_t*>(
                                                  nn_info_bytes.data());
-          return ::open(model_ptr,
+          return ::imx500_open(model_ptr,
                         static_cast<uint32_t>(model_bytes.size()),
                         nn_info_ptr,
                         static_cast<uint32_t>(nn_info_bytes.size()),

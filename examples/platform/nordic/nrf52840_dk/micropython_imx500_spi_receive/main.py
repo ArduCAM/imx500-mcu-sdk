@@ -27,8 +27,8 @@ def main():
     if not ok:
         raise RuntimeError("IMX500 probe failed")
 
-    if not imx500.open(spi_format=SPI_FORMAT, fps=FPS):
-        raise RuntimeError("IMX500 open failed")
+    if not imx500.imx500_open(spi_format=SPI_FORMAT, fps=FPS):
+        raise RuntimeError("IMX500 imx500_open failed")
 
     imx500.stream_on()
 
