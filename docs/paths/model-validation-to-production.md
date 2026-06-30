@@ -34,6 +34,7 @@ Choose the mission that matches your current model stage:
 | You want to try a known model | [Mission 04: Model Zoo Validation](../missions/04-model-zoo-validation.md) |
 | You already have a model package for the device | [USB validation path](usb-validation-to-uvc.md) and `python_bindings/tools/imx500_usb_flash.py` |
 | You need to bring your own model | [Mission 05: Custom Model Conversion](../missions/05-custom-model-conversion.md) |
+| You need to train, package, and deploy your own model | [Mission 06: Train And Deploy A Custom Model](../missions/06-train-and-deploy-custom-model.md) |
 
 Model zoo entry: [https://github.com/ArduCAM/arducam_imx500_model_zoo](https://github.com/ArduCAM/arducam_imx500_model_zoo)
 

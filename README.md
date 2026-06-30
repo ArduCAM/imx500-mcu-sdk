@@ -22,6 +22,7 @@ the next IMX500 product path.
 | Prototype with MicroPython | [Pico MicroPython metadata parse example](examples/platform/rpi/pico/micropython_imx500_metadata_parse/README.md) | Pico imports `imx500_mcu_sdk`, parses metadata, and prints SSD MobileNet detections or UART product frames | [MicroPython user module](python_bindings/micropython/README.md) |
 | Bring up Nordic MicroPython | [nRF52840 DK MicroPython SPI receive example](examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive/README.md) | nRF52840 DK imports `imx500_mcu_sdk`, opens IMX500 over `TWI1`, and reads one metadata frame over `SPIM3` | [MicroPython user module](python_bindings/micropython/README.md) |
 | Test a model | [Model validation mission](docs/paths/model-validation-to-production.md) | Known model or real hardware output produces parsed metadata | [Application pack](examples/README.md) / [model conversion](https://www.arducam.com/arducam-ai-model-converter-tutorial) |
+| Train your own model | [Custom model training guide](docs/missions/06-train-and-deploy-custom-model.md) | Trained model is converted, packaged into `.fpk` + `network_info.txt`, flashed to B0642, and parsed with custom post-processing | [Model validation to production](docs/paths/model-validation-to-production.md) |
 | Port the SDK to your board | Integration guide: [中文](docs/zho/integration-guide.md), [English](docs/eng/integration-guide.md), [日本語](docs/jpn/integration-guide.md) | Your platform callbacks can probe the module, start the stream, and read metadata | [Custom MCU product path](docs/paths/spi-mcu-product-path.md) |
 | Move toward production | [Production checklist](docs/production/design-in-checklist.md) | Interface, model, optics, enclosure, and factory test flow are confirmed | [Design-in, customization, and volume supply](docs/production/support-options.md) |
 
@@ -68,8 +69,23 @@ Next unlocks:
 - Want PC/Linux plug-and-play deployment? Continue toward the [USB3 UVC path](docs/paths/usb-validation-to-uvc.md).
 - Want a visual MCU demo? Continue with the [ESP32-P4 example](examples/platform/esp/esp32p4/README.md).
 - Want to test a model first? Continue with the [model validation mission](docs/paths/model-validation-to-production.md).
+- Want to train your own model? Continue with the [custom model training guide](docs/missions/06-train-and-deploy-custom-model.md).
 - Want Linux-hosted product packaging? Continue with the [MIPI / Raspberry Pi / CM5 path](docs/paths/mipi-rpi-product-path.md).
 - Want low-power event output? Continue with the [SPI metadata path](docs/paths/spi-mcu-product-path.md).
+
+## Train Your Own Model
+
+If the bundled models do not match your scene, start with the
+[custom model training guide](docs/missions/06-train-and-deploy-custom-model.md). It walks through the
+`YOLOv8n` example path from training, IMX500 conversion and quantization,
+Raspberry Pi or online packaging, `.rpk` to `.fpk` extraction, USB flashing to
+B0642, and the custom post-processing work required to turn output tensors into
+product events.
+
+After the custom model produces readable metadata, use the
+[model validation to production path](docs/paths/model-validation-to-production.md)
+to decide whether the result is ready for USB, MIPI/Linux, or SPI/MCU
+productization.
 
 ## What You Can Build
 
@@ -231,6 +247,7 @@ Path details:
 - [MIPI / Raspberry Pi / CM5 Product](docs/paths/mipi-rpi-product-path.md)
 - [SPI Metadata To MCU Product](docs/paths/spi-mcu-product-path.md)
 - [Model Validation To Production](docs/paths/model-validation-to-production.md)
+- [Train And Deploy A Custom Model](docs/missions/06-train-and-deploy-custom-model.md)
 
 | Stage | What you get | Arducam can help with |
 | --- | --- | --- |
