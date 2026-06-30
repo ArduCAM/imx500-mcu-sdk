@@ -275,6 +275,15 @@ static void warn_if_module_fw_version_incompatible(uint32_t sdk_version,
         }
         break;
     }
+    case 0x00000008u: {
+        static const uint32_t kMinModuleFwVersion = 0x00000010u;
+        if (module_fw_version < kMinModuleFwVersion) {
+            printf("Warning: IMX500 SDK version 0x%x expects module fw version >= 0x%x, "
+                   "but detected 0x%x. Continuing startup.\n",
+                   sdk_version, kMinModuleFwVersion, module_fw_version);
+        }
+        break;
+    }
     default:
         break;
     }
