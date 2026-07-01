@@ -3755,13 +3755,13 @@ bool imx500_open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_in
         printf("load model from flash completed, boot_status=%" PRIu32 "\n", imx500_boot_status);
     }
 
-    cmd_err = imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 500);
+    cmd_err = imx500_res_read(IMX500_COMMAND_SENSOR_DEFAULT_CONFIG, &val, 2000);
     if (cmd_err != IMX500_CMD_OK) {
         printf("Error: sensor default config failed err=%d(%s)\n",
                (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
         return false;
     }
-    cmd_err = imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 500);
+    cmd_err = imx500_res_read(IMX500_COMMAND_NN_DEFAULT_CONFIG, &val, 2000);
     if (cmd_err != IMX500_CMD_OK) {
         printf("Error: NN default config failed err=%d(%s)\n",
                (int)cmd_err, get_imx500_cmd_error_name(cmd_err));
