@@ -2,11 +2,11 @@ dependencies:
   idf: ">=5.3"
 
   esp_video:
-    version: "2.0.*"
+    version: "2.3.*"
     public: true
 
   espressif/esp_lcd_ek79007:
-    version: "2.0.2"
+    version: "^2.0.2~1"
     public: true
 
   example_video_common:
