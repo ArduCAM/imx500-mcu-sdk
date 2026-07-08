@@ -3,6 +3,7 @@
 
 #include "ArducamIMX500SDK.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -211,6 +212,125 @@ py::dict flash_status_to_dict(const spi_flash_status_t& status) {
   return out;
 }
 
+py::dict output_header_to_dict(const IMX500OutputHeader& header) {
+  py::dict out;
+  out["valid_flag"] = header.valid_flag;
+  out["frame_count"] = header.frame_count;
+  out["max_length_of_line"] = header.max_length_of_line;
+  out["size_of_ap_parameter"] = header.size_of_ap_parameter;
+  out["network_ordinal"] = header.network_ordinal;
+  out["indicator"] = header.indicator;
+  return out;
+}
+
+py::dict tensor_dimension_to_dict(const IMX500TensorDimension& dimension) {
+  py::dict out;
+  out["id"] = dimension.id;
+  out["size"] = dimension.size;
+  out["serialization_index"] = dimension.serialization_index;
+  out["padding"] = dimension.padding;
+  return out;
+}
+
+py::dict parsed_tensor_to_dict(const IMX500ParsedTensor& tensor,
+                               const uint8_t* metadata_base,
+                               size_t preview_len) {
+  py::dict out;
+  out["id"] = tensor.id;
+  out["name"] = tensor.name;
+  out["format"] = tensor.format;
+  out["bits_per_element"] = tensor.bits_per_element;
+  out["zero_point"] = tensor.zero_point;
+  out["scale"] = tensor.scale;
+  out["element_count"] = tensor.element_count;
+  out["data_bytes"] = tensor.data_bytes;
+  out["aligned_data_bytes"] = tensor.aligned_data_bytes;
+
+  uintptr_t data_offset = 0;
+  if (tensor.data != nullptr && metadata_base != nullptr) {
+    data_offset = static_cast<uintptr_t>(tensor.data - metadata_base);
+  }
+  out["data_offset"] = data_offset;
+
+  py::list dimensions;
+  for (uint8_t i = 0; i < tensor.dimension_count; ++i) {
+    dimensions.append(tensor_dimension_to_dict(tensor.dimensions[i]));
+  }
+  out["dimensions"] = std::move(dimensions);
+
+  if (tensor.data != nullptr && tensor.data_bytes > 0 && preview_len > 0) {
+    size_t n = std::min<size_t>(tensor.data_bytes, preview_len);
+    out["preview"] = py::bytes(reinterpret_cast<const char*>(tensor.data), n);
+  } else {
+    out["preview"] = py::none();
+  }
+
+  return out;
+}
+
+py::dict parsed_network_to_dict(const IMX500ParsedNetwork& network,
+                                const uint8_t* metadata_base,
+                                size_t preview_len) {
+  py::dict out;
+  out["id"] = network.id;
+  out["name"] = network.name;
+  out["type"] = network.type;
+
+  py::list inputs;
+  for (uint8_t i = 0; i < network.input_tensor_count; ++i) {
+    inputs.append(parsed_tensor_to_dict(network.input_tensors[i],
+                                        metadata_base,
+                                        preview_len));
+  }
+  out["input_tensors"] = std::move(inputs);
+
+  py::list outputs;
+  for (uint8_t i = 0; i < network.output_tensor_count; ++i) {
+    outputs.append(parsed_tensor_to_dict(network.output_tensors[i],
+                                         metadata_base,
+                                         preview_len));
+  }
+  out["output_tensors"] = std::move(outputs);
+  return out;
+}
+
+py::dict parsed_metadata_to_dict(const IMX500ParsedMetadata& parsed,
+                                 const uint8_t* metadata_base,
+                                 uint32_t metadata_len,
+                                 size_t preview_len) {
+  py::dict out;
+  out["raw_bytes"] = metadata_len;
+  out["has_primary_header"] = parsed.has_primary_header;
+  out["has_output_header"] = parsed.has_output_header;
+  out["ap_param_offset"] = parsed.ap_param_offset;
+  out["ap_param_size"] = parsed.ap_param_size;
+  out["ap_param_end_offset"] = parsed.ap_param_end_offset;
+  out["output_payload_offset"] = parsed.output_payload_offset;
+  out["output_payload_length"] = parsed.output_payload_length;
+  out["network_count"] = parsed.network_count;
+  out["selected_network_index"] = parsed.selected_network_index;
+
+  out["primary_header"] = parsed.has_primary_header
+                              ? py::object(output_header_to_dict(parsed.primary_header))
+                              : py::none();
+  out["output_header"] = parsed.has_output_header
+                             ? py::object(output_header_to_dict(parsed.output_header))
+                             : py::none();
+
+  out["jpeg_size"] = parsed.jpeg_size;
+  out["jpeg_data_offset"] = parsed.jpeg_data_offset;
+  out["jpeg_data_len"] = parsed.jpeg_data_len;
+
+  py::list networks;
+  for (uint8_t i = 0; i < parsed.network_count; ++i) {
+    networks.append(parsed_network_to_dict(parsed.networks[i],
+                                           metadata_base,
+                                           preview_len));
+  }
+  out["networks"] = std::move(networks);
+  return out;
+}
+
 void bind_driver_registration(py::module_& m) {
   m.def("register_spi_driver",
         [](py::object write, py::object read) {
@@ -388,6 +508,55 @@ void bind_sdk_functions(py::module_& m) {
                                  static_cast<uint32_t>(capacity));
         },
         py::arg("buffer"));
+
+  m.def("parse_metadata",
+        [](py::buffer buffer,
+           py::object length,
+           spi_data_format_t spi_format,
+           size_t preview_len) -> py::object {
+          py::buffer_info info = buffer.request();
+          if (info.ptr == nullptr || info.size <= 0 || info.itemsize <= 0) {
+            throw py::value_error("metadata buffer length must be > 0");
+          }
+          if (info.ndim != 1 || info.strides.empty() ||
+              info.strides[0] != info.itemsize) {
+            throw py::value_error("metadata buffer must be one-dimensional and contiguous");
+          }
+
+          size_t capacity = static_cast<size_t>(info.size) *
+                            static_cast<size_t>(info.itemsize);
+          size_t metadata_len = capacity;
+          if (!length.is_none()) {
+            metadata_len = length.cast<size_t>();
+            if (metadata_len > capacity) {
+              throw py::value_error("length is larger than the metadata buffer");
+            }
+          }
+          if (metadata_len == 0) {
+            throw py::value_error("metadata length must be > 0");
+          }
+          if (metadata_len > UINT32_MAX) {
+            throw py::value_error("metadata buffer is too large");
+          }
+
+          IMX500ParsedMetadata parsed = {};
+          const auto* metadata_base = reinterpret_cast<const uint8_t*>(info.ptr);
+          bool ok = ::parse_metadata(metadata_base,
+                                     static_cast<uint32_t>(metadata_len),
+                                     spi_format,
+                                     &parsed);
+          if (!ok) {
+            return py::none();
+          }
+          return parsed_metadata_to_dict(parsed,
+                                         metadata_base,
+                                         static_cast<uint32_t>(metadata_len),
+                                         preview_len);
+        },
+        py::arg("buffer"),
+        py::arg("length") = py::none(),
+        py::arg("spi_format") = SPI_METADATA_OUTPUT_TENSOR,
+        py::arg("preview_len") = 16);
 
   m.def("get_spi_flash_status", []() {
     spi_flash_status_t status = {};

@@ -56,6 +56,11 @@ n = imx500_mcu_sdk.read_metadata(buf)
 frame = bytes(memoryview(buf)[:n])
 ```
 
+`imx500_mcu_sdk.parse_metadata(frame, spi_format=..., preview_len=...)` parses
+one raw metadata frame and returns a dictionary with network, input tensor, and
+output tensor descriptors. It returns `None` if the frame does not match the
+selected SPI metadata layout.
+
 ## MicroPython User Module
 
 The MicroPython user C module lives in:
@@ -113,6 +118,33 @@ PYTHONPATH=python python3 tools/imx500_sdk_open_test.py --help
 PYTHONPATH=python python3 tools/imx500_sdk_open_test.py \
   --stream-on \
   --metadata-frames 1
+```
+
+### `tools/imx500_output_tensor_tasks.py`
+
+Loads the four bundled task models with direct boot and prints output tensor
+metadata plus raw and dequantized preview values for each parsed frame.
+
+```bash
+PYTHONPATH=python python3 tools/imx500_output_tensor_tasks.py --help
+PYTHONPATH=python python3 tools/imx500_output_tensor_tasks.py
+PYTHONPATH=python python3 tools/imx500_output_tensor_tasks.py --task object_detection
+```
+
+### `tools/imx500_yolo_output_tensor_tasks.py`
+
+Loads the four bundled YOLO-series models with direct boot and prints output
+tensor metadata plus raw and dequantized preview values for each parsed frame.
+With `--preview` and a single task, it opens a continuous OpenCV preview window;
+press `q` or `Esc` in the window to stop. Pass `--frames-per-task N` to capture a
+fixed number of preview frames instead.
+
+```bash
+PYTHONPATH=python python3 tools/imx500_yolo_output_tensor_tasks.py --help
+PYTHONPATH=python python3 tools/imx500_yolo_output_tensor_tasks.py
+PYTHONPATH=python python3 tools/imx500_yolo_output_tensor_tasks.py --task segmentation
+PYTHONPATH=python python3 tools/imx500_yolo_output_tensor_tasks.py --task object_detection --preview
+PYTHONPATH=python python3 tools/imx500_yolo_output_tensor_tasks.py --task pose_estimation --preview --preview-save-dir yolo_pose_preview
 ```
 
 ### `tools/imx500_jpeg_preview.py`
