@@ -23,7 +23,22 @@ DEFAULT_BAUDRATE = 115200
 DEFAULT_TIMEOUT = 60.0
 METADATA_SIZE_POLL_INTERVAL_SEC = 0.05
 DEFAULT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
-PREVIEW_TASKS = {"classification", "object_detection", "pose_estimation"}
+PREVIEW_TASKS = {"classification", "object_detection", "pose_estimation", "segmentation"}
+YOLOV8_SEG_DEFAULT_MASK_THRESHOLD = 0.5
+YOLOV8_SEG_DEFAULT_ALPHA = 0.45
+YOLOV8_SEG_FALLBACK_PROTO_CHANNELS = 32
+YOLOV8_SEG_COLOURS = (
+    (255, 83, 73),
+    (64, 180, 255),
+    (90, 220, 120),
+    (210, 120, 255),
+    (80, 210, 210),
+    (230, 170, 80),
+    (170, 120, 255),
+    (120, 220, 200),
+    (255, 120, 170),
+    (160, 230, 100),
+)
 
 
 @dataclass(frozen=True)
@@ -47,7 +62,7 @@ TASK_MODELS = {
     "classification": TaskModel("classification", "yolov8n-cls", "imagenet_labels.txt"),
     "object_detection": TaskModel("object_detection", "yolov8n", "coco.txt"),
     "pose_estimation": TaskModel("pose_estimation", "yolov8n-pose"),
-    "segmentation": TaskModel("segmentation", "yolov8n-seg"),
+    "segmentation": TaskModel("segmentation", "yolov8n-seg", "coco.txt"),
 }
 
 
@@ -94,7 +109,6 @@ def load_preview_modules() -> dict[str, Any]:
         from camera_serial_stream_multitask.common import metadata_parser
         from camera_serial_stream_multitask.common.renderers import (
             ClassificationRenderer,
-            YoloV8DetectionRenderer,
         )
     except ImportError as exc:
         raise SystemExit(
@@ -102,12 +116,17 @@ def load_preview_modules() -> dict[str, Any]:
             "camera_serial_stream_multitask helpers. Install missing packages, for example:\n"
             "  python3 -m pip install opencv-python numpy flatbuffers"
         ) from exc
+    try:
+        from camera_serial_stream_multitask.common.renderers import YoloV8DetectionRenderer
+    except ImportError:
+        from camera_serial_stream_multitask.common.renderers import DetectionRenderer as YoloV8DetectionRenderer
 
     return {
         "cv2": cv2,
         "metadata_parser": metadata_parser,
         "classification_renderer": ClassificationRenderer(str(LABEL_ROOT / "imagenet_labels.txt")),
         "detection_renderer": YoloV8DetectionRenderer(str(LABEL_ROOT / "coco.txt")),
+        "segmentation_labels": load_labels(LABEL_ROOT / "coco.txt"),
     }
 
 
@@ -367,6 +386,113 @@ def reshape_yolo_pose_keypoints(array: Any, np: Any) -> Any:
     return rows_to_yolo_pose_keypoints(array.reshape(-1, 51), np)
 
 
+def reshape_yolo_seg_mask_coefficients(array: Any, detection_count: int, np: Any) -> Any:
+    array = np.asarray(array, dtype=np.float32).squeeze()
+    if array.size == 0 or detection_count <= 0:
+        return np.empty((0, 0), dtype=np.float32)
+
+    if array.ndim >= 2:
+        if array.shape[0] == detection_count:
+            return array.reshape(detection_count, -1)
+        if array.shape[-1] == detection_count:
+            return np.moveaxis(array, -1, 0).reshape(detection_count, -1)
+        if array.shape[-1] <= 128 and array.size % array.shape[-1] == 0:
+            rows = array.reshape(-1, array.shape[-1])
+            if rows.shape[0] >= detection_count:
+                return rows[:detection_count]
+        if array.shape[0] <= 128 and array.size % array.shape[0] == 0:
+            rows = np.moveaxis(array, 0, -1).reshape(-1, array.shape[0])
+            if rows.shape[0] >= detection_count:
+                return rows[:detection_count]
+
+    if array.size % detection_count != 0:
+        return np.empty((0, 0), dtype=np.float32)
+    return array.reshape(detection_count, array.size // detection_count)
+
+
+def reshape_yolo_seg_proto(array: Any, channel_count: int, np: Any) -> Any:
+    array = np.asarray(array, dtype=np.float32).squeeze()
+    if array.size == 0:
+        return np.empty((0, 0, 0), dtype=np.float32)
+
+    channel_count = channel_count or YOLOV8_SEG_FALLBACK_PROTO_CHANNELS
+    if array.ndim == 3:
+        matching_axes = [axis for axis, size in enumerate(array.shape) if int(size) == channel_count]
+        if matching_axes:
+            return np.moveaxis(array, matching_axes[0], 0).astype(np.float32, copy=False)
+        channel_axis = int(np.argmin(array.shape))
+        return np.moveaxis(array, channel_axis, 0).astype(np.float32, copy=False)
+
+    if array.ndim == 2 and channel_count in array.shape:
+        channel_axis = 0 if array.shape[0] == channel_count else 1
+        flat = np.moveaxis(array, channel_axis, 0).reshape(channel_count, -1)
+        side = int(round(float(flat.shape[1]) ** 0.5))
+        if side * side == flat.shape[1]:
+            return flat.reshape(channel_count, side, side)
+        return flat.reshape(channel_count, 1, flat.shape[1])
+
+    if array.size % channel_count != 0:
+        return np.empty((0, 0, 0), dtype=np.float32)
+    pixels = array.size // channel_count
+    side = int(round(float(pixels) ** 0.5))
+    if side * side == pixels:
+        return array.reshape(channel_count, side, side)
+    return array.reshape(channel_count, 1, pixels)
+
+
+def sigmoid(array: Any, np: Any) -> Any:
+    return 1.0 / (1.0 + np.exp(-np.clip(array, -80.0, 80.0)))
+
+
+def decode_yolo_segmentation_arrays(
+    boxes_data: Any,
+    scores_data: Any,
+    class_ids_data: Any,
+    mask_coefficients_data: Any,
+    proto_data: Any,
+    args: argparse.Namespace,
+    np: Any,
+) -> dict[str, Any]:
+    boxes = reshape_rows(boxes_data, 4, np)
+    scores = np.asarray(scores_data, dtype=np.float32).reshape(-1)
+    class_ids = np.rint(np.asarray(class_ids_data, dtype=np.float32).reshape(-1)).astype(np.int32)
+    count = min(boxes.shape[0], scores.size, class_ids.size)
+    coefficients = reshape_yolo_seg_mask_coefficients(mask_coefficients_data, count, np)
+    count = min(count, coefficients.shape[0])
+
+    boxes = np.nan_to_num(boxes[:count], nan=0.0, posinf=0.0, neginf=0.0)
+    scores = np.nan_to_num(scores[:count], nan=0.0, posinf=0.0, neginf=0.0)
+    class_ids = class_ids[:count]
+    coefficients = np.nan_to_num(coefficients[:count], nan=0.0, posinf=0.0, neginf=0.0)
+
+    keep = scores >= args.score_threshold
+    boxes = boxes[keep]
+    scores = scores[keep]
+    class_ids = class_ids[keep]
+    coefficients = coefficients[keep]
+
+    order = np.argsort(-scores)
+    boxes = boxes[order]
+    scores = scores[order]
+    class_ids = class_ids[order]
+    coefficients = coefficients[order]
+
+    coefficient_channels = coefficients.shape[1] if coefficients.ndim == 2 and coefficients.size else 0
+    proto = reshape_yolo_seg_proto(proto_data, coefficient_channels, np)
+    if proto.size and coefficients.size:
+        channels = min(coefficients.shape[1], proto.shape[0])
+        coefficients = coefficients[:, :channels]
+        proto = proto[:channels]
+
+    return {
+        "boxes": boxes,
+        "scores": scores,
+        "class_ids": class_ids,
+        "coefficients": coefficients,
+        "proto": proto,
+    }
+
+
 def selected_network_dict(parsed: dict) -> dict:
     networks = parsed.get("networks", ())
     selected = int(parsed.get("selected_network_index", 0))
@@ -474,6 +600,45 @@ def print_pose_summary(frame: bytes, network: dict, args: argparse.Namespace, np
         )
 
 
+def print_segmentation_summary(frame: bytes, network: dict, labels: list[str], args: argparse.Namespace, np: Any) -> None:
+    outputs = network.get("output_tensors", ())
+    if len(outputs) < 5:
+        return
+
+    decoded = decode_yolo_segmentation_arrays(
+        tensor_to_array(frame, outputs[0], np),
+        tensor_to_array(frame, outputs[1], np),
+        tensor_to_array(frame, outputs[2], np),
+        tensor_to_array(frame, outputs[3], np),
+        tensor_to_array(frame, outputs[4], np),
+        args,
+        np,
+    )
+    boxes = decoded["boxes"]
+    scores = decoded["scores"]
+    class_ids = decoded["class_ids"]
+    proto = decoded["proto"]
+    proto_text = "none"
+    if getattr(proto, "ndim", 0) == 3 and proto.size:
+        proto_text = "%dx%dx%d" % (int(proto.shape[1]), int(proto.shape[2]), int(proto.shape[0]))
+
+    print(
+        f"  postprocess segmentation: {scores.size} instances >= "
+        f"{format_score_percent(args.score_threshold)} proto={proto_text}",
+        flush=True,
+    )
+    for index, (box, score, class_id) in enumerate(zip(boxes, scores, class_ids)):
+        if index >= args.max_detections:
+            break
+        x1, y1, x2, y2 = [float(value) for value in box]
+        class_id = int(class_id)
+        print(
+            f"    seg[{index}] id={class_id} label={label_for_class(labels, class_id)} "
+            f"score={format_score_percent(float(score))} xyxy=({x1:.1f},{y1:.1f},{x2:.1f},{y2:.1f})",
+            flush=True,
+        )
+
+
 def print_ai_postprocess_summary(frame: bytes, parsed: dict, task: TaskModel, args: argparse.Namespace) -> None:
     if task.name not in PREVIEW_TASKS:
         return
@@ -491,6 +656,8 @@ def print_ai_postprocess_summary(frame: bytes, parsed: dict, task: TaskModel, ar
         print_detection_summary(frame, network, labels, args, np)
     elif task.name == "pose_estimation":
         print_pose_summary(frame, network, args, np)
+    elif task.name == "segmentation":
+        print_segmentation_summary(frame, network, labels, args, np)
 
 
 def format_float_list(values: list[float]) -> str:
@@ -644,7 +811,7 @@ def read_preview_metadata(
         try:
             parsed_frame = metadata_parser.parse_metadata(
                 frame,
-                format=metadata_parser.SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
+                format=0,
             )
         except Exception as exc:  # noqa: BLE001 - user-facing preview reader.
             print(f"  frame attempt {attempt}: preview parse failed: {exc}", flush=True)
@@ -724,6 +891,156 @@ def scale_keypoints_to_image(keypoints: Any, network: Any, image_shape: tuple[in
     keypoints[:, :, 0] = np.clip(keypoints[:, :, 0], 0, image_w - 1)
     keypoints[:, :, 1] = np.clip(keypoints[:, :, 1], 0, image_h - 1)
     return keypoints
+
+
+def yolo_segmentation_colour(class_id: int) -> tuple[int, int, int]:
+    return YOLOV8_SEG_COLOURS[int(class_id) % len(YOLOV8_SEG_COLOURS)]
+
+
+def create_yolo_segmentation_masks(
+    coefficients: Any,
+    proto: Any,
+    boxes: Any,
+    network: Any,
+    image_shape: tuple[int, int],
+    args: argparse.Namespace,
+    modules: dict[str, Any],
+    np: Any,
+) -> Any:
+    cv2 = modules["cv2"]
+    image_h, image_w = image_shape
+    coefficients = np.asarray(coefficients, dtype=np.float32)
+    proto = np.asarray(proto, dtype=np.float32)
+    if coefficients.size == 0 or proto.size == 0 or proto.ndim != 3:
+        return np.zeros((0, image_h, image_w), dtype=np.bool_)
+
+    channels = min(coefficients.shape[1], proto.shape[0])
+    if channels <= 0:
+        return np.zeros((0, image_h, image_w), dtype=np.bool_)
+
+    proto = proto[:channels]
+    coefficients = coefficients[:, :channels]
+    proto_h, proto_w = int(proto.shape[1]), int(proto.shape[2])
+    logits = np.matmul(coefficients, proto.reshape(channels, -1))
+    probabilities = sigmoid(logits, np).reshape(-1, proto_h, proto_w)
+    proto_boxes = scale_xyxy_to_image(boxes[: probabilities.shape[0]], network, (proto_h, proto_w), np)
+
+    masks: list[Any] = []
+    for probability, box in zip(probabilities, proto_boxes):
+        x1, y1, x2, y2 = [int(round(float(value))) for value in box]
+        x1 = max(0, min(proto_w - 1, x1))
+        x2 = max(0, min(proto_w - 1, x2))
+        y1 = max(0, min(proto_h - 1, y1))
+        y2 = max(0, min(proto_h - 1, y2))
+
+        cropped = np.zeros_like(probability, dtype=np.float32)
+        if x2 > x1 and y2 > y1:
+            cropped[y1 : y2 + 1, x1 : x2 + 1] = probability[y1 : y2 + 1, x1 : x2 + 1]
+        resized = cv2.resize(cropped, (image_w, image_h), interpolation=cv2.INTER_LINEAR)
+        masks.append(resized >= args.mask_threshold)
+
+    if not masks:
+        return np.zeros((0, image_h, image_w), dtype=np.bool_)
+    return np.asarray(masks, dtype=np.bool_)
+
+
+def draw_preview_text_tag(
+    image: Any,
+    text: str,
+    anchor: tuple[int, int],
+    color: tuple[int, int, int],
+    font_scale: float,
+    thickness: int,
+    modules: dict[str, Any],
+) -> None:
+    cv2 = modules["cv2"]
+    text = text if len(text) <= 32 else f"{text[:29].rstrip()}..."
+    (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+    pad_x = max(5, int(font_scale * 9))
+    pad_y = max(4, int(font_scale * 7))
+    x, y = anchor
+    x1 = max(0, min(image.shape[1] - 1, x))
+    y2 = y - 4
+    if y2 < text_h + baseline + pad_y * 2:
+        y2 = min(image.shape[0] - 1, y + text_h + baseline + pad_y * 2 + 4)
+    y1 = max(0, y2 - text_h - baseline - pad_y * 2)
+    x2 = min(image.shape[1] - 1, x1 + text_w + pad_x * 2)
+    cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness=-1)
+    luminance = 0.299 * color[2] + 0.587 * color[1] + 0.114 * color[0]
+    text_color = (16, 16, 16) if luminance > 150 else (245, 245, 245)
+    cv2.putText(
+        image,
+        text,
+        (x1 + pad_x, y2 - baseline - pad_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        text_color,
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def render_yolo_segmentation_preview(parsed_frame: Any, args: argparse.Namespace, modules: dict[str, Any]) -> Any:
+    np = load_numpy()
+    if np is None:
+        raise RuntimeError("segmentation preview requires NumPy")
+    cv2 = modules["cv2"]
+    network = parsed_frame.networks[0]
+    outputs = network.output_tensors
+    if len(outputs) < 5:
+        return parsed_frame.image_bgr.copy()
+
+    decoded = decode_yolo_segmentation_arrays(
+        outputs[0].data,
+        outputs[1].data,
+        outputs[2].data,
+        outputs[3].data,
+        outputs[4].data,
+        args,
+        np,
+    )
+    boxes = decoded["boxes"]
+    scores = decoded["scores"]
+    class_ids = decoded["class_ids"]
+    coefficients = decoded["coefficients"]
+    proto = decoded["proto"]
+
+    annotated = parsed_frame.image_bgr.copy()
+    limit = min(args.max_detections, scores.size)
+    if limit <= 0:
+        return annotated
+
+    boxes = boxes[:limit]
+    scores = scores[:limit]
+    class_ids = class_ids[:limit]
+    coefficients = coefficients[:limit]
+    boxes_image = scale_xyxy_to_image(boxes, network, annotated.shape[:2], np)
+    masks = create_yolo_segmentation_masks(coefficients, proto, boxes, network, annotated.shape[:2], args, modules, np)
+
+    for index in range(min(limit, masks.shape[0]) - 1, -1, -1):
+        mask = masks[index]
+        if not bool(np.any(mask)):
+            continue
+        color = np.asarray(yolo_segmentation_colour(int(class_ids[index])), dtype=np.float32)
+        annotated[mask] = (annotated[mask].astype(np.float32) * (1.0 - args.mask_alpha) + color * args.mask_alpha).astype(np.uint8)
+
+    h, w = annotated.shape[:2]
+    base_scale = max(0.5, min(h, w) / 640.0)
+    thickness = max(1, int(base_scale * 2))
+    font_scale = max(0.45, base_scale * 0.7)
+    labels = modules["segmentation_labels"]
+
+    for box, score, class_id in zip(boxes_image, scores, class_ids):
+        x1, y1, x2, y2 = [int(round(float(value))) for value in box]
+        if x2 <= x1 or y2 <= y1:
+            continue
+        color = yolo_segmentation_colour(int(class_id))
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
+        label = label_for_class(labels, int(class_id))
+        caption = f"{label} {format_score_percent(float(score))}"
+        draw_preview_text_tag(annotated, caption, (x1, y1), color, font_scale, thickness, modules)
+
+    return annotated
 
 
 def render_yolo_pose_preview(parsed_frame: Any, args: argparse.Namespace, modules: dict[str, Any]) -> Any:
@@ -834,6 +1151,8 @@ def render_preview_frame(parsed_frame: Any, task: TaskModel, frame_index: int, a
         )
     elif task.name == "pose_estimation":
         annotated = render_yolo_pose_preview(parsed_frame, args, modules)
+    elif task.name == "segmentation":
+        annotated = render_yolo_segmentation_preview(parsed_frame, args, modules)
     else:
         return
 
@@ -862,7 +1181,7 @@ def close_preview_windows(args: argparse.Namespace) -> None:
 def run_task(imx500_mcu_sdk: ModuleType, task: TaskModel, args: argparse.Namespace) -> None:
     if args.preview and task.name not in PREVIEW_TASKS:
         print(f"\n=== {task.name} ({task.model_dir_name}) ===", flush=True)
-        print("  preview skipped: AI preview is implemented for classification, object_detection, and pose_estimation", flush=True)
+        print("  preview skipped: AI preview is implemented for classification, object_detection, pose_estimation, and segmentation", flush=True)
         return
 
     model_dir = task.model_dir
@@ -993,7 +1312,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Request JPEG+output metadata and show AI post-processing overlays. "
-            "Implemented for classification, object_detection, and pose_estimation."
+            "Implemented for classification, object_detection, pose_estimation, and segmentation."
         ),
     )
     parser.add_argument(
@@ -1028,7 +1347,7 @@ def parse_args() -> argparse.Namespace:
         "--score-threshold",
         type=float,
         default=0.3,
-        help="Score threshold for object_detection and pose_estimation post-processing.",
+        help="Score threshold for object_detection, pose_estimation, and segmentation post-processing.",
     )
     parser.add_argument(
         "--keypoint-threshold",
@@ -1037,10 +1356,22 @@ def parse_args() -> argparse.Namespace:
         help="Keypoint score threshold for pose_estimation preview drawing.",
     )
     parser.add_argument(
+        "--mask-threshold",
+        type=float,
+        default=YOLOV8_SEG_DEFAULT_MASK_THRESHOLD,
+        help="Mask probability threshold for segmentation preview drawing.",
+    )
+    parser.add_argument(
+        "--mask-alpha",
+        type=float,
+        default=YOLOV8_SEG_DEFAULT_ALPHA,
+        help="Segmentation mask overlay opacity for --preview.",
+    )
+    parser.add_argument(
         "--max-detections",
         type=int,
         default=8,
-        help="Maximum detections or people to print/draw per frame.",
+        help="Maximum detections, people, or segmentation instances to print/draw per frame.",
     )
     parser.add_argument(
         "--raw-preview-bytes",
@@ -1093,6 +1424,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--score-threshold must be >= 0")
     if args.keypoint_threshold < 0:
         raise SystemExit("--keypoint-threshold must be >= 0")
+    if not 0.0 <= args.mask_threshold <= 1.0:
+        raise SystemExit("--mask-threshold must be between 0 and 1")
+    if not 0.0 <= args.mask_alpha <= 1.0:
+        raise SystemExit("--mask-alpha must be between 0 and 1")
     if args.max_detections <= 0:
         raise SystemExit("--max-detections must be > 0")
     if args.raw_preview_bytes < 0:
