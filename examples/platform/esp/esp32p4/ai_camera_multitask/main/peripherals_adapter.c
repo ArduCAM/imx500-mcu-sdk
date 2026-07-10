@@ -29,10 +29,10 @@
 
 static const char *TAG = "peripherals_adapter";
 static const int s_imx500_spi_clock_hz = 5000000;
-static const int s_imx500_spi_sck_pin = 5;
-static const int s_imx500_spi_mosi_pin = 3;
-static const int s_imx500_spi_miso_pin = 2;
-static const int s_imx500_spi_cs_pin = 4;
+static const int s_imx500_spi_sck_pin = 3;
+static const int s_imx500_spi_mosi_pin = 5;
+static const int s_imx500_spi_miso_pin = 4;
+static const int s_imx500_spi_cs_pin = 6;
 static i2c_master_dev_handle_t s_camera_i2c_dev_handle;
 static spi_device_handle_t s_imx500_spi_handle;
 static bool s_bound;
