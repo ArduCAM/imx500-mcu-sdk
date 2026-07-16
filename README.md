@@ -50,19 +50,27 @@ python3 -m pip install pybind11
 python3 -m pip install -e . --no-build-isolation
 ```
 
-If this is the first time using the module, flash a model and its matching
-`network_info.txt` before running validation. For example, write the bundled
-HigherHRNet model to module Flash:
+Run the bundled YOLOv8 object-detection preview. The tool loads the selected
+model and matching `network_info.txt` directly for this validation session, so
+you do not need to flash a model first:
 
 ```bash
-PYTHONPATH=python python3 tools/imx500_usb_flash.py \
-  --model ../tools/assets/models/higherhrnet/network.fpk \
-  --network-info ../tools/assets/models/higherhrnet/network_info.txt
-PYTHONPATH=python python3 tools/imx500_first_run.py
+PYTHONPATH=python python3 tools/imx500_yolo_output_tensor_tasks.py \
+  --task object_detection --preview
 ```
 
-You passed this checkpoint when the tool connects to the USB bridge, `imx500_open()`
-returns success, and at least one metadata frame is saved.
+Press `q` or `Esc` in the OpenCV window to stop the preview. You passed this
+checkpoint when the tool connects to the USB bridge, `imx500_open()` succeeds,
+and the live preview shows detections.
+
+The tool supports four bundled YOLO tasks:
+
+| `--task` value | Bundled model | Preview result |
+| --- | --- | --- |
+| `classification` | YOLOv8n-cls | Top image classes and confidence scores. |
+| `object_detection` | YOLOv8n | Object boxes, COCO class labels, and confidence scores. |
+| `pose_estimation` | YOLOv8n-pose | Person boxes plus 17 COCO body keypoints and skeleton links. |
+| `segmentation` | YOLOv8n-seg | Object boxes, COCO class labels, and per-instance masks. |
 
 Next unlocks:
 
