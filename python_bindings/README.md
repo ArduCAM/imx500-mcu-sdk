@@ -120,17 +120,6 @@ PYTHONPATH=python python3 tools/imx500_sdk_open_test.py \
   --metadata-frames 1
 ```
 
-### `tools/imx500_output_tensor_tasks.py`
-
-Loads the four bundled task models with direct boot and prints output tensor
-metadata plus raw and dequantized preview values for each parsed frame.
-
-```bash
-PYTHONPATH=python python3 tools/imx500_output_tensor_tasks.py --help
-PYTHONPATH=python python3 tools/imx500_output_tensor_tasks.py
-PYTHONPATH=python python3 tools/imx500_output_tensor_tasks.py --task object_detection
-```
-
 ### `tools/imx500_yolo_output_tensor_tasks.py`
 
 Loads the four bundled YOLO-series models with direct boot and prints output

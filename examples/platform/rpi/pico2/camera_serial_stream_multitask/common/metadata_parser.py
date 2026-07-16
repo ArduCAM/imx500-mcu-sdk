@@ -223,7 +223,14 @@ def bind_input_tensor_image(input_tensor: InputTensor, image_bgr: np.ndarray) ->
         input_tensor.data = None
         return
 
-    input_height, input_width, _input_channel = dimensions
+    # Tensor descriptors may be HWC or CHW.  ``data`` is a display/host-side
+    # RGB image, so always keep it in HWC order even when the DNN itself uses
+    # CHW.  Treating [3, H, W] as [H, W, C] previously resized a 320x320 pose
+    # input to 320x3 and made any geometry inferred from this helper invalid.
+    if dimensions[0] in (1, 3, 4) and dimensions[1] > 4 and dimensions[2] > 4:
+        _input_channel, input_height, input_width = dimensions
+    else:
+        input_height, input_width, _input_channel = dimensions
     img_h, img_w = image_bgr.shape[:2]
 
     if img_h == input_height and img_w == input_width:

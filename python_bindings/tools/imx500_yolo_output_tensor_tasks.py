@@ -27,6 +27,13 @@ PREVIEW_TASKS = {"classification", "object_detection", "pose_estimation", "segme
 YOLOV8_SEG_DEFAULT_MASK_THRESHOLD = 0.5
 YOLOV8_SEG_DEFAULT_ALPHA = 0.45
 YOLOV8_SEG_FALLBACK_PROTO_CHANNELS = 32
+YOLOV8_POSE_DEFAULT_KEYPOINT_THRESHOLD = 0.2
+YOLOV8_POSE_SKELETON = (
+    (0, 1), (1, 3), (0, 2), (2, 4),
+    (5, 7), (7, 9), (6, 8), (8, 10),
+    (5, 6), (5, 11), (6, 12), (11, 12),
+    (12, 14), (14, 16), (11, 13), (13, 15),
+)
 YOLOV8_SEG_COLOURS = (
     (255, 83, 73),
     (64, 180, 255),
@@ -116,16 +123,12 @@ def load_preview_modules() -> dict[str, Any]:
             "camera_serial_stream_multitask helpers. Install missing packages, for example:\n"
             "  python3 -m pip install opencv-python numpy flatbuffers"
         ) from exc
-    try:
-        from camera_serial_stream_multitask.common.renderers import YoloV8DetectionRenderer
-    except ImportError:
-        from camera_serial_stream_multitask.common.renderers import DetectionRenderer as YoloV8DetectionRenderer
 
     return {
         "cv2": cv2,
         "metadata_parser": metadata_parser,
         "classification_renderer": ClassificationRenderer(str(LABEL_ROOT / "imagenet_labels.txt")),
-        "detection_renderer": YoloV8DetectionRenderer(str(LABEL_ROOT / "coco.txt")),
+        "detection_labels": load_labels(LABEL_ROOT / "coco.txt"),
         "segmentation_labels": load_labels(LABEL_ROOT / "coco.txt"),
     }
 
@@ -357,33 +360,78 @@ def reshape_rows(array: Any, columns: int, np: Any) -> Any:
     return array.reshape(-1, columns)
 
 
-def rows_to_yolo_pose_keypoints(rows: Any, np: Any) -> Any:
-    rows = np.asarray(rows, dtype=np.float32).reshape(-1, 51)
-    return rows.reshape(-1, 17, 3)
+def decode_yolo_detection_arrays(
+    boxes_data: Any,
+    scores_data: Any,
+    class_ids_data: Any,
+    valid_count_data: Any,
+    args: argparse.Namespace,
+    np: Any,
+) -> dict[str, Any]:
+    """Decode the IMX500 YOLOv8 post-processing tensors.
+
+    This follows ``examples/postprocess/parse_yolov8n_det.py``: the first
+    tensor stores absolute ``x1, y1, x2, y2`` coordinates in DNN-input pixels;
+    the fourth tensor provides the number of valid rows.
+    """
+    boxes = reshape_rows(boxes_data, 4, np)
+    scores = np.asarray(scores_data, dtype=np.float32).reshape(-1)
+    class_ids = np.rint(np.asarray(class_ids_data, dtype=np.float32).reshape(-1)).astype(np.int32)
+    valid_items = np.asarray(valid_count_data, dtype=np.float32).reshape(-1)
+    valid_count = int(valid_items[0]) if valid_items.size else boxes.shape[0]
+    valid_count = max(0, min(valid_count, boxes.shape[0], scores.size, class_ids.size))
+
+    boxes = np.nan_to_num(boxes[:valid_count], nan=0.0, posinf=0.0, neginf=0.0).astype(np.int32)
+    scores = np.nan_to_num(scores[:valid_count], nan=0.0, posinf=0.0, neginf=0.0)
+    class_ids = class_ids[:valid_count]
+    keep = scores > args.score_threshold
+    boxes = boxes[keep]
+    scores = scores[keep]
+    class_ids = class_ids[keep]
+    return {
+        "boxes": boxes,
+        "scores": scores,
+        "class_ids": class_ids,
+    }
 
 
-def reshape_yolo_pose_keypoints(array: Any, np: Any) -> Any:
-    array = np.asarray(array, dtype=np.float32).squeeze()
-    if array.size == 0:
-        return np.empty((0, 17, 3), dtype=np.float32)
+def decode_yolo_pose_arrays(
+    boxes_data: Any,
+    scores_data: Any,
+    class_ids_data: Any,
+    keypoints_data: Any,
+    _args: argparse.Namespace,
+    np: Any,
+) -> dict[str, Any]:
+    """Read the YOLOv8 pose tensors in the layout used by the reference parser.
 
-    if array.ndim >= 3:
-        if array.shape[-2:] == (17, 3):
-            return array.reshape(-1, 17, 3)
-        if array.shape[-2:] == (3, 17):
-            return np.swapaxes(array, -1, -2).reshape(-1, 17, 3)
-        if array.shape[:2] == (17, 3):
-            return np.moveaxis(array, (0, 1), (-2, -1)).reshape(-1, 17, 3)
-        if array.shape[:2] == (3, 17):
-            return np.moveaxis(array, (0, 1), (-1, -2)).reshape(-1, 17, 3)
+    ``parse_yolov8n_pos.py`` consumes the post-processing tensors directly as
+    ``boxes[N, 4]``, ``scores[N]``, ``class_ids[N]``, and
+    ``keypoints[N, 51]``.  Keep that row association intact here rather than
+    transposing or otherwise inferring a keypoint layout.
+    """
+    boxes = np.asarray(boxes_data, dtype=np.float32).squeeze()
+    scores = np.asarray(scores_data, dtype=np.float32).reshape(-1)
+    class_ids = np.rint(np.asarray(class_ids_data, dtype=np.float32).reshape(-1)).astype(np.int32)
+    keypoints = np.asarray(keypoints_data, dtype=np.float32).squeeze()
 
-    if array.ndim >= 2 and array.shape[-1] == 51:
-        return rows_to_yolo_pose_keypoints(array.reshape(-1, 51), np)
-    if array.ndim >= 2 and array.shape[0] == 51:
-        return rows_to_yolo_pose_keypoints(np.moveaxis(array, 0, -1).reshape(-1, 51), np)
-    if array.size % 51 != 0:
-        return np.empty((0, 17, 3), dtype=np.float32)
-    return rows_to_yolo_pose_keypoints(array.reshape(-1, 51), np)
+    if boxes.ndim == 1 and boxes.size == 4:
+        boxes = boxes.reshape(1, 4)
+    if keypoints.ndim == 1 and keypoints.size == 51:
+        keypoints = keypoints.reshape(1, 51)
+
+    if boxes.ndim != 2 or boxes.shape[1] != 4:
+        raise ValueError(f"YOLOv8 pose boxes must have shape [N, 4], got {boxes.shape}")
+    if keypoints.ndim != 2 or keypoints.shape[1] != 51:
+        raise ValueError(f"YOLOv8 pose keypoints must have shape [N, 51], got {keypoints.shape}")
+    count = min(boxes.shape[0], scores.size, class_ids.size, keypoints.shape[0])
+
+    return {
+        "boxes": boxes[:count],
+        "scores": scores[:count],
+        "class_ids": class_ids[:count],
+        "keypoints": keypoints[:count],
+    }
 
 
 def reshape_yolo_seg_mask_coefficients(array: Any, detection_count: int, np: Any) -> Any:
@@ -527,24 +575,17 @@ def print_detection_summary(frame: bytes, network: dict, labels: list[str], args
     outputs = network.get("output_tensors", ())
     if len(outputs) < 4:
         return
-    boxes = reshape_rows(tensor_to_array(frame, outputs[0], np), 4, np)
-    scores = np.asarray(tensor_to_array(frame, outputs[1], np), dtype=np.float32).reshape(-1)
-    class_ids = np.rint(np.asarray(tensor_to_array(frame, outputs[2], np), dtype=np.float32).reshape(-1)).astype(np.int32)
-    valid_items = np.asarray(tensor_to_array(frame, outputs[3], np), dtype=np.float32).reshape(-1)
-    valid_count = int(valid_items[0]) if valid_items.size else boxes.shape[0]
-    valid_count = max(0, min(valid_count, boxes.shape[0], scores.size, class_ids.size))
-
-    boxes = boxes[:valid_count]
-    scores = scores[:valid_count]
-    class_ids = class_ids[:valid_count]
-    keep = scores >= args.score_threshold
-    boxes = boxes[keep]
-    scores = scores[keep]
-    class_ids = class_ids[keep]
-    order = np.argsort(-scores)
-    boxes = boxes[order]
-    scores = scores[order]
-    class_ids = class_ids[order]
+    decoded = decode_yolo_detection_arrays(
+        tensor_to_array(frame, outputs[0], np),
+        tensor_to_array(frame, outputs[1], np),
+        tensor_to_array(frame, outputs[2], np),
+        tensor_to_array(frame, outputs[3], np),
+        args,
+        np,
+    )
+    boxes = decoded["boxes"]
+    scores = decoded["scores"]
+    class_ids = decoded["class_ids"]
 
     print(
         f"  postprocess detection: {scores.size} boxes >= {format_score_percent(args.score_threshold)}",
@@ -566,23 +607,21 @@ def print_pose_summary(frame: bytes, network: dict, args: argparse.Namespace, np
     outputs = network.get("output_tensors", ())
     if len(outputs) < 4:
         return
-    boxes = reshape_rows(tensor_to_array(frame, outputs[0], np), 4, np)
-    scores = np.asarray(tensor_to_array(frame, outputs[1], np), dtype=np.float32).reshape(-1)
-    keypoints = reshape_yolo_pose_keypoints(tensor_to_array(frame, outputs[3], np), np)
-    if keypoints.size == 0:
-        return
-    count = min(boxes.shape[0], scores.size, keypoints.shape[0])
-    boxes = boxes[:count]
-    scores = scores[:count]
-    keypoints = keypoints[:count]
+    decoded = decode_yolo_pose_arrays(
+        tensor_to_array(frame, outputs[0], np),
+        tensor_to_array(frame, outputs[1], np),
+        tensor_to_array(frame, outputs[2], np),
+        tensor_to_array(frame, outputs[3], np),
+        args,
+        np,
+    )
+    boxes = decoded["boxes"]
+    scores = decoded["scores"]
+    keypoints = decoded["keypoints"]
     keep = scores >= args.score_threshold
     boxes = boxes[keep]
     scores = scores[keep]
     keypoints = keypoints[keep]
-    order = np.argsort(-scores)
-    boxes = boxes[order]
-    scores = scores[order]
-    keypoints = keypoints[order]
 
     print(
         f"  postprocess pose: {scores.size} people >= {format_score_percent(args.score_threshold)}",
@@ -591,7 +630,7 @@ def print_pose_summary(frame: bytes, network: dict, args: argparse.Namespace, np
     for index, (box, score, person_keypoints) in enumerate(zip(boxes, scores, keypoints)):
         if index >= args.max_detections:
             break
-        visible = int(np.count_nonzero(person_keypoints[:, 2] >= args.keypoint_threshold))
+        visible = int(np.count_nonzero(person_keypoints.reshape(17, 3)[:, 2] >= args.keypoint_threshold))
         x, y, w, h = [float(value) for value in box]
         print(
             f"    pose[{index}] score={format_score_percent(float(score))} "
@@ -822,17 +861,30 @@ def read_preview_metadata(
 
 
 def network_input_hw(network: Any) -> tuple[int, int]:
+    """Return the DNN input height/width from its descriptor.
+
+    The YOLOv8 pose package describes its input as CHW ``[3, 320, 320]``.
+    Use that descriptor before looking at preview-parser image data: the latter
+    is a resized display helper and must not be used to infer a CHW model's
+    spatial dimensions.
+    """
     input_tensor = network.input_tensors[0]
+    dims = [int(dim) for dim in input_tensor.get_dimensions()]
+    if len(dims) == 3:
+        if dims[0] in (1, 3, 4) and dims[1] > 4 and dims[2] > 4:
+            return dims[1], dims[2]
+        if dims[2] in (1, 3, 4) and dims[0] > 4 and dims[1] > 4:
+            return dims[0], dims[1]
+    if len(dims) >= 2 and dims[0] > 0 and dims[1] > 0:
+        return dims[0], dims[1]
+
     input_data = getattr(input_tensor, "data", None)
     if input_data is not None and getattr(input_data, "ndim", 0) >= 2:
         if input_data.ndim == 3 and input_data.shape[0] in (1, 3, 4) and input_data.shape[1] > 4:
             return int(input_data.shape[1]), int(input_data.shape[2])
         return int(input_data.shape[0]), int(input_data.shape[1])
 
-    dims = input_tensor.get_dimensions()
-    if len(dims) == 3 and int(dims[0]) in (1, 3, 4) and int(dims[1]) > 4:
-        return int(dims[1]), int(dims[2])
-    return int(dims[0]), int(dims[1])
+    raise ValueError("network input tensor does not provide usable spatial dimensions")
 
 
 def scale_xyxy_to_image(boxes: Any, network: Any, image_shape: tuple[int, int], np: Any) -> Any:
@@ -854,43 +906,61 @@ def scale_xyxy_to_image(boxes: Any, network: Any, image_shape: tuple[int, int], 
     return boxes
 
 
-def scale_xywh_to_image(boxes: Any, network: Any, image_shape: tuple[int, int], np: Any) -> Any:
+def scale_yolov8_detection_xyxy_to_image(
+    boxes: Any,
+    network: Any,
+    image_shape: tuple[int, int],
+    np: Any,
+) -> Any:
+    """Map absolute YOLOv8 DNN-input coordinates onto the preview JPEG.
+
+    The reference parser uses its default ``nn_input_map=(0, 0, 1, 1)`` for
+    this model, so the model input covers the full preview image.
+    """
     boxes = np.asarray(boxes, dtype=np.float32).copy()
     if boxes.size == 0:
         return boxes.reshape(0, 4)
 
     image_h, image_w = image_shape
     input_h, input_w = network_input_hw(network)
-    if float(np.nanmax(np.abs(boxes))) <= 1.5:
-        boxes[:, [0, 2]] *= float(input_w)
-        boxes[:, [1, 3]] *= float(input_h)
-
     boxes[:, [0, 2]] *= image_w / float(input_w)
     boxes[:, [1, 3]] *= image_h / float(input_h)
-    boxes[:, 0] = np.clip(boxes[:, 0], 0, image_w - 1)
-    boxes[:, 1] = np.clip(boxes[:, 1], 0, image_h - 1)
-    boxes[:, 2] = np.clip(boxes[:, 2], 0, image_w - boxes[:, 0])
-    boxes[:, 3] = np.clip(boxes[:, 3], 0, image_h - boxes[:, 1])
+    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, image_w - 1)
+    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, image_h - 1)
     return boxes
 
 
-def scale_keypoints_to_image(keypoints: Any, network: Any, image_shape: tuple[int, int], np: Any) -> Any:
-    keypoints = np.asarray(keypoints, dtype=np.float32).copy()
-    if keypoints.size == 0:
-        return keypoints.reshape(0, 17, 3)
+def map_yolov8_pose_to_preview(
+    boxes: Any,
+    keypoints: Any,
+    network: Any,
+    image_shape: tuple[int, int],
+    np: Any,
+) -> tuple[Any, Any]:
+    """Map the reference parser's raw pose tensors to preview coordinates.
+
+    This is the full-image ``nn_input_map=(0, 0, 1, 1)`` path from
+    ``parse_yolov8n_pos.py``.  Its output[3] is an ``N x 51`` matrix with
+    interleaved ``x, y, confidence`` values; x/y are already in DNN-input
+    pixels and must not be normalized or clipped.
+    """
+    boxes_yuv = np.asarray(boxes, dtype=np.float32).copy()
+    keypoints_yuv = np.asarray(keypoints, dtype=np.float32).copy()
+    if boxes_yuv.size == 0 or keypoints_yuv.size == 0:
+        return boxes_yuv.reshape(-1, 4), keypoints_yuv.reshape(-1, 51)
 
     image_h, image_w = image_shape
     input_h, input_w = network_input_hw(network)
+    x_scale = image_w / float(input_w)
+    y_scale = image_h / float(input_h)
 
-    if float(np.nanmax(np.abs(keypoints[:, :, :2]))) <= 1.5:
-        keypoints[:, :, 0] *= float(input_w)
-        keypoints[:, :, 1] *= float(input_h)
-
-    keypoints[:, :, 0] *= image_w / float(input_w)
-    keypoints[:, :, 1] *= image_h / float(input_h)
-    keypoints[:, :, 0] = np.clip(keypoints[:, :, 0], 0, image_w - 1)
-    keypoints[:, :, 1] = np.clip(keypoints[:, :, 1], 0, image_h - 1)
-    return keypoints
+    boxes_yuv[:, 0] = boxes_yuv[:, 0] * x_scale
+    boxes_yuv[:, 2] = boxes_yuv[:, 2] * x_scale
+    boxes_yuv[:, 1] = boxes_yuv[:, 1] * y_scale
+    boxes_yuv[:, 3] = boxes_yuv[:, 3] * y_scale
+    keypoints_yuv[:, 0::3] = keypoints_yuv[:, 0::3] * x_scale
+    keypoints_yuv[:, 1::3] = keypoints_yuv[:, 1::3] * y_scale
+    return boxes_yuv, keypoints_yuv
 
 
 def yolo_segmentation_colour(class_id: int) -> tuple[int, int, int]:
@@ -980,6 +1050,52 @@ def draw_preview_text_tag(
     )
 
 
+def render_yolo_detection_preview(parsed_frame: Any, args: argparse.Namespace, modules: dict[str, Any]) -> Any:
+    """Render the IMX500 YOLOv8 detection tensors on the JPEG preview image."""
+    np = load_numpy()
+    if np is None:
+        raise RuntimeError("object-detection preview requires NumPy")
+
+    cv2 = modules["cv2"]
+    annotated = parsed_frame.image_bgr.copy()
+    network = parsed_frame.networks[0]
+    outputs = network.output_tensors
+    if len(outputs) < 4:
+        return annotated
+
+    decoded = decode_yolo_detection_arrays(
+        outputs[0].data,
+        outputs[1].data,
+        outputs[2].data,
+        outputs[3].data,
+        args,
+        np,
+    )
+    limit = min(args.max_detections, decoded["scores"].size)
+    if limit <= 0:
+        return annotated
+
+    boxes = scale_yolov8_detection_xyxy_to_image(decoded["boxes"][:limit], network, annotated.shape[:2], np)
+    scores = decoded["scores"][:limit]
+    class_ids = decoded["class_ids"][:limit]
+    image_h, image_w = annotated.shape[:2]
+    base_scale = max(0.5, min(image_h, image_w) / 640.0)
+    thickness = max(1, int(base_scale * 2))
+    font_scale = max(0.45, base_scale * 0.7)
+    labels = modules["detection_labels"]
+
+    for box, score, class_id in zip(boxes, scores, class_ids):
+        x1, y1, x2, y2 = [int(round(float(value))) for value in box]
+        if x2 <= x1 or y2 <= y1:
+            continue
+        color = yolo_segmentation_colour(int(class_id))
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
+        caption = f"{label_for_class(labels, int(class_id))} {format_score_percent(float(score))}"
+        draw_preview_text_tag(annotated, caption, (x1, y1), color, font_scale, thickness, modules)
+
+    return annotated
+
+
 def render_yolo_segmentation_preview(parsed_frame: Any, args: argparse.Namespace, modules: dict[str, Any]) -> Any:
     np = load_numpy()
     if np is None:
@@ -1053,33 +1169,20 @@ def render_yolo_pose_preview(parsed_frame: Any, args: argparse.Namespace, module
     if len(outputs) < 4:
         return parsed_frame.image_bgr.copy()
 
-    boxes = reshape_rows(outputs[0].data, 4, np)
-    scores = np.asarray(outputs[1].data, dtype=np.float32).reshape(-1)
-    keypoints = reshape_yolo_pose_keypoints(outputs[3].data, np)
-    count = min(boxes.shape[0], scores.size, keypoints.shape[0])
-    boxes = boxes[:count]
-    scores = scores[:count]
-    keypoints = keypoints[:count]
-
-    keep = scores >= args.score_threshold
-    boxes = boxes[keep]
-    scores = scores[keep]
-    keypoints = keypoints[keep]
-    order = np.argsort(-scores)
-    boxes = boxes[order]
-    scores = scores[order]
-    keypoints = keypoints[order]
+    decoded = decode_yolo_pose_arrays(
+        outputs[0].data,
+        outputs[1].data,
+        outputs[2].data,
+        outputs[3].data,
+        args,
+        np,
+    )
+    boxes = decoded["boxes"]
+    scores = decoded["scores"]
+    keypoints = decoded["keypoints"]
 
     annotated = parsed_frame.image_bgr.copy()
-    boxes = scale_xywh_to_image(boxes, network, annotated.shape[:2], np)
-    keypoints = scale_keypoints_to_image(keypoints, network, annotated.shape[:2], np)
-
-    skeleton = [
-        (0, 1), (0, 2), (1, 3), (2, 4),
-        (5, 6), (5, 11), (6, 12), (11, 12),
-        (5, 7), (7, 9), (6, 8), (8, 10),
-        (11, 13), (13, 15), (12, 14), (14, 16),
-    ]
+    boxes, keypoints = map_yolov8_pose_to_preview(boxes, keypoints, network, annotated.shape[:2], np)
     h, w = annotated.shape[:2]
     base_scale = max(0.5, min(h, w) / 640.0)
     thickness = max(1, int(base_scale * 2))
@@ -1087,9 +1190,14 @@ def render_yolo_pose_preview(parsed_frame: Any, args: argparse.Namespace, module
     font_scale = max(0.45, base_scale * 0.7)
     color = (50, 220, 255)
 
-    for index, (box, score, person_keypoints) in enumerate(zip(boxes, scores, keypoints)):
-        if index >= args.max_detections:
+    drawn_people = 0
+    for box, score, keypoints_raw in zip(boxes, scores, keypoints):
+        if score < args.score_threshold:
+            continue
+        if drawn_people >= args.max_detections:
             break
+        drawn_people += 1
+        person_keypoints = keypoints_raw.reshape(17, 3)
         x1, y1, box_w, box_h = [int(value) for value in box]
         x2 = x1 + box_w
         y2 = y1 + box_h
@@ -1104,7 +1212,7 @@ def render_yolo_pose_preview(parsed_frame: Any, args: argparse.Namespace, module
             thickness,
             cv2.LINE_AA,
         )
-        for joint_a, joint_b in skeleton:
+        for joint_a, joint_b in YOLOV8_POSE_SKELETON:
             xa, ya, ca = person_keypoints[joint_a]
             xb, yb, cb = person_keypoints[joint_b]
             if ca >= args.keypoint_threshold and cb >= args.keypoint_threshold:
@@ -1142,13 +1250,7 @@ def render_preview_frame(parsed_frame: Any, task: TaskModel, frame_index: int, a
             show_fps=args.show_fps,
         )
     elif task.name == "object_detection":
-        annotated = modules["detection_renderer"].render(
-            parsed_frame.image_bgr,
-            parsed_frame.networks,
-            score_thr=args.score_threshold,
-            show_img=False,
-            show_fps=args.show_fps,
-        )
+        annotated = render_yolo_detection_preview(parsed_frame, args, modules)
     elif task.name == "pose_estimation":
         annotated = render_yolo_pose_preview(parsed_frame, args, modules)
     elif task.name == "segmentation":
@@ -1352,8 +1454,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--keypoint-threshold",
         type=float,
-        default=0.3,
-        help="Keypoint score threshold for pose_estimation preview drawing.",
+        default=YOLOV8_POSE_DEFAULT_KEYPOINT_THRESHOLD,
+        help="Keypoint score threshold for pose_estimation preview drawing (default: 0.2).",
     )
     parser.add_argument(
         "--mask-threshold",
