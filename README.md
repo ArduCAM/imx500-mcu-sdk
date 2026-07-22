@@ -153,9 +153,9 @@ The SDK provides:
 | --- | --- | --- |
 | ESP32-P4 Function EV Board | Reference display and metadata demo | [examples/platform/esp/esp32p4](examples/platform/esp/esp32p4/README.md) |
 | Raspberry Pi Pico | C++ SPI receive and MicroPython SDK module examples | [examples/platform/rpi/pico](examples/platform/rpi/pico/README.md) |
-| Raspberry Pi Pico 2 | Wiring, serial metadata stream, production test examples | [examples/platform/rpi/pico2](examples/platform/rpi/pico2/README.md) |
+| Raspberry Pi Pico 2 | Wiring, serial metadata stream, inference FPS benchmark, and production test examples | [examples/platform/rpi/pico2](examples/platform/rpi/pico2/README.md) |
 | Raspberry Pi Pico W | Person-detection ROI MVP and SPI receive test examples | [examples/platform/rpi/pico_w](examples/platform/rpi/pico_w/imx500_person_detect_roi_mvp/README.md) |
-| Raspberry Pi 5 | Experimental MIPI preview plus Linux I2C/SPI metadata test | [examples/platform/rpi/rpi5](examples/platform/rpi/rpi5/README.md) |
+| Raspberry Pi 5 | MIPI preview, Linux I2C/SPI metadata test, and I2C payload model operations | [examples/platform/rpi/rpi5](examples/platform/rpi/rpi5/README.md) |
 | Nordic nRF52840 DK | MicroPython SDK module SPI metadata smoke test | [examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive](examples/platform/nordic/nrf52840_dk/micropython_imx500_spi_receive/README.md) |
 | Other MCU platforms | Port by implementing the SDK adapter callbacks | Integration guide: [中文](docs/zho/integration-guide.md), [English](docs/eng/integration-guide.md), [日本語](docs/jpn/integration-guide.md) |
 

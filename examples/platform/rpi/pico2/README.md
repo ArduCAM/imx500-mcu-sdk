@@ -16,7 +16,8 @@ The same pin mapping is used by:
 ## Goal
 
 Wire Pico 2 to the IMX500 module once, then reuse the same `I2C0` + `SPI0`
-interface across serial streaming, integration, and production-test examples.
+interface across serial streaming, performance measurement, integration, and
+production-test examples.
 
 ## Hardware
 
@@ -62,6 +63,7 @@ You should see:
 ## Next Unlock
 
 - Parse metadata into model output with [camera_serial_stream_multitask](camera_serial_stream_multitask/README.md).
+- Measure both supported SPI payload modes with [inference_fps_benchmark](inference_fps_benchmark/README.md).
 - Turn metadata into product events with the [SPI metadata path](../../../../docs/paths/spi-mcu-product-path.md).
 - Validate a model with the [model validation mission](../../../../docs/paths/model-validation-to-production.md).
 

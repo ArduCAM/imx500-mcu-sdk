@@ -53,6 +53,17 @@ Do not connect any camera signal pin to `5 V`.
 The I2C-only payload direct-load and flash test does not use this 8-pin header
 wiring; it talks through the MIPI CSI/FPC connector I2C bus instead.
 
+## Choose a Raspberry Pi 5 Mission
+
+| Mission | Project | Required connection | Success checkpoint |
+| --- | --- | --- | --- |
+| Preview MIPI image and read SPI metadata | `spi_receive_integration_test` | MIPI CSI/FPC plus the 8-pin I2C/SPI header | Preview is visible and at least one metadata frame is read |
+| Direct-load a model or network-info blob | `i2c_payload_flash_test` with `model-direct`, `nninfo-direct`, or `all-direct` | MIPI CSI/FPC camera connector I2C | The selected command completes without a failed payload status |
+| Program and reload module flash | `i2c_payload_flash_test` with `model-flash`, `nninfo-flash`, `all-flash`, or `flash-cycle` | MIPI CSI/FPC camera connector I2C | The write completes and `flash-load` reaches the loaded state |
+
+The SPI receive project is a streaming validation example. The I2C payload
+project is an asset-management test and does not provide an image preview.
+
 ## Get Image
 
 Download the Installation Script

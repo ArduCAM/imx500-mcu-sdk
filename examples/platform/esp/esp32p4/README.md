@@ -14,6 +14,18 @@ The same wiring assumptions are baked into the current `ai_camera_multitask` cod
 Get the fastest MCU-hosted visual demo: MIPI camera preview on the LCD, IMX500
 control over `I2C`, and AI metadata/tensor access over `SPI`.
 
+The firmware embeds four model and network-info pairs:
+
+| Model | Task |
+| --- | --- |
+| MobileNet V2 | Image classification |
+| SSD MobileNetV2 FPNLite | Object detection |
+| HigherHRNet | Pose estimation |
+| DeepLabV3Plus | Semantic segmentation |
+
+HigherHRNet is the initial default. The selected model index is stored in NVS,
+so later boots restore the last selection.
+
 ## Hardware
 
 - ESP32-P4 Function EV Board.
@@ -31,6 +43,31 @@ idf.py set-target esp32p4
 idf.py build flash monitor
 ```
 
+Press and release the board `BOOT` button (`GPIO35`) to select the next embedded
+model. The demo stores the new selection and restarts automatically.
+
+## Build Configuration
+
+The default build uses direct model loading and output-tensor-only SPI metadata:
+
+| CMake option | Default | Supported values |
+| --- | --- | --- |
+| `AI_CAMERA_MULTITASK_BOOT_MODE` | `DIRECT` | `DIRECT`, `FLASH` |
+| `AI_CAMERA_MULTITASK_SPI_METADATA_MODE` | `OUTPUT_TENSOR_ONLY` | `OUTPUT_TENSOR_ONLY`, `JPEG_INPUT_OUTPUT` |
+
+To program the selected embedded model into module flash before opening it and
+to include the JPEG/input payload on SPI, reconfigure with:
+
+```bash
+idf.py -DAI_CAMERA_MULTITASK_BOOT_MODE=FLASH \
+  -DAI_CAMERA_MULTITASK_SPI_METADATA_MODE=JPEG_INPUT_OUTPUT reconfigure
+idf.py build flash monitor
+```
+
+`FLASH` mode programs the selected embedded model and matching network-info on
+each start, then opens the stream from module flash. `DIRECT` loads that pair
+directly from ESP32-P4 firmware without first persisting it to module flash.
+
 ## Expected Feedback
 
 You should see:
@@ -39,12 +76,14 @@ You should see:
 - IMX500 `I2C` and `SPI` initialization logs.
 - The demo task reading IMX500 metadata or tensor payloads.
 - AI overlay or parsed AI output matching the selected embedded model.
+- The LCD status area showing the current model and task.
 
 ## You Passed This Mission When
 
 - The LCD preview is visible.
 - The serial monitor shows the stream has started.
 - Parsed AI output or overlay output appears for at least 30 seconds.
+- Pressing `BOOT` advances to the next model and restarts into that selection.
 - No repeated `SPI` metadata timeout or IMX500 detect failure appears.
 
 ## If It Fails

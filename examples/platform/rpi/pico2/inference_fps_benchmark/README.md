@@ -10,7 +10,7 @@ while chip select remains asserted, and each chunk overwrites the same buffer.
 ## Defaults
 
 - SPI clock: 20 MHz
-- SPI metadata: output tensor only
+- SPI metadata: JPEG/input tensor plus output tensor
 - Requested sensor/inference rate: 30 FPS
 - Warmup: 10 frames
 - Warmup read retries: 8
@@ -20,22 +20,22 @@ while chip select remains asserted, and each chunk overwrites the same buffer.
 The model and matching `network_info` must already be programmed into the
 camera module before the benchmark starts.
 
+## Build: JPEG/input tensor plus output tensor (default)
+
+```bash
+cmake -S . -B build-jpeg
+cmake --build build-jpeg -j
+```
+
+Flash `build-jpeg/imx500_inference_fps_benchmark.uf2` to Pico 2 and open its
+USB serial port. The firmware runs once and prints a benchmark summary.
+
 ## Build: output tensor only
 
 ```bash
-cmake -S . -B build-output
+cmake -S . -B build-output \
+  -DBENCHMARK_SPI_FORMAT=OUTPUT_ONLY
 cmake --build build-output -j
-```
-
-Flash `build-output/imx500_inference_fps_benchmark.uf2` to Pico 2 and open its
-USB serial port. The firmware runs once and prints a benchmark summary.
-
-## Build: JPEG input tensor plus output tensor
-
-```bash
-cmake -S . -B build-jpeg \
-  -DBENCHMARK_SPI_FORMAT=JPEG_INPUT_OUTPUT
-cmake --build build-jpeg -j
 ```
 
 Supported values for `BENCHMARK_SPI_FORMAT` are:
@@ -49,7 +49,7 @@ The main CMake cache options are:
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
-| `BENCHMARK_SPI_FORMAT` | `OUTPUT_ONLY` | Metadata mode listed above |
+| `BENCHMARK_SPI_FORMAT` | `JPEG_INPUT_OUTPUT` | Metadata mode listed above |
 | `BENCHMARK_SPI_BAUDRATE_HZ` | `20000000` | Requested Pico SPI clock |
 | `BENCHMARK_SENSOR_FPS` | `30` | FPS passed to `imx500_open()` |
 | `BENCHMARK_WARMUP_FRAMES` | `10` | Frames discarded before timing |
