@@ -1,29 +1,102 @@
 # IMX500 MCU SDK API Overview
 
-The IMX500 MCU SDK exposes a compact set of C/C++ interfaces for bringing up the module, starting inference streams, parsing metadata and output tensors, and tuning sensor behavior.
+The IMX500 MCU SDK exposes C/C++ interfaces for binding platform drivers,
+starting the module, selecting MIPI and SPI output, reading inference metadata,
+managing model assets, and tuning the sensor.
 
-This page is the API landing page for the SDK. Platform quick-start links are maintained in `README.md`; integration details live under `docs/`.
+This page follows the declarations currently exposed by the public headers.
+Platform quick starts are maintained in `README.md`; integration details live
+under `docs/`.
 
 ## Public Header Files
 
-- `ArducamIMX500SDK.h`
-  High-level SDK interfaces for module control, metadata parsing, and sensor configuration.
-- `ai_driver.h`
-  Platform callback registration interfaces used to bind your `I2C`, `SPI`, delay, and optional log implementation.
+- `ArducamIMX500SDK.h` contains the module, stream, metadata, model-management,
+  data-injection, ROI, and sensor-tuning interfaces.
+- `ai_driver.h` contains the platform callback types and registration functions
+  required by the SDK.
+
+Names beginning with an underscore and the SDK's global driver/cache variables
+are implementation details. They are intentionally excluded from the generated
+public API reference.
 
 ## Interface Categories
 
-### Dequant
+### Platform Binding
 
-Use this category to parse raw output metadata and bind tensor payloads before reading quantization parameters or running host-side dequant and post-processing:
+Register these callbacks before probing or opening the module:
 
+- @ref register_i2c_driver "register_i2c_driver(...)"
+- @ref register_spi_driver "register_spi_driver(...)"
+- @ref register_printf "register_printf(...)"
+
+The I2C driver also supplies the millisecond and microsecond delay callbacks
+used by module operations. The logger is optional.
+
+### Module Lifecycle and Streaming
+
+- @ref get_fw_ver "get_fw_ver(...)"
+- @ref get_pid "get_pid(...)"
+- @ref get_sensor_device_id "get_sensor_device_id(...)"
+- @ref probe_imx500_module "probe_imx500_module(...)"
+- @ref reset_imx500_module "reset_imx500_module()"
+- @ref imx500_open "imx500_open(...)"
+- @ref load_imx500_fw "load_imx500_fw(...)"
+- @ref stream_on "stream_on()"
+- @ref switch_spi_data_forward_mode "switch_spi_data_forward_mode(...)"
+
+@ref imx500_open selects one of two model-loading paths. A non-null model with
+a non-zero size uses direct SPI loading and requires the matching network-info
+blob. A null or empty model requests model and network-info loading from module
+flash.
+
+### Metadata and Tensor Parsing
+
+- @ref get_metadata_size "get_metadata_size()"
+- @ref read_metadata "read_metadata(...)"
+- @ref unpack_imx500_output_header "unpack_imx500_output_header(...)"
 - @ref parse_metadata "parse_metadata(...)"
 
-This category is the SDK handoff point between raw SPI metadata and any host-side tensor dequantization or result decoding pipeline.
+Call @ref get_metadata_size before allocating or selecting a receive buffer.
+After @ref read_metadata returns a non-zero byte count, pass that exact count
+and the same @ref spi_data_format_t selected by @ref imx500_open to
+@ref parse_metadata.
 
-### ROI
+### Model and Network Assets
 
-Use this category for crop and coordinate-mapping related helpers:
+SPI asset operations:
+
+- @ref get_spi_flash_status "get_spi_flash_status(...)"
+- @ref write_model_to_cam_flash "write_model_to_cam_flash(...)"
+- @ref write_nn_info_to_cam_flash "write_nn_info_to_cam_flash(...)"
+- @ref load_nn_info_to_cam_memory "load_nn_info_to_cam_memory(...)"
+
+I2C payload asset operations:
+
+- @ref abort_i2c_payload_operation "abort_i2c_payload_operation()"
+- @ref write_model_to_cam_flash_i2c "write_model_to_cam_flash_i2c(...)"
+- @ref write_nn_info_to_cam_flash_i2c "write_nn_info_to_cam_flash_i2c(...)"
+- @ref load_model_to_cam_memory_i2c "load_model_to_cam_memory_i2c(...)"
+- @ref load_nn_info_to_cam_memory_i2c "load_nn_info_to_cam_memory_i2c(...)"
+
+Host-side network-info cache:
+
+- @ref load_nn_info_to_sdk_cache "load_nn_info_to_sdk_cache(...)"
+- @ref dump_network_info_list "dump_network_info_list()"
+
+Model and network-info blobs must be a matching pair. The transport-specific
+functions above do not replace the platform callback registration step.
+
+### Data Injection
+
+- @ref do_data_injection_stream "do_data_injection_stream(...)"
+- @ref do_data_injection "do_data_injection(...)"
+- @ref stop_data_injection "stop_data_injection()"
+
+Use the streaming variant when the complete input cannot be held in one host
+buffer. Set `first_time` for the first frame in an injection session and call
+@ref stop_data_injection when the session ends.
+
+### ROI and Coordinate Mapping
 
 - @ref bbox_coordinate_x_scale_map "bbox_coordinate_x_scale_map(...)"
 - @ref bbox_coordinate_y_scale_map "bbox_coordinate_y_scale_map(...)"
@@ -31,11 +104,10 @@ Use this category for crop and coordinate-mapping related helpers:
 - @ref dnn_crop_xyxy_absolute "dnn_crop_xyxy_absolute(...)"
 - @ref apply_dnn_input_tensor_mapping "apply_dnn_input_tensor_mapping(...)"
 
-This group is used when an application needs to translate bounding-box coordinates or set a crop region on the device side.
+Crop rectangles use absolute sensor coordinates and the half-open form
+`[xmin, xmax)`, `[ymin, ymax)`.
 
-### ISP
-
-Use this category for exposure and white-balance tuning:
+### ISP and Sensor Tuning
 
 - @ref imx500_get_default_ae_config "imx500_get_default_ae_config(...)"
 - @ref imx500_set_ae_config "imx500_set_ae_config(...)"
@@ -44,31 +116,11 @@ Use this category for exposure and white-balance tuning:
 - @ref imx500_set_white_balance_config "imx500_set_white_balance_config(...)"
 - @ref imx500_apply_white_balance_config "imx500_apply_white_balance_config()"
 
-This is the category to use when you need to tune image quality through the SDK's AE and white-balance controls.
+The setters stage a configuration. Call the corresponding apply function to
+send the staged settings to the sensor.
 
-### IMX500 Control
+### Low-Level Sensor Register Access
 
-Use this category for module lifecycle control, model loading, metadata transport, and runtime state queries:
-
-- @ref register_i2c_driver "register_i2c_driver(...)"
-- @ref register_spi_driver "register_spi_driver(...)"
-- @ref register_printf "register_printf(...)"
-- @ref get_fw_ver "get_fw_ver(...)"
-- @ref get_pid "get_pid(...)"
-- @ref probe_imx500_module "probe_imx500_module(...)"
-- @ref imx500_open "imx500_open(...)"
-- @ref load_imx500_fw "load_imx500_fw(...)"
-- @ref stream_on "stream_on()"
-- @ref switch_spi_data_forward_mode "switch_spi_data_forward_mode(...)"
-- @ref get_metadata_size "get_metadata_size()"
-- @ref read_metadata "read_metadata(...)"
-- @ref unpack_imx500_output_header "unpack_imx500_output_header(...)"
-- @ref get_spi_flash_status "get_spi_flash_status(...)"
-- @ref write_model_to_cam_flash "write_model_to_cam_flash(...)"
-- @ref write_nn_info_to_cam_flash "write_nn_info_to_cam_flash(...)"
-- @ref load_nn_info_to_cam_memory "load_nn_info_to_cam_memory(...)"
-- @ref load_nn_info_to_sdk_cache "load_nn_info_to_sdk_cache(...)"
-- @ref dump_network_info_list "dump_network_info_list()"
 - @ref sensor_i2c_write_16_8 "sensor_i2c_write_16_8(...)"
 - @ref sensor_i2c_read_16_8 "sensor_i2c_read_16_8(...)"
 - @ref sensor_i2c_write_16_16 "sensor_i2c_write_16_16(...)"
@@ -76,35 +128,48 @@ Use this category for module lifecycle control, model loading, metadata transpor
 - @ref sensor_i2c_write_16_32 "sensor_i2c_write_16_32(...)"
 - @ref sensor_i2c_read_16_32 "sensor_i2c_read_16_32(...)"
 
-This is the core operational category of the SDK and the main entry point for bring-up, streaming, metadata consumption, and low-level sensor-side control.
+These functions bypass the higher-level configuration helpers. Use them only
+when the target register and value width are known.
 
-## Key Data Structures
+## Supported Stream Formats
 
-The following structures are the most important ones to understand when integrating the SDK:
+All four values in @ref mipi_data_format_t are handled by the current
+@ref imx500_open implementation.
 
-- @ref IMX500OutputHeader
-  Raw header decoded from IMX500 metadata output.
-- @ref IMX500ParsedMetadata
-  Parsed metadata view that includes header state, offsets, JPEG payload information, and parsed networks.
-- @ref IMX500ParsedNetwork
-  Describes one parsed network and its input and output tensor lists.
-- @ref IMX500ParsedTensor
-  Describes one tensor including dimensions, format, quantization, and bound payload pointer.
-- @ref spi_flash_status_t
-  Reports the current state of a flash programming operation.
-- @ref imx500_ae_config_t
-  Auto-exposure configuration structure.
-- @ref imx500_white_balance_config_t
-  White-balance configuration structure.
+The current @ref imx500_open implementation configures these SPI modes:
 
-## Typical Call Sequence
+- @ref SPI_METADATA_OUTPUT_TENSOR
+- @ref SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR
+- @ref SPI_METADATA_NONE
 
-Most integrations follow this order:
+The remaining @ref spi_data_format_t values are reserved by the interface but
+are not currently enabled by @ref imx500_open. Select a configured mode before
+calling @ref read_metadata or @ref parse_metadata.
 
-1. Register platform callbacks with @ref register_i2c_driver "register_i2c_driver(...)" and @ref register_spi_driver "register_spi_driver(...)".
-2. Optionally bind logging with @ref register_printf "register_printf(...)".
-3. Probe the hardware with @ref probe_imx500_module "probe_imx500_module(...)" if your application needs an early presence check.
-4. Initialize the module with @ref imx500_open "imx500_open(...)".
-5. Start runtime output with @ref stream_on "stream_on()".
-6. Read metadata with @ref read_metadata "read_metadata(...)".
-7. Parse output metadata and bind tensor payloads for dequant or downstream decoding with @ref parse_metadata "parse_metadata(...)".
+## Key Data Types
+
+- @ref i2c_driver and @ref spi_driver bind the host transport and delay hooks.
+- @ref mipi_data_format_t and @ref spi_data_format_t select stream payloads.
+- @ref IMX500OutputHeader describes the 12-byte IMX500 metadata header.
+- @ref IMX500ParsedMetadata, @ref IMX500ParsedNetwork, and
+  @ref IMX500ParsedTensor expose parsed metadata and bound tensor payloads.
+- @ref spi_flash_status_t reports asset-transfer progress and completion.
+- @ref imx500_crop_rect_t represents a half-open sensor crop rectangle.
+- @ref imx500_ae_config_t and @ref imx500_white_balance_config_t hold staged
+  ISP settings.
+
+## Typical Inference Sequence
+
+1. Register platform callbacks with @ref register_i2c_driver and
+   @ref register_spi_driver.
+2. Optionally register logging with @ref register_printf.
+3. Optionally verify connectivity with @ref probe_imx500_module.
+4. Initialize the model and stream formats with @ref imx500_open.
+5. Start output with @ref stream_on.
+6. Poll @ref get_metadata_size until a non-zero frame size is available.
+7. Read that frame with @ref read_metadata.
+8. Decode it with @ref parse_metadata using the selected SPI format.
+
+`stream_on()` reports command failures through the registered logger because
+its current C API return type is `void`. Treat a subsequent metadata timeout as
+a stream-start failure and include the SDK log in diagnostics.

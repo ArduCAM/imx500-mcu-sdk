@@ -81,6 +81,21 @@ Next unlocks:
 - Want Linux-hosted product packaging? Continue with the [MIPI / Raspberry Pi / CM5 path](docs/paths/mipi-rpi-product-path.md).
 - Want low-power event output? Continue with the [SPI metadata path](docs/paths/spi-mcu-product-path.md).
 
+## Performance Benchmark
+
+The observed frame rates for the bundled YOLOv8n models are summarized below.
+All values are frames per second (FPS).
+
+| Model | Task | MIPI image | SPI: JPEG input tensor + output tensor | SPI: output tensor only |
+| --- | --- | ---: | ---: | ---: |
+| YOLOv8n | Object detection | 30 | 3.5 | 15 |
+| YOLOv8n-pose | Pose estimation | 30 | 3.5 | 10 |
+| YOLOv8n-cls | Image classification | 30 | 2.13 | 30 |
+| YOLOv8n-seg | Instance segmentation | 30 | 3.3 | 7.5 |
+
+See the [benchmark documentation](docs/benchmark.md) for metric definitions and
+a link to the reproducible Pico 2 SPI benchmark.
+
 ## Train Your Own Model
 
 If the bundled models do not match your scene, start with the
@@ -201,7 +216,7 @@ Example events include `person_count = 3`, `zone_occupied = true`,
 | `ai_driver.h/.c` | Platform callback registration interfaces |
 | `imx500_mcu_sdk.cmake` | SDK source collection and compile-time configuration |
 | `python_bindings/` | Optional Python host tools and MicroPython user module support |
-| `docs/` | API landing page and integration documentation |
+| `docs/` | API landing page, [performance benchmark](docs/benchmark.md), and integration documentation |
 | `examples/` | Platform reference projects |
 | `third_party/flatbuffers/` | FlatBuffers dependency used by network-info parsing |
 

@@ -198,11 +198,14 @@ raw SPI metadata
 
 API landing page は `docs/mainpage.md` で、インターフェースは次のカテゴリに分類されます。
 
-- Dequant
-- ROI
-- ISP
+- Platform Binding
+- Module Lifecycle and Streaming
+- Metadata and Tensor Parsing
+- Model and Network Assets
 - Data Injection
-- IMX500 Control
+- ROI and Coordinate Mapping
+- ISP and Sensor Tuning
+- Low-Level Sensor Register Access
 
 ## プラットフォーム例の入口
 

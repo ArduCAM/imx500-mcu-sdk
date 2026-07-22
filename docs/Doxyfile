@@ -20,6 +20,7 @@ WARN_IF_UNDOCUMENTED   = NO
 WARN_IF_DOC_ERROR      = YES
 INPUT                  = README.md \
                          docs/mainpage.md \
+                         docs/benchmark.md \
                          docs/framework.md \
                          ArducamIMX500SDK.h \
                          ai_driver.h
@@ -28,6 +29,9 @@ RECURSIVE              = NO
 IMAGE_PATH             = pics
 EXCLUDE                = third_party \
                          examples
+EXCLUDE_SYMBOLS        = _* \
+                         g_* \
+                         network_info
 EXCLUDE_SYMLINKS       = NO
 FULL_PATH_NAMES        = NO
 STRIP_FROM_PATH        = .

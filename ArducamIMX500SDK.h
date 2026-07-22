@@ -201,22 +201,29 @@ typedef enum {
 	SPI_FORWORDING_MODE_SWITCHING
 } spi_data_forwarding_mode_t;
 
-/** @brief SPI metadata layout returned during inference streaming. */
+/**
+ * @brief SPI metadata layout requested from @ref imx500_open.
+ *
+ * The current implementation configures `SPI_METADATA_OUTPUT_TENSOR`,
+ * `SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR`, and `SPI_METADATA_NONE`.
+ * The other values are reserved by the interface but are not currently
+ * enabled by @ref imx500_open.
+ */
 typedef enum {
-	SPI_METADATA_OUTPUT_TENSOR = 0,
-	SPI_METADATA_INPUT_TENSOR,
-	SPI_METADATA_JPEG_INPUT_TENSOR,
-	SPI_METADATA_INPUT_TENSOR_OUTPUT_TENSOR,
-	SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR,
-	SPI_METADATA_NONE
+	SPI_METADATA_OUTPUT_TENSOR = 0,              /**< Output tensors only; supported. */
+	SPI_METADATA_INPUT_TENSOR,                   /**< Reserved; not currently enabled. */
+	SPI_METADATA_JPEG_INPUT_TENSOR,              /**< Reserved; not currently enabled. */
+	SPI_METADATA_INPUT_TENSOR_OUTPUT_TENSOR,     /**< Reserved; not currently enabled. */
+	SPI_METADATA_JPEG_INPUT_TENSOR_OUTPUT_TENSOR, /**< JPEG/input data plus output tensors; supported. */
+	SPI_METADATA_NONE                            /**< Disable SPI metadata output; supported. */
 } spi_data_format_t;
 
-/** @brief MIPI data layout selected for the module video output. */
+/** @brief MIPI output layout requested from @ref imx500_open. */
 typedef enum {
-	MIPI_DATA_IMAGE = 0,
-	MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR,
-	MIPI_DATA_IMAGE_METADATA_INPUT_TENSOR_OUTPUT_TENSOR,
-	MIPI_DATA_NONE
+	MIPI_DATA_IMAGE = 0,                         /**< Image stream only. */
+	MIPI_DATA_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, /**< Metadata and tensors without image data. */
+	MIPI_DATA_IMAGE_METADATA_INPUT_TENSOR_OUTPUT_TENSOR, /**< Image, metadata, and tensors. */
+	MIPI_DATA_NONE                               /**< Disable MIPI output. */
 } mipi_data_format_t;
 
 
@@ -376,9 +383,11 @@ int dnn_crop_xyxy_absolute(uint32_t xmin, uint32_t ymin, uint32_t xmax, uint32_t
  * @brief Apply the DNN input-tensor mapping to the current IMX500 12MP active area.
  *
  * This keeps the full IMX500 active area before crop (4056x3040) as the source
- * coordinate system, calculates a centered crop matching @p input_tensor_width x
- * @p input_tensor_height, then applies it through @ref dnn_crop_xyxy_absolute.
+ * coordinate system, calculates a centered crop matching the @p width x
+ * @p height aspect ratio, then applies it through @ref dnn_crop_xyxy_absolute.
  *
+ * @param width Target mapping width used to calculate the crop aspect ratio.
+ * @param height Target mapping height used to calculate the crop aspect ratio.
  * @return `0` on success, negative on invalid arguments or command failure.
  */
 int apply_dnn_input_tensor_mapping(uint32_t width, uint32_t height);
@@ -460,10 +469,18 @@ int _convert_injected_data(const uint8_t *img,
  * @{
  */
 
-/** @brief Read the module firmware version register. */
+/**
+ * @brief Read the module firmware version register.
+ * @param v Output value. The function logs and returns without writing when
+ * this pointer or the registered I2C read callback is null.
+ */
 void get_fw_ver(uint32_t* v);
 
-/** @brief Read the module device ID register. */
+/**
+ * @brief Read the module product/device ID register.
+ * @param v Output value. The function logs and returns without writing when
+ * this pointer or the registered I2C read callback is null.
+ */
 void get_pid(uint32_t* v);
 
 /**
@@ -479,6 +496,8 @@ int get_sensor_device_id(char *out, size_t out_size);
 
 /**
  * @brief Probe the module and read device ID plus boot status.
+ * @param device_id Optional output for the module product/device ID.
+ * @param boot_status Optional output for the current boot status.
  * @return `true` if both registers were read successfully.
  */
 bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
@@ -493,15 +512,19 @@ bool probe_imx500_module(uint32_t *device_id, uint32_t *boot_status);
 bool reset_imx500_module(void);
 
 /**
- * @brief Initialize the module, load model/network info, and configure stream formats.
- * @param nn_fw Network weights blob. Pass `NULL` for flash boot.
+ * @brief Reset the module, load the model, and configure stream formats.
+ * @param nn_fw Network weights blob. Pass `NULL` or a zero size for flash boot.
  * @param nn_fw_size Size of @p nn_fw in bytes.
- * @param nn_info Network-info blob associated with the loaded model.
+ * @param nn_info Network-info blob associated with a directly loaded model.
  * @param nn_info_size Size of @p nn_info in bytes.
  * @param mipi_format Requested MIPI output format.
  * @param spi_format Requested SPI metadata format.
  * @param fps Target frame rate.
  * @return `true` if initialization completed successfully.
+ *
+ * A non-null @p nn_fw with a non-zero size selects direct SPI loading and
+ * requires matching network-info data. Otherwise the function requests the
+ * model and network-info already stored in module flash.
  */
 bool imx500_open(const uint8_t *nn_fw, uint32_t nn_fw_size, const uint8_t* nn_info, uint32_t nn_info_size, mipi_data_format_t mipi_format, spi_data_format_t spi_format, uint32_t fps);
 
@@ -524,7 +547,11 @@ void stream_on(void);
  */
 bool switch_spi_data_forward_mode(spi_data_forwarding_mode_t m);
 
-/** @brief Read the size of the next metadata payload exposed by the module. */
+/**
+ * @brief Read the size of the next metadata payload exposed by the module.
+ * @return Payload size in bytes, or `0` if no frame is available or the I2C
+ * read fails.
+ */
 uint32_t get_metadata_size(void);
 
 /**
@@ -535,7 +562,11 @@ uint32_t get_metadata_size(void);
  */
 int32_t read_metadata(uint8_t *rx_buf, uint32_t buf_size);
 
-/** @brief Decode a raw IMX500 metadata header into a typed structure. */
+/**
+ * @brief Decode a raw IMX500 metadata header into a typed structure.
+ * @param data Source buffer containing at least `IMX500_HEADER_LEN` bytes.
+ * @param header Output header structure.
+ */
 void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header);
 
 /**
@@ -590,7 +621,20 @@ bool write_model_to_cam_flash_i2c(const uint8_t *model, uint32_t model_size);
  */
 bool write_nn_info_to_cam_flash_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
 
+/**
+ * @brief Load a network-info blob into module memory over the I2C payload path.
+ * @param nn_info Pointer to the network-info payload.
+ * @param nn_info_size Network-info size in bytes.
+ * @return `true` if the module accepted the payload.
+ */
 bool load_nn_info_to_cam_memory_i2c(const uint8_t *nn_info, uint32_t nn_info_size);
+
+/**
+ * @brief Load a model blob into module memory over the I2C payload path.
+ * @param model Pointer to the model payload.
+ * @param model_size Model size in bytes.
+ * @return `true` if the module accepted the payload.
+ */
 bool load_model_to_cam_memory_i2c(const uint8_t *model, uint32_t model_size);
 
 /** @brief Cached network descriptors parsed from the current network-info blob. */

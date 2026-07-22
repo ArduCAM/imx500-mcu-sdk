@@ -198,11 +198,14 @@ Online API documentation:
 
 The API landing page is `docs/mainpage.md`, where interfaces are grouped into:
 
-- Dequant
-- ROI
-- ISP
+- Platform Binding
+- Module Lifecycle and Streaming
+- Metadata and Tensor Parsing
+- Model and Network Assets
 - Data Injection
-- IMX500 Control
+- ROI and Coordinate Mapping
+- ISP and Sensor Tuning
+- Low-Level Sensor Register Access
 
 ## Platform Example Entry Points
 

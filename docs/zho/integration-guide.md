@@ -193,11 +193,14 @@ raw SPI metadata
 
 API landing page 位于 `docs/mainpage.md`，其中按以下类别组织接口：
 
-- Dequant
-- ROI
-- ISP
+- Platform Binding
+- Module Lifecycle and Streaming
+- Metadata and Tensor Parsing
+- Model and Network Assets
 - Data Injection
-- IMX500 Control
+- ROI and Coordinate Mapping
+- ISP and Sensor Tuning
+- Low-Level Sensor Register Access
 
 ## 平台示例入口
 
