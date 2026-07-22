@@ -1239,6 +1239,19 @@ def save_preview_image(
     return path
 
 
+def preview_window_name(task: TaskModel) -> str:
+    return f"IMX500 {task.name}"
+
+
+def configure_preview_window(task: TaskModel, args: argparse.Namespace, modules: dict[str, Any]) -> None:
+    if not args.preview_fullscreen:
+        return
+    cv2 = modules["cv2"]
+    window_name = preview_window_name(task)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+
 def render_preview_frame(parsed_frame: Any, task: TaskModel, frame_index: int, args: argparse.Namespace, modules: dict[str, Any]) -> None:
     cv2 = modules["cv2"]
     if task.name == "classification":
@@ -1261,7 +1274,7 @@ def render_preview_frame(parsed_frame: Any, task: TaskModel, frame_index: int, a
     saved_path = save_preview_image(annotated, args.preview_save_dir, task.name, frame_index, modules)
     if saved_path is not None:
         print(f"  preview saved: {relative_path(saved_path)}", flush=True)
-    cv2.imshow(f"IMX500 {task.name}", annotated)
+    cv2.imshow(preview_window_name(task), annotated)
     key = cv2.waitKey(args.preview_wait_ms) & 0xFF
     if key in (ord("q"), 27):
         raise KeyboardInterrupt
@@ -1324,6 +1337,7 @@ def run_task(imx500_mcu_sdk: ModuleType, task: TaskModel, args: argparse.Namespa
     if args.preview:
         read_size = args.metadata_max_bytes if args.metadata_max_bytes > 0 else max(fallback_read_size, args.preview_max_bytes)
         preview_modules = load_preview_modules()
+        configure_preview_window(task, args, preview_modules)
     else:
         read_size = metadata_read_size(
             imx500_mcu_sdk,
@@ -1433,6 +1447,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="OpenCV wait time after each preview frame. Press q or Esc to stop.",
+    )
+    parser.add_argument(
+        "--preview-fullscreen",
+        action="store_true",
+        help="Show the OpenCV preview window in fullscreen mode.",
     )
     parser.add_argument(
         "--show-fps",
