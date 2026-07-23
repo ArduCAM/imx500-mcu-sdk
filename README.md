@@ -83,7 +83,7 @@ Next unlocks:
 
 ## Performance Benchmark
 
-The observed frame rates for the bundled YOLOv8n models are summarized below.
+The observed frame rates for the benchmarked models are summarized below.
 All values are frames per second (FPS).
 
 | Model | Task | MIPI image | SPI: JPEG input tensor + output tensor | SPI: output tensor only |
@@ -92,6 +92,10 @@ All values are frames per second (FPS).
 | YOLOv8n-pose | Pose estimation | 30 | 3.5 | 10 |
 | YOLOv8n-cls | Image classification | 30 | 2.13 | 30 |
 | YOLOv8n-seg | Instance segmentation | 30 | 3.3 | 7.5 |
+| SSD MobileNet | Object detection | 30 | 3.3 | 15 |
+| HigherHRNet | Pose estimation | 30 | 2.45 | 4 |
+| MobileNetV2 | Image classification | 30 | 6.5 | 30 |
+| DeepLabV3+ | Semantic segmentation | 30 | 2 | 4.46 |
 
 See the [benchmark documentation](docs/benchmark.md) for metric definitions and
 a link to the reproducible Pico 2 SPI benchmark.

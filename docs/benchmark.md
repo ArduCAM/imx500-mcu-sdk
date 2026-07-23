@@ -1,6 +1,6 @@
-# IMX500 YOLOv8 Benchmark
+# IMX500 Model Benchmark
 
-This page summarizes the observed frame rates for the bundled YOLOv8n models.
+This page summarizes the observed frame rates for the benchmarked models.
 All values are frames per second (FPS).
 
 ## Results
@@ -11,6 +11,10 @@ All values are frames per second (FPS).
 | YOLOv8n-pose | Pose estimation | 30 | 3.5 | 10 |
 | YOLOv8n-cls | Image classification | 30 | 2.13 | 30 |
 | YOLOv8n-seg | Instance segmentation | 30 | 3.3 | 7.5 |
+| SSD MobileNet | Object detection | 30 | 3.3 | 15 |
+| HigherHRNet | Pose estimation | 30 | 2.45 | 4 |
+| MobileNetV2 | Image classification | 30 | 6.5 | 30 |
+| DeepLabV3+ | Semantic segmentation | 30 | 2 | 4.46 |
 
 ## Metric Definitions
 
