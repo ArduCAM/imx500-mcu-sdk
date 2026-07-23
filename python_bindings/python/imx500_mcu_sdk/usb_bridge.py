@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import struct
+import sys
 import time
 import zlib
 from dataclasses import dataclass
 
 import serial
 from serial.tools import list_ports
+from serial.tools.list_ports_common import ListPortInfo
 
 from . import _sdk
 
@@ -31,6 +34,7 @@ CMD_SPI_WRITE = 22
 CMD_SPI_READ = 23
 
 RESULT_OK = 1
+WINDOWS_COM_PORT_RE = re.compile(r"COM(\d+)$", re.IGNORECASE)
 
 
 class UsbBridgeError(RuntimeError):
@@ -50,16 +54,26 @@ def crc32(data: bytes) -> int:
     return zlib.crc32(data) & 0xFFFFFFFF
 
 
+def _windows_bridge_port_sort_key(port: ListPortInfo) -> tuple[int, int, str]:
+    """Sort Windows COM ports numerically, with non-COM names last."""
+
+    device = str(getattr(port, "device", "") or "")
+    com_match = WINDOWS_COM_PORT_RE.fullmatch(device)
+    if com_match:
+        return 0, int(com_match.group(1)), device.casefold()
+    return 1, sys.maxsize, device.casefold()
+
+
 def find_bridge_port() -> str:
-    """Return the likely second CDC port used by the binary bridge."""
+    """Return the CDC port used by the binary bridge."""
 
     matches = [
-        port
-        for port in list_ports.comports()
-        if port.vid == VID and port.pid == PID
+        port for port in list_ports.comports() if port.vid == VID and port.pid == PID
     ]
     if not matches:
         raise UsbBridgeError("No IMX500 USB CDC bridge port found")
+    if sys.platform == "win32":
+        return min(matches, key=_windows_bridge_port_sort_key).device
     matches.sort(key=lambda port: port.device)
     return matches[-1].device
 
@@ -120,7 +134,12 @@ class UsbBridgeTransport:
 
         raw = self.serial.read(RSP.size)
         if len(raw) != RSP.size:
-            raise UsbBridgeError(f"response header timeout: {len(raw)} bytes")
+            raise UsbBridgeError(
+                f"response header timeout on {self.port}: "
+                f"received {len(raw)}/{RSP.size} bytes. "
+                "If the device exposes two serial ports, the selected port may "
+                "be wrong; retry with --port COMx to select the other port explicitly."
+            )
 
         (
             magic,

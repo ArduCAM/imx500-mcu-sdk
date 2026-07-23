@@ -80,6 +80,12 @@ Run the following tools from this directory. If you installed the package in
 editable mode, you can run them directly. If you built the extension in place,
 prefix the command with `PYTHONPATH=python`.
 
+On Windows, a module exposing two CDC ports is auto-detected by selecting the
+lower numeric COM port (for example, `COM3` rather than `COM4`). You can still
+pass `--port COMx` to any tool to override auto-detection. If the bridge does
+not respond before the serial timeout, the error message also reminds you to
+try the other port explicitly.
+
 ### `tools/imx500_first_run.py`
 
 Runs the recommended first validation flow with checkpoint-style output. It
