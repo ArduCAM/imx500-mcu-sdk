@@ -67,6 +67,40 @@ Follow the Sony IMX500 integration notes from Ultralytics:
 
 [https://docs.ultralytics.com/integrations/sony-imx500#benchmarks](https://docs.ultralytics.com/integrations/sony-imx500#benchmarks)
 
+### JPEG Preview Workaround Before Export
+
+If inference results are correct but the JPEG preview generated from the input
+tensor is corrupted or scrambled, apply this temporary workaround before
+exporting the model through Ultralytics:
+
+1. Open `ultralytics/utils/export/imx.py` in the Python environment used for
+   model export.
+2. Find the `imxconv-pt` command and remove the
+   `--no-input-persistency` argument from its argument list.
+
+Change:
+
+```python
+[str(imxconv), "-i", str(onnx_model), "-o", str(output_dir), "--no-input-persistency", "--overwrite-output"]
+```
+
+to:
+
+```python
+[str(imxconv), "-i", str(onnx_model), "-o", str(output_dir), "--overwrite-output"]
+```
+
+See the
+[Ultralytics IMX500 export script at the referenced revision](https://github.com/ultralytics/ultralytics/blob/fa9a0a0d962f53164c7b2422239ce63fb34cd691/ultralytics/utils/export/imx.py#L364)
+for the original command. Removing this option keeps the input tensor
+persistence path enabled, which may restore JPEG generation on affected IMX500
+firmware and model-package combinations.
+
+Re-export the model after making the change, then repeat conversion and
+packaging with the new output. Verify both the inference result and JPEG
+preview. Treat this as a symptom-specific workaround; if the JPEG output is not
+corrupted or scrambled, keep the upstream export settings unchanged.
+
 During conversion, check:
 
 - Unsupported operators or layers in the converter log.
